@@ -1,55 +1,13 @@
 # %% imports
 import shutil
-import xarray as xr
-import numpy as np
-import pandas as pd
 import urllib3
 import certifi
+import numpy as np
+import xarray as xr
 from pathlib import Path
 
 
 # %% functions
-def get_coords(x, y, time, dx=0.25, dy=0.25, dt="h", **kwargs):
-    """
-    Create an cutout coordinate system on the basis of slices and step sizes.
-
-    Parameters
-    ----------
-    x : slice
-        Numerical slices with lower and upper bound of the x dimension.
-    y : slice
-        Numerical slices with lower and upper bound of the y dimension.
-    time : slice
-        Slice with strings with lower and upper bound of the time dimension.
-    dx : float, optional
-        Step size of the x coordinate. The default is 0.25.
-    dy : float, optional
-        Step size of the y coordinate. The default is 0.25.
-    dt : str, optional
-        Frequency of the time coordinate. The default is 'h'. Valid are all
-        pandas offset aliases.
-
-    Returns
-    -------
-    ds : xarray.Dataset
-        Dataset with x, y and time variables, representing the whole coordinate
-        system.
-    """
-    x = slice(*sorted([x.start, x.stop]))
-    y = slice(*sorted([y.start, y.stop]))
-
-    ds = xr.Dataset(
-        {
-            "x": np.round(np.arange(-180, 180, dx), 9),
-            "y": np.round(np.arange(-90, 90, dy), 9),
-            "time": pd.date_range(start="1940", end="now", freq=dt),
-        }
-    )
-    ds = ds.assign_coords(lon=ds.coords["x"], lat=ds.coords["y"])
-    ds = ds.sel(x=x, y=y, time=time)
-    return ds
-
-
 def download_file(url, save_to, proxy=None, proxy_user=None, proxy_pass=None, overwrite=False):
     """
     downloads a file from a specified url to disk

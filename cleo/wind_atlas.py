@@ -10,8 +10,8 @@ import rioxarray as rxr
 from dataclasses import dataclass
 from cleo.spatial import reproject, clip_to_geometry
 from cleo.utils import download_file
-from cleo.helpers import get_cost_assumptions, get_turbine_attribute, load_powercurves
-from cleo.wind_assessment import load_weibull_parameters, compute_air_density_correction, compute_mean_wind_speed, \
+from cleo.loaders import get_cost_assumptions, get_turbine_attribute, load_powercurves
+from cleo.assess import load_weibull_parameters, compute_air_density_correction, compute_mean_wind_speed, \
     compute_wind_shear, compute_weibull_pdf, simulate_capacity_factors, compute_lcoe, minimum_lcoe
 import matplotlib.pyplot as plt
 

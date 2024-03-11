@@ -5,8 +5,6 @@ import xarray as xr
 import logging
 
 from typing import Union
-from xarray import Dataset
-# from cleo.wind_atlas import Atlas
 
 
 def reproject(self, new_crs: str) -> None:
@@ -32,7 +30,7 @@ def reproject(self, new_crs: str) -> None:
         logging.error(f"Error during reprojecting atlas: {e}")
 
 
-def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> Dataset:
+def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> xr.Dataset:
     """
     Clip the atlas data to the provided geopandas shapefile
     :param clip_shape_path: Path to the geopandas shapefile representing the clipping area

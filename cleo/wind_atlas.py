@@ -10,8 +10,8 @@ import rioxarray as rxr
 from dataclasses import dataclass
 from cleo.spatial import reproject, clip_to_geometry
 from cleo.utils import download_file
-from cleo.loaders import get_cost_assumptions, get_turbine_attribute, load_powercurves
-from cleo.assess import load_weibull_parameters, compute_air_density_correction, compute_mean_wind_speed, \
+from cleo.loaders import get_cost_assumptions, get_turbine_attribute, load_powercurves, load_weibull_parameters
+from cleo.assess import compute_air_density_correction, compute_mean_wind_speed, \
     compute_wind_shear, compute_weibull_pdf, simulate_capacity_factors, compute_lcoe, minimum_lcoe
 import matplotlib.pyplot as plt
 
@@ -160,13 +160,13 @@ class Atlas:
         if not fname_netcdf.is_file():
             logging.info(f"Building new resource atlas at {str(path_netcdf)}")
             # get coords from GWA
-            weibull_a_100 = rxr.open_rasterio(path_raw / f"{self.country}_combined-Weibull-A_100.tif",
-                                              parse_coordinates=True).squeeze()
-            self.data = xr.Dataset(coords=weibull_a_100.coords)
-            self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
-            self.data.to_netcdf(path_raw / fname_netcdf)
+            with rxr.open_rasterio(path_raw / f"{self.country}_combined-Weibull-A_100.tif", parse_coordinates=True).squeeze() as weibull_a_100:
+                self.data = xr.Dataset(coords=weibull_a_100.coords)
+                self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
+                self.data.to_netcdf(path_raw / fname_netcdf)
         else:
-            self.data = xr.open_dataset(fname_netcdf)
+            with xr.open_dataset(fname_netcdf) as dataset:
+                self.data = dataset
             logging.info(f"Opened pre-existing resource atlas at {str(path_netcdf)}")
 
         self.crs = self.data.rio.crs

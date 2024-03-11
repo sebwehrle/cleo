@@ -1,6 +1,8 @@
 # helpers for the Atlas class
 import yaml
 import pandas as pd
+import rioxarray as rxr
+import logging
 
 
 def get_cost_assumptions(self, attribute_name):
@@ -45,3 +47,26 @@ def load_powercurves(self):
         for data in (yaml.safe_load(open(path, "r")) for path in file_paths))
 
     self.power_curves = pd.concat(power_curves, ignore_index=False)
+
+
+
+
+def load_weibull_parameters(self, height):
+    """
+    Load weibull parameters for a specific height
+    :param self: an  instance of the Atlas class
+    :param height: Height for which to load Weibull parameters. Possible values are [50, 100, 150].
+    GWA also provides 10 and 200 m data, which, however, is not loaded by Atlas class currently.
+    : type height: int
+    :return: Tuple containing Weibull parameter rasters (a, k)
+    :rtype: Tuple[xarray.DataArray, xarray.DataArray]
+    """
+    path_raw_country = self._path / "data" / "raw" / f"{self.country}"
+    try:
+        a = rxr.open_rasterio(path_raw_country / f"{self.country}_combined-Weibull-A_{height}.tif").chunk("auto")
+        k = rxr.open_rasterio(path_raw_country / f"{self.country}_combined-Weibull-k_{height}.tif").chunk("auto")
+        return a, k
+    except Exception as e:
+        logging.error(f"Error loading weibull parameters for height {height}: {e}")
+        return None, None
+

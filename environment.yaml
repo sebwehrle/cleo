@@ -1,0 +1,16 @@
+name: cleo
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python <= 3.9
+  - numpy
+  - xarray
+  - rasterio
+  - rioxarray
+  - scipy
+  - urllib3
+  - certifi
+  - matplotlib
+  - pyyaml

@@ -1,0 +1,6 @@
+# financing assumptions
+discount_rate: 0.05
+# Wind turbine cost assumptions
+fixed_om_cost: 20  # EUR/kW
+variable_om_cost: 0.008  # EUR/kWh
+turbine_lifetime: 25  # a

@@ -70,8 +70,8 @@ def compute_wind_shear(self):
     self.compute_mean_wind_speed(50)
     self.compute_mean_wind_speed(100)
 
-    u_mean_50 = self.data.mean_wind_speed_50
-    u_mean_100 = self.data.mean_wind_speed_100
+    u_mean_50 = self.data.mean_wind_speed.sel(height=50)
+    u_mean_100 = self.data.mean_wind_speed.sel(height=100)
 
     alpha = (np.log(u_mean_100) - np.log(u_mean_50)) / (np.log(100) - np.log(50))
     self.data['wind_shear'] = alpha.squeeze().rename("wind_shear_factor")

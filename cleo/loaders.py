@@ -49,8 +49,6 @@ def load_powercurves(self):
     self.power_curves = pd.concat(power_curves, ignore_index=False)
 
 
-
-
 def load_weibull_parameters(self, height):
     """
     Load weibull parameters for a specific height
@@ -69,4 +67,3 @@ def load_weibull_parameters(self, height):
     except Exception as e:
         logging.error(f"Error loading weibull parameters for height {height}: {e}")
         return None, None
-

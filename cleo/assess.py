@@ -17,7 +17,7 @@ def compute_air_density_correction(self):
     path_raw_coutry = self._path / "data" / "raw" / f"{self.country}"
     elevation = rxr.open_rasterio(path_raw_coutry / f"{self.country}_elevation_w_bathymetry.tif")
     rho_correction = 1.247015 * np.exp(-0.000104 * elevation) / 1.225
-    self.data["air_density_correction"] = rho_correction.squeeze().rename("air_density_correction_factor")
+    self.data["air_density_correction"] = rho_correction.squeeze().rename("air_density_correction_factor").chunk("auto")
     logging.info(f'Air density correction computed for {self.country}')
 
 
@@ -36,9 +36,9 @@ def compute_mean_wind_speed(self, height):
     if "mean_wind_speed" in self.data:
         mws = xr.concat([self.data["mean_wind_speed"], mean_wind_speed], dim="height")
         self.data = self.data.drop_vars(["mean_wind_speed", "height"])
-        self.data["mean_wind_speed"] = mws
+        self.data["mean_wind_speed"] = mws.chunk("auto")
     else:
-        self.data["mean_wind_speed"] = mean_wind_speed
+        self.data["mean_wind_speed"] = mean_wind_speed.chunk("auto")
 
     logging.info(f"Computation of mean wind speed at height {height} completed")
 
@@ -50,11 +50,11 @@ def compute_wind_shear(self):
     self.compute_mean_wind_speed(50)
     self.compute_mean_wind_speed(100)
 
-    u_mean_50 = self.data.mean_wind_speed.sel(height=50)
-    u_mean_100 = self.data.mean_wind_speed.sel(height=100)
+    u_mean_50 = self.data.mean_wind_speed.sel(height=50).chunk("auto")
+    u_mean_100 = self.data.mean_wind_speed.sel(height=100).chunk("auto")
 
     alpha = (np.log(u_mean_100) - np.log(u_mean_50)) / (np.log(100) - np.log(50))
-    self.data['wind_shear'] = alpha.squeeze().rename("wind_shear_factor")
+    self.data['wind_shear'] = alpha.squeeze().rename("wind_shear_factor").chunk("auto")
     logging.info(f'Computation of wind shear for {self.country} complete')
 
 
@@ -70,7 +70,7 @@ def compute_weibull_pdf(self):
 
     # Calculate Weibull wind speed probability density
     p = weibull_probability_density(u_pwrcrv, k100, A100)
-    self.data["weibull_pdf"] = p
+    self.data["weibull_pdf"] = p.chunk("auto")
     logging.info('Computation of Weibull probability density function complete')
 
 
@@ -99,7 +99,7 @@ def simulate_capacity_factors(self, bias_correction=1):
 
     cf_list = [compute_cf(self, ttype) for ttype in self.wind_turbine]
     cap_fac = xr.concat(cf_list, dim="turbine_models")
-    self.data["capacity_factors"] = cap_fac
+    self.data["capacity_factors"] = cap_fac.chunk("auto")
     logging.info(f"Computation of capacity factors for {self.country} complete")
 
 
@@ -124,7 +124,7 @@ def compute_lcoe(self, turbine_cost_share=1):
         overnight_cost = turbine_overnight_cost(power / 1000, hub_height, rotor_diameter,
                                                 year) * power * turbine_cost_share
         grid_cost = grid_connect_cost(power)
-        cap_factor = self.data["capacity_factors"].sel(turbine_models=turbine)
+        cap_factor = self.data["capacity_factors"].sel(turbine_models=turbine).chunk("auto")
 
         lcoe = levelized_cost(power,
                               cap_factor,
@@ -140,14 +140,14 @@ def compute_lcoe(self, turbine_cost_share=1):
 
     lcoe = xr.concat(LCOE, dim='turbine_models')
     lcoe = lcoe.assign_coords({"turbine_models": self.wind_turbine})
-    self.data["lcoe"] = lcoe.rename("lcoe").assign_attrs(units="EUR/MWh")
+    self.data["lcoe"] = lcoe.rename("lcoe").assign_attrs(units="EUR/MWh").chunk("auto")
 
 
 def minimum_lcoe(self):
     """
     Calculate the minimum lcoe for each location among all turbines
     """
-    lcoe = self.data["lcoe"]
+    lcoe = self.data["lcoe"].chunk("auto")
     lc_min = lcoe.min(dim='turbine_models', keep_attrs=True)
     lc_min = lc_min.assign_coords({'turbine_models': 'min_lcoe'})
-    self.data["min_lcoe"] = lc_min.rename("minimal_lcoe")
+    self.data["min_lcoe"] = lc_min.rename("minimal_lcoe").chunk("auto")

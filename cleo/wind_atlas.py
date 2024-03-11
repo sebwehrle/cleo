@@ -161,12 +161,12 @@ class Atlas:
             logging.info(f"Building new resource atlas at {str(path_netcdf)}")
             # get coords from GWA
             with rxr.open_rasterio(path_raw / f"{self.country}_combined-Weibull-A_100.tif", parse_coordinates=True).squeeze() as weibull_a_100:
-                self.data = xr.Dataset(coords=weibull_a_100.coords)
+                self.data = xr.Dataset(coords=weibull_a_100.coords).chunk("auto")
                 self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
                 self.data.to_netcdf(path_raw / fname_netcdf)
         else:
             with xr.open_dataset(fname_netcdf) as dataset:
-                self.data = dataset
+                self.data = dataset.chunk("auto")
             logging.info(f"Opened pre-existing resource atlas at {str(path_netcdf)}")
 
         self.crs = self.data.rio.crs
@@ -190,7 +190,7 @@ class Atlas:
         data_clipped = clip_to_geometry(self, clip_shape)
         # Update the data in the Atlas object based on the inplace argument
         if inplace:
-            self.data = data_clipped
+            self.data = data_clipped.chunk("auto")
         else:
             clipped_atlas = Atlas(str(self.path), self.country)
             clipped_atlas.data = data_clipped

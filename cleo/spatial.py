@@ -1,8 +1,8 @@
 # spatial methods of the Atlas class
+import logging
 import numpy as np
 import geopandas as gpd
 import xarray as xr
-import logging
 
 from typing import Union
 

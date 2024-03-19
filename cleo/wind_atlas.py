@@ -2,37 +2,58 @@
 import logging
 from pathlib import Path
 from typing import List
+from tempfile import NamedTemporaryFile
+
+import requests
+from dask.diagnostics import ProgressBar
 
 import pandas as pd
+import netCDF4  # import required for proper writing of netcdf-files
 import xarray as xr
 import rioxarray as rxr
 
 from dataclasses import dataclass
-from cleo.spatial import reproject, clip_to_geometry
-from cleo.utils import download_file
-from cleo.loaders import get_cost_assumptions, get_turbine_attribute, load_powercurves
-from cleo.assess import load_weibull_parameters, compute_air_density_correction, compute_mean_wind_speed, \
-    compute_wind_shear, compute_weibull_pdf, simulate_capacity_factors, compute_lcoe, minimum_lcoe
-import matplotlib.pyplot as plt
+
+from cleo.spatial import (
+    reproject,
+    clip_to_geometry
+)
+from cleo.utils import (
+    download_file,
+    _setup_logging,
+)
+from cleo.loaders import (
+    get_cost_assumptions,
+    get_turbine_attribute,
+    get_overnight_cost,
+    load_powercurves,
+    load_weibull_parameters
+)
+from cleo.assess import (
+    compute_air_density_correction,
+    compute_mean_wind_speed,
+    compute_terrain_roughness_length,
+    compute_weibull_pdf,
+    simulate_capacity_factors,
+    compute_lcoe,
+    minimum_lcoe,
+)
 
 # from logging_config import setup_logging
 # setup_logging()
 
 
 @dataclass
-class AtlasState:
+class WindResourceAtlas:
+    """
+    Atlas base class for wind power resource assessment with GWA data
+    """
     path: Path
     country: str
-    wind_turbine: List[str]
-    _crs: str = None  # Private attribute for CRS, use property for access
+    wind_turbines: List[str]
+    crs: str = None  # Private attribute for CRS, use property for access
     data: xr.Dataset = None  # Optional attribute to hold loaded data
     power_curves: pd.DataFrame = None  # Optional attribute for power curves
-
-
-class Atlas:
-    """
-    Atlas base class for windpower resource assessment with GWA data
-    """
 
     def __init__(self, path: str, country: str, **atlas_params):
         """
@@ -44,68 +65,49 @@ class Atlas:
         :type country: str
         :param atlas_params: Optional additional parameters
         """
-        self.state = AtlasState(path, country, atlas_params.get("wind_turbine", ["Vestas.V112.3075"]))
-        logging.info(f"Atlas instance created with {self.state.path}")
-        self.data = None
-        self._path = Path(path)
-        self._country = str(country)  # TODO: check if 3-digit ISO code
-        self._wind_turbine = ["Vestas.V112.3075"]
-        self._crs = None
-        self.power_curves = None
-        self.download_file = download_file
-
-        logging.info(f"Atlas instance created with path: {self._path}, country: {self._country}")
-
+        self._init_params(path, country)
         self._setup_directories()
+        self._setup_logging()
         self._load_data()
         self._build_netcdf()
+        logging.info(f"WindResourceAtlas for {self.country} initialized at {self.path}")
 
     def __repr__(self):
         return (
-            f"<WindAtlas {self.country}>\n"
-            f"Wind turbine(s): {self._wind_turbine}\n"
+            f"<WindResourceAtlas {self.country}>\n"
+            f"Wind turbine(s): {self.wind_turbines}\n"
             f"{self.data.data_vars}"
         )
 
+    def _init_params(self, path, country):
+        """
+        Initialize the path and country properties
+        """
+        if isinstance(path, str):
+            self.path = Path(path)
+        elif isinstance(path, Path):
+            self.path = path
+        else:
+            raise TypeError("Path must be a string or pathlib.Path object")
 
-    @property
-    def country(self) -> str:
-        return self.state.country
+        if isinstance(country, str):
+            self.country = country
+        else:
+            raise TypeError("Country must be a string")
 
-    @property
-    def path(self) -> Path:
-        return self.state.path
-
-    @property
-    def wind_turbine(self) -> List[str]:
-        return self.state.wind_turbine
-
-    @wind_turbine.setter
-    def wind_turbine(self, value: List[str]) -> None:
-        if not isinstance(value, list):
-            raise TypeError(f"Input must be a list of strings")
-        self.state.wind_turbine = value
-
-    @property
-    def crs(self) -> str:
-        return self.state._crs
-
-    @crs.setter
-    def crs(self, crs: str) -> None:
-        self.state._crs = crs
+        self.wind_turbines = ["Vestas.V112.3075"]
 
     def _setup_directories(self) -> None:
         """
         Create directories for raw and processed data if they do not exist
         """
-        path_raw = self._path / "data" / "raw" / self._country
-        path_processed = self._path / "data" / "processed"
+        path_raw = self.path / "data" / "raw" / self.country
+        path_processed = self.path / "data" / "processed"
+        path_logging = self.path / "logs"
 
-        if not path_raw.is_dir():
-            path_raw.mkdir()
-
-        if not path_processed.is_dir():
-            path_processed.mkdir()
+        for path in [path_raw, path_processed, path_logging]:
+            if not path.is_dir():
+                path.mkdir()
 
     def _load_data(self) -> None:
         """
@@ -115,98 +117,127 @@ class Atlas:
         url = "https://globalwindatlas.info/api/gis/country"
         layers = ['air-density', 'combined-Weibull-A', 'combined-Weibull-k']
         ground = ['elevation_w_bathymetry']
-        height = ['50', '100', '150']
+        height = ['50', '100', '150', '200']
 
         c = self.country
-        path_raw = self._path / "data" / "raw" / self._country
+        path_raw = self.path / "data" / "raw" / self.country
 
-        logging.info(f"Starting data download for country {c} from {url}")
+        logging.info(f"Initializing WindResourceAtlas with Global Wind Atlas data")
 
         for l in layers:
             for h in height:
                 fname = f'{c}_{l}_{h}.tif'
                 fpath = path_raw / fname
 
-                # check if file already exists before downloading
-                try:
-                    if not fpath.is_file():
-                        durl = f"{url}/{c}/{l}/{h}"
-                        self.download_file(durl, fpath)
-                        logging.info(f'Download of {fname} complete')
-                except Exception as e:
-                    logging.error(f'Error downloading {fname}: {e}')
+                if not fpath.is_file():
+                    try:
+                        if not fpath.is_file():
+                            durl = f"{url}/{c}/{l}/{h}"
+                            download_file(durl, fpath)
+                            logging.info(f'Download of {fname} from {durl} complete')
+                    except requests.RequestException as e:
+                        logging.error(f'Error downloading {fname}: {e}')
 
         for g in ground:
             fname = f'{c}_{g}.tif'
             fpath = path_raw / fname
-            try:
-                if not fpath.is_file():
-                    self.download_file(f'{url}/{c}/{g}', fpath)
-                    logging.info(f'Download of {fname} complete')
-            except Exception as e:
-                logging.error(f'Error downloading {fname}: {e}')
+            if not fpath.is_file():
+                try:
+                    if not fpath.is_file():
+                        durl = f'{url}/{c}/{g}'
+                        download_file(durl, fpath)
+                        logging.info(f'Download of {fname} from {durl} complete')
+                except requests.RequestException as e:
+                    logging.error(f'Error downloading {fname}: {e}')
 
-        logging.info(f'Raw data of resource atlas for {c} loaded.')
+        logging.info(f'Global Wind Atlas data for {c} initialized.')
 
     def _build_netcdf(self) -> None:
         """
         Build a NetCDF file from the downloaded data or open an existing one.
         The NetCDF file stores the wind resource data in a structured format.
         """
-        path_raw = self._path / "data" / "raw" / self.country
-        path_netcdf = self._path / "data" / "processed"
+        path_raw = self.path / "data" / "raw" / self.country
+        path_netcdf = self.path / "data" / "processed"
         fname_netcdf = path_netcdf / f"atlas_{self.country}.nc"
 
         if not fname_netcdf.is_file():
             logging.info(f"Building new resource atlas at {str(path_netcdf)}")
             # get coords from GWA
-            weibull_a_100 = rxr.open_rasterio(path_raw / f"{self.country}_combined-Weibull-A_100.tif",
-                                              parse_coordinates=True).squeeze()
-            self.data = xr.Dataset(coords=weibull_a_100.coords)
-            self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
-            self.data.to_netcdf(path_raw / fname_netcdf)
+            with rxr.open_rasterio(path_raw / f"{self.country}_combined-Weibull-A_100.tif",
+                                   parse_coordinates=True).squeeze() as weibull_a_100:
+                self.data = xr.Dataset(coords=weibull_a_100.coords)
+                self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
+                self.data.to_netcdf(path_raw / fname_netcdf)
         else:
-            self.data = xr.open_dataset(fname_netcdf)
-            logging.info(f"Opened pre-existing resource atlas at {str(path_netcdf)}")
+            with xr.open_dataset(fname_netcdf, chunks="auto") as dataset:
+                self.data = dataset
+            logging.info(f"Existing WindResourceAtlas at {str(path_netcdf)} opened.")
 
         self.crs = self.data.rio.crs
 
-    def to_file(self):
+    def to_file(self, complevel=4):
         """
-        Save the NetCDF data to a file
+        Save NetCDF data safely to a file
         """
-        path_netcdf = self._path / "data" / "processed"
-        fname_netcdf = path_netcdf / f"atlas_{self.country}.nc"
-        self.data.to_netcdf(fname_netcdf)
-        logging.info(f"Atlas data saved to {fname_netcdf}")
+        with NamedTemporaryFile(suffix=".tmp", dir=self.path / "data" / "processed", delete=False) as tmp_file:
+            tmp_file_path = Path(tmp_file.name)
 
-    def clip_atlas(self, clip_shape, inplace=True):
+            logging.debug(f"Writing data to {tmp_file_path} ...")
+            encoding = {}
+            total_size = self.data.nbytes
+
+            for var_name, var in self.data.variables.items():
+                encoding[var_name] = {"zlib": True, "complevel": complevel}
+
+            write_job = self.data.to_netcdf(str(tmp_file_path),
+                                                  compute=False,
+                                                  format="NETCDF4",
+                                                  engine="netcdf4",
+                                                  encoding=encoding,
+                                                  )
+            with ProgressBar():
+                write_job.compute()
+
+            if (self.path / "data" / "processed" / f"atlas_{self.country}.nc").exists():
+                self.data.close()
+                (self.path / "data" / "processed" / f"atlas_{self.country}.nc").unlink()
+
+            tmp_file_path.rename(self.path / "data" / "processed" / f"atlas_{self.country}.nc")
+        logging.info(f"WindResourceAtlas data saved to {str(self.path / 'data' / 'processed' / f'atlas_{self.country}.nc')}")
+
+    def clip_to(self, clip_shape, inplace=True):
         """
         Wrapper function to enable inplace-operations for clip_to_geometry-function
         :param clip_shape: path-string or Geopandas GeoDataFrame containing the clipping shape
         :param inplace: boolean flag indicating whether clipped data should be updated inplace. Default is True
         :return:
         """
-        data_clipped = clip_to_geometry(self, clip_shape)
+        data_clipped = clip_to_geometry(self.data, clip_shape)
         # Update the data in the Atlas object based on the inplace argument
         if inplace:
             self.data = data_clipped
         else:
-            clipped_atlas = Atlas(str(self.path), self.country)
+            clipped_atlas = WindResourceAtlas(str(self.path), self.country)
             clipped_atlas.data = data_clipped
             return clipped_atlas
 
-    # data handling
-    load_weibull_parameters = load_weibull_parameters
+    # utils
+    _setup_logging = _setup_logging
+    # data handling: get from yaml, load from GWA-tiffs
     get_cost_assumptions = get_cost_assumptions
     get_turbine_attribute = get_turbine_attribute
-    load_powercurves = load_powercurves
-    # spatial
+    get_powercurves = load_powercurves
+    get_overnight_cost = get_overnight_cost
+    load_weibull_parameters = load_weibull_parameters
+
+    # spatial operations
     reproject = reproject
-    # resource assessment
+
+    # methods for resource assessment
     compute_air_density_correction = compute_air_density_correction
     compute_mean_wind_speed = compute_mean_wind_speed
-    compute_wind_shear = compute_wind_shear
+    compute_terrain_roughness_length = compute_terrain_roughness_length
     compute_weibull_pdf = compute_weibull_pdf
     simulate_capacity_factors = simulate_capacity_factors
     compute_lcoe = compute_lcoe
@@ -218,10 +249,10 @@ class Atlas:
         This method executes all necessary computations to generate the final wind resource assessment.
         :return:
         """
-        self.compute_wind_shear()
-        self.compute_air_density_correction()
-        self.load_powercurves()
-        self.compute_weibull_pdf()
-        self.simulate_capacity_factors()
-        self.compute_lcoe()
-        self.minimum_lcoe()
+        compute_terrain_roughness_length(self)
+        compute_air_density_correction(self)
+        load_powercurves(self)
+        compute_weibull_pdf(self)
+        simulate_capacity_factors(self)
+        compute_lcoe(self)
+        minimum_lcoe(self)

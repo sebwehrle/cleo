@@ -61,7 +61,7 @@ the [Rinne et al. cost model](https://doi.org/10.1038/s41560-018-0137-9), which 
 * `process()`: performs all required computations to generate LCOE estimates.
 
 ### Author and Copyright
-Copyright (C) 2024 Sebastian Wehrle
+Copyright (c) 2024 Sebastian Wehrle
 
 ### License
 MIT License

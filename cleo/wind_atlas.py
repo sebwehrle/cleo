@@ -1,5 +1,6 @@
 # %% try to build a class for wind power resource assessment with GWA
 import logging
+import zipfile
 from pathlib import Path
 from typing import List
 from tempfile import NamedTemporaryFile
@@ -69,6 +70,7 @@ class WindResourceAtlas:
         self._setup_directories()
         self._setup_logging()
         self._load_data()
+        self._load_nuts()
         self._build_netcdf()
         logging.info(f"WindResourceAtlas for {self.country} initialized at {self.path}")
 
@@ -152,6 +154,36 @@ class WindResourceAtlas:
 
         logging.info(f'Global Wind Atlas data for {c} initialized.')
 
+    def _load_nuts(self, resolution="03M", year=2021, crs=4326):
+
+        RESOLUTION = ["01M", "03M", "10M", "20M", "60M"]
+        YEAR = [2021, 2016, 2013, 2010, 2006, 2003]
+        CRS = [3035, 4326, 3857]
+
+        if resolution not in RESOLUTION:
+            raise ValueError(f'Invalid resolution: {resolution}')
+
+        if year not in YEAR:
+            raise ValueError(f'Invalid year: {year}')
+
+        if crs not in CRS:
+            raise ValueError(f'Invalid crs: {crs}')
+
+        nuts_path = self.path / "data" / "nuts"
+
+        if not nuts_path.is_dir():
+            nuts_path.mkdir()
+
+        url = "https://gisco-services.ec.europa.eu/distribution/v2/nuts/"
+        file = f"NUTS_RG_{resolution}_{year}_{crs}.shp.zip"
+        download_file(url + file, nuts_path / file)
+        logging.info(f"Downloaded {file}")
+
+        with zipfile.ZipFile(file, "r") as zip_ref:
+            zip_ref.extractall(nuts_path)
+
+        logging.info(f"Extracted {file}")
+
     def _build_netcdf(self) -> None:
         """
         Build a NetCDF file from the downloaded data or open an existing one.
@@ -213,7 +245,7 @@ class WindResourceAtlas:
         :param inplace: boolean flag indicating whether clipped data should be updated inplace. Default is True
         :return:
         """
-        data_clipped = clip_to_geometry(self.data, clip_shape)
+        data_clipped = clip_to_geometry(self, clip_shape)
         # Update the data in the Atlas object based on the inplace argument
         if inplace:
             self.data = data_clipped

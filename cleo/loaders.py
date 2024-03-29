@@ -4,7 +4,7 @@ import yaml
 import pandas as pd
 import rioxarray as rxr
 import logging
-from cleo.utils import turbine_overnight_cost
+from cleo.assess import turbine_overnight_cost
 
 
 def get_cost_assumptions(self, attribute_name):
@@ -43,14 +43,14 @@ def load_powercurves(self):
     """
     file_paths = [str(self.path / "resources" / turbine) + ".yml" for turbine in self.wind_turbines]
 
-    power_curves = (
+    power_curves = [
         pd.DataFrame(
             data=data["cf"],
             index=data["V"],
             columns=[f"{data['manufacturer']}.{data['model']}.{data['capacity']}"])
-        for data in (yaml.safe_load(open(path, "r")) for path in file_paths))
+        for data in (yaml.safe_load(open(path, "r")) for path in file_paths)]
 
-    self.power_curves = pd.concat(power_curves, ignore_index=False)
+    self.power_curves = pd.concat(power_curves, axis=1)
     logging.info(f"Power curves for {self.wind_turbines} loaded.")
 
 

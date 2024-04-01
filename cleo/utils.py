@@ -217,3 +217,25 @@ def flatten(self, digits=5):
             raise ValueError("Only 3-dimensional data with 'x' and 'y'-coordinates are supported")
 
     return pd.concat(collect_df, axis=1)
+
+
+def join_with(self, other) -> None:
+    """
+    Merge two WindResourceAtlas or SiteDate objects
+    :param self:
+    :param other:
+    :return:
+    """
+    # check if crs of self and other are equal
+    if self.data.rio.crs != other.data.rio.crs:
+        other.data = other.data.rio.reproject(crs=self.crs)
+
+    # check if spatial coordinates of self and other align
+    if self.data.coords["x"] != other.data.coords["x"] or self.data.coords["y"] != other.data.coords["y"]:
+        other.data = other.data.interp_like(self.data)
+        logging.warning(f"Spatial coordinates do not align. '{other}' interpolated like '{self}'.")
+
+    # merge data
+    merged_dataset = xr.merge([self.data, other.data])
+    self.data = merged_dataset
+    logging.info(f"Merged '{other}' into '{self}'.")

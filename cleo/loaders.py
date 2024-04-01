@@ -2,7 +2,9 @@
 # %% imports
 import yaml
 import pandas as pd
+import geopandas as gpd
 import rioxarray as rxr
+import pycountry as pct
 import logging
 from cleo.assess import turbine_overnight_cost
 
@@ -70,6 +72,17 @@ def load_weibull_parameters(self, height):
         k = rxr.open_rasterio(path_raw_country / f"{self.country}_combined-Weibull-k_{height}.tif").chunk("auto")
         a.name = "weibull_a"
         k.name = "weibull_k"
+
+        if a.rio.crs != self.crs:
+            a = a.rio.reproject(self.crs)
+
+        if k.rio.crs != self.crs:
+            k = k.rio.reproject(self.crs)
+
+        if self.clip_shape is not None:
+            a = a.rio.clip(self.clip_shape.geometry)
+            k = k.rio.clip(self.clip_shape.geometry)
+
         return a, k
     except Exception as e:
         logging.error(f"Error loading weibull parameters for height {height}: {e}")
@@ -82,3 +95,15 @@ def get_overnight_cost(self, turbine_model):
     rotor_diameter = self.get_turbine_attribute(turbine_model, "rotor_diameter")
     year = self.get_turbine_attribute(turbine_model, "commissioning_year")
     return turbine_overnight_cost(power=power, hub_height=hub_height, rotor_diameter=rotor_diameter, year=year)
+
+
+def get_nuts_borders(self):
+    alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
+    border = gpd.read_file(self.path / "data" / "nuts" / "NUTS_RG_03M_2021_4326.shp")
+    if any(border["CNTR_CODE"].str.contains(alpha_2)):
+        # border = border.loc[(border["CNTR_CODE"].str.contains(alpha_2)) & (border["LEVL_CODE"] == 0)]
+        border = border.loc[border["CNTR_CODE"].str.contains(alpha_2)]
+    else:
+        raise ValueError(f"'{alpha_2}' is not a valid NUTS country code")
+
+    return border

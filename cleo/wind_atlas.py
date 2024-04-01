@@ -9,6 +9,7 @@ import requests
 from dask.diagnostics import ProgressBar
 
 import pandas as pd
+import geopandas as gpd
 import netCDF4  # import required for proper writing of netcdf-files
 import xarray as xr
 import rioxarray as rxr
@@ -72,6 +73,7 @@ class WindResourceAtlas:
         self._load_data()
         self._load_nuts()
         self._build_netcdf()
+        self._load_clip_shape()
         logging.info(f"WindResourceAtlas for {self.country} initialized at {self.path}")
 
     def __repr__(self):
@@ -98,6 +100,7 @@ class WindResourceAtlas:
             raise TypeError("Country must be a string")
 
         self.wind_turbines = ["Vestas.V112.3075"]
+        self.clip_shape = None
 
     def _setup_directories(self) -> None:
         """
@@ -109,7 +112,7 @@ class WindResourceAtlas:
 
         for path in [path_raw, path_processed, path_logging]:
             if not path.is_dir():
-                path.mkdir()
+                path.mkdir(parents=True)
 
     def _load_data(self) -> None:
         """
@@ -174,15 +177,18 @@ class WindResourceAtlas:
         if not nuts_path.is_dir():
             nuts_path.mkdir()
 
-        url = "https://gisco-services.ec.europa.eu/distribution/v2/nuts/"
+        url = "https://gisco-services.ec.europa.eu/distribution/v2/nuts/shp/"
         file = f"NUTS_RG_{resolution}_{year}_{crs}.shp.zip"
-        download_file(url + file, nuts_path / file)
-        logging.info(f"Downloaded {file}")
+        if not (nuts_path / file).is_file():
+            download_file(url + file, nuts_path / file)
+            logging.info(f"Downloaded {file}")
 
-        with zipfile.ZipFile(file, "r") as zip_ref:
-            zip_ref.extractall(nuts_path)
+            with zipfile.ZipFile(str(nuts_path / file), "r") as zip_ref:
+                zip_ref.extractall(nuts_path)
 
-        logging.info(f"Extracted {file}")
+            logging.info(f"Extracted {file}")
+        else:
+            logging.info(f"NUTS borders initialised.")
 
     def _build_netcdf(self) -> None:
         """
@@ -208,6 +214,15 @@ class WindResourceAtlas:
 
         self.crs = self.data.rio.crs
 
+    def _load_clip_shape(self) -> None:
+        """
+        Build the clip shape to which the WindResourceAtlas was clipped
+        """
+        fname_clipshape = self.path / "data" / "processed" / f"clip_shape_{self.country}.shp"
+        if fname_clipshape.is_file():
+            self.clip_shape = gpd.read_file(fname_clipshape)
+            logging.info(f"Existing clip shape {fname_clipshape} loaded.")
+
     def to_file(self, complevel=4):
         """
         Save NetCDF data safely to a file
@@ -217,17 +232,16 @@ class WindResourceAtlas:
 
             logging.debug(f"Writing data to {tmp_file_path} ...")
             encoding = {}
-            total_size = self.data.nbytes
 
             for var_name, var in self.data.variables.items():
                 encoding[var_name] = {"zlib": True, "complevel": complevel}
 
             write_job = self.data.to_netcdf(str(tmp_file_path),
-                                                  compute=False,
-                                                  format="NETCDF4",
-                                                  engine="netcdf4",
-                                                  encoding=encoding,
-                                                  )
+                                            compute=False,
+                                            format="NETCDF4",
+                                            engine="netcdf4",
+                                            encoding=encoding,
+                                            )
             with ProgressBar():
                 write_job.compute()
 
@@ -236,7 +250,14 @@ class WindResourceAtlas:
                 (self.path / "data" / "processed" / f"atlas_{self.country}.nc").unlink()
 
             tmp_file_path.rename(self.path / "data" / "processed" / f"atlas_{self.country}.nc")
-        logging.info(f"WindResourceAtlas data saved to {str(self.path / 'data' / 'processed' / f'atlas_{self.country}.nc')}")
+
+        logging.info(
+            f"WindResourceAtlas data saved to {str(self.path / 'data' / 'processed' / f'atlas_{self.country}.nc')}")
+
+        fname_clip_shape = self.path / "data" / "processed" / f"clip_shape_{self.country}.shp"
+        if isinstance(self.clip_shape, gpd.GeoDataFrame) and not fname_clip_shape.is_file():
+            self.clip_shape.to_file(fname_clip_shape)
+            logging.info(f"Clip shape saved to '{fname_clip_shape}'.")
 
     def clip_to(self, clip_shape, inplace=True):
         """
@@ -245,14 +266,23 @@ class WindResourceAtlas:
         :param inplace: boolean flag indicating whether clipped data should be updated inplace. Default is True
         :return:
         """
-        data_clipped = clip_to_geometry(self, clip_shape)
-        # Update the data in the Atlas object based on the inplace argument
-        if inplace:
-            self.data = data_clipped
+        # check whether atlas is clipped already
+        if self.clip_shape is None:
+            data_clipped, clip_shape_used = clip_to_geometry(self, clip_shape)
+            # add clip shape to atlas
+            self.clip_shape = clip_shape_used
+
+            # Update the data in the Atlas object based on the inplace argument
+            if inplace:
+                self.data = data_clipped
+            else:
+                clipped_atlas = WindResourceAtlas(str(self.path), self.country)
+                clipped_atlas.data = data_clipped
+                return clipped_atlas
+        elif self.clip_shape.equals(clip_shape):
+            logging.info("WindResourceAtlas already clipped to clip shape.")
         else:
-            clipped_atlas = WindResourceAtlas(str(self.path), self.country)
-            clipped_atlas.data = data_clipped
-            return clipped_atlas
+            logging.warning("WindResourceAtlas already clipped to another clip shape. Operation aborted.")
 
     # utils
     _setup_logging = _setup_logging

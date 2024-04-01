@@ -153,7 +153,13 @@ def compute_air_density_correction(self, chunk_size=None):
 
     path_raw_coutry = self.path / "data" / "raw" / f"{self.country}"
     elevation = rxr.open_rasterio(path_raw_coutry / f"{self.country}_elevation_w_bathymetry.tif").chunk("auto")
-    elevation = elevation.rename("elevation")
+    elevation = elevation.rename("elevation").squeeze()
+
+    if elevation.rio.crs != self.crs:
+        elevation = elevation.rio.reproject(self.crs)
+
+    if self.clip_shape is not None:
+        elevation = elevation.rio.clip(self.clip_shape.geometry)
 
     if chunk_size is None:
         rho = rho_correction(elevation)
@@ -286,7 +292,7 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
         else:
             cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
 
-        cf = cf * self.data["air_density_correction"]
+        # cf = cf * self.data["air_density_correction"]
         cf = cf.expand_dims(turbine_models=[turbine_model])
         logging.info(f"Capacity factors for {turbine_model} in {self.country} computed.")
         # cap_factor = xr.merge([cap_factor, cf.rename("capacity_factor")])

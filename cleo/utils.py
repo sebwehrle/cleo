@@ -7,12 +7,14 @@ import logging
 import logging.config
 import numpy as np
 import pandas as pd
+import xarray
 import xarray as xr
+from typing import Union
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
-
 from pathlib import Path
 
+from cleo.spatial import bbox
 
 # %% functions
 def stylish_tqdm(total, desc):
@@ -219,7 +221,7 @@ def flatten(self, digits=5):
     return pd.concat(collect_df, axis=1)
 
 
-def join_with(self, other) -> None:
+def add(self, other: Union["WindResourceAtlas", "SiteData", "xr.DataArray", xr.Dataset], name=None) -> None:
     """
     Merge two WindResourceAtlas or SiteDate objects
     :param self:
@@ -227,15 +229,29 @@ def join_with(self, other) -> None:
     :return:
     """
     # check if crs of self and other are equal
-    if self.data.rio.crs != other.data.rio.crs:
-        other.data = other.data.rio.reproject(crs=self.crs)
+    if isinstance(other, (xarray.Dataset, xarray.DataArray)):
+        xarray_data = other
+    elif isinstance(other, (WindResourceAtlas, SiteData)):
+        xarray_data = self.data
+    else:
+        raise TypeError(f"'{other}' must be an instance of xr.Dataset, xr.DataArray, WindResourceAtlas or SiteData.")
 
+    if self.data.rio.crs != xarray_data.rio.crs:
+        xarray_data = xarray_data.rio.reproject(self.crs)
+
+    # clip if necessary
+    if bbox(self) != bbox(other):
+        xarray_data = xarray_data.rio.clip(self.clip_shape.geometry)
+        
     # check if spatial coordinates of self and other align
-    if self.data.coords["x"] != other.data.coords["x"] or self.data.coords["y"] != other.data.coords["y"]:
-        other.data = other.data.interp_like(self.data)
+    if (self.data.coords["x"] != xarray_data.coords["x"]).any() or (self.data.coords["y"] != xarray_data.coords["y"]).any():
+        xarray_data = xarray_data.interp_like(self.data)
         logging.warning(f"Spatial coordinates do not align. '{other}' interpolated like '{self}'.")
+    
+    if name is not None:
+        xarray_data.name = name
 
     # merge data
-    merged_dataset = xr.merge([self.data, other.data])
+    merged_dataset = xr.merge([self.data, xarray_data])
     self.data = merged_dataset
-    logging.info(f"Merged '{other}' into '{self}'.")
+    logging.info(f"Merged '{other.name}' into '{self.country}'-data.")

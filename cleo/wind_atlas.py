@@ -1,4 +1,5 @@
 # %% try to build a class for wind power resource assessment with GWA
+import shutil
 import logging
 import zipfile
 from pathlib import Path
@@ -53,6 +54,7 @@ class WindResourceAtlas:
     path: Path
     country: str
     wind_turbines: List[str]
+    region: str = None
     crs: str = None  # Private attribute for CRS, use property for access
     data: xr.Dataset = None  # Optional attribute to hold loaded data
     power_curves: pd.DataFrame = None  # Optional attribute for power curves
@@ -74,6 +76,7 @@ class WindResourceAtlas:
         self._load_nuts()
         self._build_netcdf()
         self._load_clip_shape()
+        self._copy_resource_files()
         logging.info(f"WindResourceAtlas for {self.country} initialized at {self.path}")
 
     def __repr__(self):
@@ -223,6 +226,20 @@ class WindResourceAtlas:
             self.clip_shape = gpd.read_file(fname_clipshape)
             logging.info(f"Existing clip shape {fname_clipshape} loaded.")
 
+    def _copy_resource_files(self):
+        """
+        Copy yaml-resource files to the destination directory
+        """
+        # Path to the directory containing YAML files within the package
+        source_dir = Path(__file__).parent.parent / 'resources'
+        # create destination directory
+        (self.path / "resources").mkdir(parents=True, exist_ok=True)
+        # Iterate over each YAML file in the source folder
+        for file_path in source_dir.glob('*.yml'):
+            # Copy the YAML file to the destination folder
+            shutil.copy(file_path, self.path / "resources")
+        logging.info(f"Resource files copied to {self.path / 'resources'}.")
+
     def to_file(self, complevel=4):
         """
         Save NetCDF data safely to a file
@@ -259,7 +276,7 @@ class WindResourceAtlas:
             self.clip_shape.to_file(fname_clip_shape)
             logging.info(f"Clip shape saved to '{fname_clip_shape}'.")
 
-    def clip_to(self, clip_shape, inplace=True):
+    def clip_to(self, clip_shape, region=None, inplace=True):
         """
         Wrapper function to enable inplace-operations for clip_to_geometry-function
         :param clip_shape: path-string or Geopandas GeoDataFrame containing the clipping shape

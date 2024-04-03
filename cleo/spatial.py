@@ -83,12 +83,23 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
 
 def bbox(self):
     """
-    Get the bounding box of the Atlas object
-    :param self: an Atlas object
+    Get the bounding box of the object
+    :param self: an object
     :return: (xmin, ymin, xmax, ymax)
     """
-    return (self.data.coords["x"].min(),
+    if hasattr(self, 'coords') and hasattr(self.coords, '__getitem__'):
+        return (
+            self.coords["x"].min(),
+            self.coords["y"].min(),
+            self.coords["x"].max(),
+            self.coords["y"].max(),
+        )
+    elif hasattr(self, 'data') and hasattr(self.data, 'coords') and hasattr(self.data.coords, '__getitem__'):
+        return (
+            self.data.coords["x"].min(),
             self.data.coords["y"].min(),
             self.data.coords["x"].max(),
             self.data.coords["y"].max(),
-            )
+        )
+    else:
+        raise ValueError("Unsupported object type for bbox")

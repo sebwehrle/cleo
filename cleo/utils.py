@@ -13,8 +13,10 @@ from typing import Union
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 from pathlib import Path
+from pint import UnitRegistry
 
 from cleo.spatial import bbox
+
 
 # %% functions
 def stylish_tqdm(total, desc):
@@ -242,12 +244,13 @@ def add(self, other: Union["WindResourceAtlas", "SiteData", "xr.DataArray", xr.D
     # clip if necessary
     if bbox(self) != bbox(other):
         xarray_data = xarray_data.rio.clip(self.clip_shape.geometry)
-        
+
     # check if spatial coordinates of self and other align
-    if (self.data.coords["x"] != xarray_data.coords["x"]).any() or (self.data.coords["y"] != xarray_data.coords["y"]).any():
+    if (self.data.coords["x"] != xarray_data.coords["x"]).any() or (
+            self.data.coords["y"] != xarray_data.coords["y"]).any():
         xarray_data = xarray_data.interp_like(self.data)
         logging.warning(f"Spatial coordinates do not align. '{other}' interpolated like '{self}'.")
-    
+
     if name is not None:
         xarray_data.name = name
 
@@ -255,3 +258,35 @@ def add(self, other: Union["WindResourceAtlas", "SiteData", "xr.DataArray", xr.D
     merged_dataset = xr.merge([self.data, xarray_data])
     self.data = merged_dataset
     logging.info(f"Merged '{other.name}' into '{self.country}'-data.")
+
+
+def convert(self, data_variable, to_unit, inplace=False):
+    """
+    Convert a data variable from the current unit to the specified unit
+    """
+    ureg = UnitRegistry()
+
+    if isinstance(data_variable, str):
+        data_variable = [data_variable]
+    elif not isinstance(data_variable, list):
+        raise ValueError("data_variable must be a string or a list of strings.")
+
+    converted_arrays = {}
+    for var in data_variable:
+        data_var = self.data[var]
+        unit = data_var.attrs.get("unit")
+
+        if unit is None:
+            raise ValueError("DataArray has no unit. Cannot perform unit conversion.")
+
+        converted_arrays[var] = xr.DataArray(
+            (data_var.data * ureg(unit)).to(to_unit).magnitude,
+            coords=data_var.coords,
+            dims=data_var.dims,
+            attrs={"unit": to_unit}
+        )
+
+    if inplace:
+        self.data.update({var: converted_array for var, converted_array in converted_arrays.items()})
+    else:
+        return converted_arrays

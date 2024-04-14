@@ -8,27 +8,39 @@ import xarray as xr
 import rasterio.crs
 from pathlib import Path
 from xrspatial import proximity
+from tempfile import NamedTemporaryFile
+from dask.diagnostics import ProgressBar
 
 from cleo.utils import download_file, add, convert
 from cleo.spatial import clip_to_geometry
 from cleo.clc_codes import clc_codes
 
 
-def _init_template_like(atlas):
-    # Get the coordinates
-    spatial_coords = {coord: atlas.data.coords[coord] for coord in ['x', 'y']}
-    # first data variable
-    first_data_var = [next(iter(atlas.data.data_vars))]
-    # Find the name of the non-spatial dimension
-    non_spatial_dim = [dim for dim in atlas.data[first_data_var].dims if dim not in ['x', 'y']][0]
-    # Generate mask of nans
-    nan_mask = np.isnan(atlas.data[first_data_var]).all(dim=non_spatial_dim)
-    # Create a new dataset with only the spatial coordinates and a new data variable
-    dataset = xr.where(nan_mask, np.nan, 0).rename({first_data_var[0]: "template"})
+def _init_geoscape_data(atlas):
+    """
+    Initialize the geoscape data either from disk or from a provided atlas.
+    :param atlas: a cleo.WindScape object
+    :return:
+    """
+    fname = atlas.path / "data" / "processed" / f"geoscape_{atlas.country}.nc"
+    if fname.exists():
+        dataset = xr.open_dataset(fname)
+    else:
+        # Get the coordinates
+        spatial_coords = {coord: atlas.data.coords[coord] for coord in ['x', 'y']}
+        # first data variable
+        first_data_var = [next(iter(atlas.data.data_vars))]
+        # Find the name of the non-spatial dimension
+        non_spatial_dim = [dim for dim in atlas.data[first_data_var].dims if dim not in ['x', 'y']][0]
+        # Generate mask of nans
+        nan_mask = np.isnan(atlas.data[first_data_var]).all(dim=non_spatial_dim)
+        # Create a new dataset with only the spatial coordinates and a new data variable
+        dataset = xr.where(nan_mask, np.nan, 0).rename({first_data_var[0]: "template"})
+
     return dataset
 
 
-class SiteData:
+class GeoScape:
     """
     Represents geospatial data describing potential wind turbine sites
     """
@@ -36,7 +48,7 @@ class SiteData:
         self.path = atlas.path
         self.country = atlas.country
         self.crs = atlas.crs
-        self.data = _init_template_like(atlas)
+        self.data = _init_geoscape_data(atlas)
         self.clip_shape = atlas.clip_shape
 
     def __repr__(self):
@@ -97,7 +109,9 @@ class SiteData:
 
         if inplace:
             self.data[raster.name] = raster
+            logging.info(f"rasterized {name} and added to data for {self.country}")
         else:
+            logging.info(f"returning rasterized {name}")
             return raster
 
     def compute_distance(self, data_var, inplace=False):
@@ -249,3 +263,36 @@ class SiteData:
         clc_3d = clc_3d.rio.write_crs(self.crs)
         self.add(clc_3d, name="corine_land_cover")
         logging.info(f"Corine Land Cover loaded.")
+
+    def to_file(self, complevel=4):
+        """
+        Save NetCDF data safely to a file
+        """
+        with NamedTemporaryFile(suffix=".tmp", dir=self.path / "data" / "processed", delete=False) as tmp_file:
+            tmp_file_path = Path(tmp_file.name)
+
+            logging.debug(f"Writing data to {tmp_file_path} ...")
+            encoding = {}
+
+            for var_name, var in self.data.variables.items():
+                encoding[var_name] = {"zlib": True, "complevel": complevel}
+
+            write_job = self.data.to_netcdf(str(tmp_file_path),
+                                            compute=False,
+                                            format="NETCDF4",
+                                            engine="netcdf4",
+                                            encoding=encoding,
+                                            )
+            with ProgressBar():
+                write_job.compute()
+
+            if (self.path / "data" / "processed" / f"geoscape_{self.country}.nc").exists():
+                self.data.close()
+                (self.path / "data" / "processed" / f"geoscape_{self.country}.nc").unlink()
+
+            tmp_file.close()
+
+        tmp_file_path.rename(self.path / "data" / "processed" / f"geoscape_{self.country}.nc")
+
+        logging.info(
+            f"GeoScape data saved to {str(self.path / 'data' / 'processed' / f'geoscape_{self.country}.nc')}")

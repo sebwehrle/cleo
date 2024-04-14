@@ -47,9 +47,9 @@ from cleo.assess import (
 
 
 @dataclass
-class WindResourceAtlas:
+class WindScape:
     """
-    Atlas base class for wind power resource assessment with GWA data
+    WindScape base class for wind power resource assessment with GWA data
     """
     path: Path
     country: str
@@ -59,15 +59,15 @@ class WindResourceAtlas:
     data: xr.Dataset = None  # Optional attribute to hold loaded data
     power_curves: pd.DataFrame = None  # Optional attribute for power curves
 
-    def __init__(self, path: str, country: str, **atlas_params):
+    def __init__(self, path: str, country: str, *wind_scape_params):
         """
-        Provides an Atlas object
+        Provides a WindScape object
 
         :param path: Path to data directory. Subdirectories "raw" and "processed" will be created.
         :type path: str
         :param country: 3-digit ISO code of country to download
         :type country: str
-        :param atlas_params: Optional additional parameters
+        :param wind_scape_params: Optional additional parameters
         """
         self._init_params(path, country)
         self._setup_directories()
@@ -77,11 +77,11 @@ class WindResourceAtlas:
         self._build_netcdf()
         self._load_clip_shape()
         self._copy_resource_files()
-        logging.info(f"WindResourceAtlas for {self.country} initialized at {self.path}")
+        logging.info(f"WindScape for {self.country} initialized at {self.path}")
 
     def __repr__(self):
         return (
-            f"<WindResourceAtlas {self.country}>\n"
+            f"<WindScape {self.country}>\n"
             f"Wind turbine(s): {self.wind_turbines}\n"
             f"{self.data.data_vars}"
         )
@@ -130,7 +130,7 @@ class WindResourceAtlas:
         c = self.country
         path_raw = self.path / "data" / "raw" / self.country
 
-        logging.info(f"Initializing WindResourceAtlas with Global Wind Atlas data")
+        logging.info(f"Initializing WindScape with Global Wind Atlas data")
 
         for l in layers:
             for h in height:
@@ -200,10 +200,10 @@ class WindResourceAtlas:
         """
         path_raw = self.path / "data" / "raw" / self.country
         path_netcdf = self.path / "data" / "processed"
-        fname_netcdf = path_netcdf / f"atlas_{self.country}.nc"
+        fname_netcdf = path_netcdf / f"windscape_{self.country}.nc"
 
         if not fname_netcdf.is_file():
-            logging.info(f"Building new resource atlas at {str(path_netcdf)}")
+            logging.info(f"Building new WindScape object at {str(path_netcdf)}")
             # get coords from GWA
             with rxr.open_rasterio(path_raw / f"{self.country}_combined-Weibull-A_100.tif",
                                    parse_coordinates=True).squeeze() as weibull_a_100:
@@ -213,13 +213,13 @@ class WindResourceAtlas:
         else:
             with xr.open_dataset(fname_netcdf, chunks="auto") as dataset:
                 self.data = dataset
-            logging.info(f"Existing WindResourceAtlas at {str(path_netcdf)} opened.")
+            logging.info(f"Existing WindScape at {str(path_netcdf)} opened.")
 
         self.crs = self.data.rio.crs
 
     def _load_clip_shape(self) -> None:
         """
-        Build the clip shape to which the WindResourceAtlas was clipped
+        Build the clip shape to which the WindScape was clipped
         """
         fname_clipshape = self.path / "data" / "processed" / f"clip_shape_{self.country}.shp"
         if fname_clipshape.is_file():
@@ -262,14 +262,16 @@ class WindResourceAtlas:
             with ProgressBar():
                 write_job.compute()
 
-            if (self.path / "data" / "processed" / f"atlas_{self.country}.nc").exists():
+            if (self.path / "data" / "processed" / f"windscape_{self.country}.nc").exists():
                 self.data.close()
-                (self.path / "data" / "processed" / f"atlas_{self.country}.nc").unlink()
+                (self.path / "data" / "processed" / f"windscape_{self.country}.nc").unlink()
 
-            tmp_file_path.rename(self.path / "data" / "processed" / f"atlas_{self.country}.nc")
+            tmp_file.close()
+
+        tmp_file_path.rename(self.path / "data" / "processed" / f"windscape_{self.country}.nc")
 
         logging.info(
-            f"WindResourceAtlas data saved to {str(self.path / 'data' / 'processed' / f'atlas_{self.country}.nc')}")
+            f"WindScape data saved to {str(self.path / 'data' / 'processed' / f'windscape_{self.country}.nc')}")
 
         fname_clip_shape = self.path / "data" / "processed" / f"clip_shape_{self.country}.shp"
         if isinstance(self.clip_shape, gpd.GeoDataFrame) and not fname_clip_shape.is_file():
@@ -283,23 +285,23 @@ class WindResourceAtlas:
         :param inplace: boolean flag indicating whether clipped data should be updated inplace. Default is True
         :return:
         """
-        # check whether atlas is clipped already
+        # check whether WindScape is clipped already
         if self.clip_shape is None:
             data_clipped, clip_shape_used = clip_to_geometry(self, clip_shape)
-            # add clip shape to atlas
+            # add clip shape to WindScape
             self.clip_shape = clip_shape_used
 
-            # Update the data in the Atlas object based on the inplace argument
+            # Update the data in the WindScape object based on the inplace argument
             if inplace:
                 self.data = data_clipped
             else:
-                clipped_atlas = WindResourceAtlas(str(self.path), self.country)
-                clipped_atlas.data = data_clipped
-                return clipped_atlas
+                clipped_scape = WindScape(str(self.path), self.country)
+                clipped_scape.data = data_clipped
+                return clipped_scape
         elif self.clip_shape.equals(clip_shape):
-            logging.info("WindResourceAtlas already clipped to clip shape.")
+            logging.info("WindScape already clipped to clip shape.")
         else:
-            logging.warning("WindResourceAtlas already clipped to another clip shape. Operation aborted.")
+            logging.warning("WindScape already clipped to another clip shape. Operation aborted.")
 
     # utils
     _setup_logging = _setup_logging

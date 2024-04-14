@@ -223,41 +223,38 @@ def flatten(self, digits=5):
     return pd.concat(collect_df, axis=1)
 
 
-def add(self, other: Union["WindResourceAtlas", "SiteData", "xr.DataArray", xr.Dataset], name=None) -> None:
+def add(self, other, name=None) -> None:
     """
-    Merge two WindResourceAtlas or SiteDate objects
-    :param self:
-    :param other:
+    Merge other into self
+    :param self: an instance of the WindScape- or GeoScape-class
+    :param other: an instance of the xarray.DataArray- or xarray.Dataset-class
     :return:
     """
-    # check if crs of self and other are equal
-    if isinstance(other, (xarray.Dataset, xarray.DataArray)):
-        xarray_data = other
-    elif isinstance(other, (WindResourceAtlas, SiteData)):
-        xarray_data = self.data
-    else:
-        raise TypeError(f"'{other}' must be an instance of xr.Dataset, xr.DataArray, WindResourceAtlas or SiteData.")
+    # duck typing to check if other is an xarray.Dataset, xarray.DataArray, WindScape or GeoScape object
+    if not hasattr(other, "dims"):
+        raise TypeError(f"'{other}' must be an instance of the xr.Dataset- or xr.DataArray-class.")
 
-    if self.data.rio.crs != xarray_data.rio.crs:
-        xarray_data = xarray_data.rio.reproject(self.crs)
+    if self.data.rio.crs != other.rio.crs:
+        xarray_data = other.rio.reproject(self.crs)
 
-    # clip if necessary
+    # clip other if necessary
     if bbox(self) != bbox(other):
-        xarray_data = xarray_data.rio.clip(self.clip_shape.geometry)
+        other = other.rio.clip(self.clip_shape.geometry)
 
     # check if spatial coordinates of self and other align
-    if (self.data.coords["x"] != xarray_data.coords["x"]).any() or (
-            self.data.coords["y"] != xarray_data.coords["y"]).any():
-        xarray_data = xarray_data.interp_like(self.data)
-        logging.warning(f"Spatial coordinates do not align. '{other}' interpolated like '{self}'.")
+    if not (np.array_equal(self.data["x"].data, other["x"].data)
+            and np.array_equal(self.data["y"].data, other["y"].data)):
+        template = self.data["template"] if "template" in self.data.data_vars else self.data
+        other = other.interp_like(template)
+
+        logging.warning(f"Spatial coordinates do not align. 'other' interpolated like 'self'.")
 
     if name is not None:
-        xarray_data.name = name
+        other.name = name
 
     # merge data
-    merged_dataset = xr.merge([self.data, xarray_data])
-    self.data = merged_dataset
-    logging.info(f"Merged '{other.name}' into '{self.country}'-data.")
+    self.data = xr.merge([self.data, other])
+    logging.info(f"Merged '{name}' into '{self.country}'-data.")
 
 
 def convert(self, data_variable, to_unit, inplace=False):

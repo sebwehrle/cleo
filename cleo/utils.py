@@ -177,7 +177,7 @@ def _setup_logging(self):
     logging.config.dictConfig(logging_config)
 
 
-def flatten(self, digits=5):
+def flatten(self, digits=5, exclude_template=True):
     """
     Converts data in a xarray.Dataset to a pandas.DataFrame in a slower but more memory efficient way than
     xarray.Dataset.to_dataframe. Rounding of coordinates facilitates merging across data variables. The default
@@ -189,7 +189,11 @@ def flatten(self, digits=5):
 
     collect_df = []
 
-    for var_name in self.data.data_vars:
+    data_variables = self.data.data_vars
+    if exclude_template:
+        data_variables = [data_var for data_var in data_variables if data_var != "template"]
+
+    for var_name in data_variables:
         data_var = self.data[var_name]
         # drop non-dimensional coordinates
         non_dim_coords = set(data_var.coords) - set(data_var.dims)
@@ -218,7 +222,7 @@ def flatten(self, digits=5):
                 collect_df.append(df)
 
         else:
-            raise ValueError("Only 3-dimensional data with 'x' and 'y'-coordinates are supported")
+            raise ValueError(f"Error in {var_name}. Only 3-dimensional data with 'x' and 'y'-coordinates are supported")
 
     return pd.concat(collect_df, axis=1)
 

@@ -11,7 +11,7 @@ from xrspatial import proximity
 from tempfile import NamedTemporaryFile
 from dask.diagnostics import ProgressBar
 
-from cleo.utils import download_file, add, convert
+from cleo.utils import download_file, add, convert, flatten
 from cleo.spatial import clip_to_geometry
 from cleo.clc_codes import clc_codes
 
@@ -60,6 +60,7 @@ class GeoScape:
 
     add = add
     convert = convert
+    flatten = flatten
 
     def rasterize(self, shape, column=None, name=None, all_touched=False, inplace=True):
         """
@@ -268,6 +269,11 @@ class GeoScape:
         """
         Save NetCDF data safely to a file
         """
+        # remove any coordinate which is not required
+        non_dim_coords = [coord for coord in self.data.coords if coord not in self.data.dims and coord != 'spatial_ref']
+        self.data = self.data.drop_vars(non_dim_coords)
+
+        # write temp-file
         with NamedTemporaryFile(suffix=".tmp", dir=self.path / "data" / "processed", delete=False) as tmp_file:
             tmp_file_path = Path(tmp_file.name)
 
@@ -292,6 +298,7 @@ class GeoScape:
 
             tmp_file.close()
 
+        # convert temp-file to final output
         tmp_file_path.rename(self.path / "data" / "processed" / f"geoscape_{self.country}.nc")
 
         logging.info(

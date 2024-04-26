@@ -182,6 +182,7 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     :param replace: if True, replace existing wind speed data. Defaults to False.
     :type replace: bool
     """
+    # TODO: re-computing at a given height adds dataarray a second time (with duplicate height-coord)
 
     def calculate_mean_wind_speed(weibull_a, weibull_k):
         """
@@ -307,8 +308,6 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     else:
         self.data = self.data.combine_first(cap_factor)
 
-    return cap_factor
-
 
 def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
     """
@@ -356,3 +355,28 @@ def minimum_lcoe(self):
     lc_min = lcoe.min(dim='turbine_models', keep_attrs=True)
     lc_min = lc_min.assign_coords({'turbine_models': 'min_lcoe'})
     self.data["min_lcoe"] = lc_min.rename("minimal_lcoe")
+
+
+def compute_optimal_power_energy(self):
+    # compute optimal power
+    least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine_models').compute()
+
+    def parse_capacity(string):
+        if isinstance(string, str):
+            parts = string.split('.')
+            capacity = parts[-1]
+            return float(capacity)
+        else:
+            return np.nan
+
+    power = xr.apply_ufunc(parse_capacity, least_cost_turbine, vectorize=True)
+    # TODO: set unit on energy'
+
+    self.data["optimal_power"] = power
+    # compute optimal energy
+    least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine_models').compute()
+    energy = self.data["capacity_factors"].isel(turbine_models=least_cost_index).drop_vars("turbine_models")
+    energy = energy.assign_coords({'turbine_models': "min_lcoe"})
+    energy = energy * power  * 8760 / 10**6
+    # TODO: set unit on energy
+    self.data["optimal_energy"] = energy

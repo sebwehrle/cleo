@@ -40,11 +40,14 @@ from cleo.assess import (
     simulate_capacity_factors,
     compute_lcoe,
     minimum_lcoe,
+    compute_optimal_power_energy,
 )
 
 # from logging_config import setup_logging
 # setup_logging()
-
+# TODO: write properties to attributes of the netcdf file
+# TODO: use load_dataset instead of open_dataset?
+# TODO: unify WindScape and GeoScape classes and save two netcdf files, one for each thing. Second netcdf can be initialized from first
 
 @dataclass
 class WindScape:
@@ -311,6 +314,7 @@ class WindScape:
     get_powercurves = load_powercurves
     get_overnight_cost = get_overnight_cost
     load_weibull_parameters = load_weibull_parameters
+    compute_optimal_power_energy = compute_optimal_power_energy
 
     # spatial operations
     reproject = reproject

@@ -30,5 +30,6 @@ setuptools.setup(
         "rioxarray",
         "geopandas",
         "pycountry",
+        "pint",
     ]
 )

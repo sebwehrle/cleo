@@ -151,15 +151,18 @@ def compute_air_density_correction(self, chunk_size=None):
         rho_correction_factor = rho_correction_factor.squeeze().rename("air_density_correction_factor")
         return rho_correction_factor
 
-    path_raw_coutry = self.path / "data" / "raw" / f"{self.country}"
-    elevation = rxr.open_rasterio(path_raw_coutry / f"{self.country}_elevation_w_bathymetry.tif").chunk("auto")
+    path_raw_country = self.parent.path / "data" / "raw" / f"{self.parent.country}"
+    elevation = rxr.open_rasterio(path_raw_country / f"{self.parent.country}_elevation_w_bathymetry.tif")
     elevation = elevation.rename("elevation").squeeze()
 
-    if elevation.rio.crs != self.crs:
-        elevation = elevation.rio.reproject(self.crs)
+    if elevation.rio.crs != self.parent.crs:
+        elevation = elevation.rio.reproject(self.parent.crs).squeeze()
 
-    if self.clip_shape is not None:
-        elevation = elevation.rio.clip(self.clip_shape.geometry)
+    if self.parent.region is not None:
+        clip_shape = self.parent.get_nuts_region(self.parent.region)
+        if clip_shape.crs != self.parent.crs:
+            clip_shape = clip_shape.to_crs(self.parent.crs)
+        elevation = elevation.rio.clip(clip_shape.geometry)
 
     if chunk_size is None:
         rho = rho_correction(elevation)
@@ -167,7 +170,7 @@ def compute_air_density_correction(self, chunk_size=None):
         rho = compute_chunked(self, rho_correction, chunk_size, elevation=elevation)
 
     self.data["air_density_correction"] = rho
-    logging.info(f'Air density correction for {self.country} computed.')
+    logging.info(f'Air density correction for {self.parent.country} computed.')
 
 
 def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
@@ -241,7 +244,7 @@ def compute_terrain_roughness_length(self, chunk_size=None):
 
     alpha = (np.log(u_mean_100) - np.log(u_mean_50)) / (np.log(100) - np.log(50))
     self.data['terrain_roughness_length'] = alpha.squeeze().rename("terrain_roughness_length")
-    logging.info(f'Terrain roughness length for {self.country} computed.')
+    logging.info(f'Terrain roughness length for {self.parent.country} computed.')
 
 
 def compute_weibull_pdf(self, chunk_size=None):
@@ -254,7 +257,7 @@ def compute_weibull_pdf(self, chunk_size=None):
     inputs = {
         "weibull_a": self.load_weibull_parameters(100)[0],
         "weibull_k": self.load_weibull_parameters(100)[1],
-        "u_power_curve": self.power_curves.index.values
+        "u_power_curve": self.data.coords["wind_speed"].values
     }
 
     if chunk_size is None:
@@ -263,7 +266,7 @@ def compute_weibull_pdf(self, chunk_size=None):
         p = compute_chunked(self, weibull_probability_density, chunk_size, **inputs)
 
     self.data["weibull_pdf"] = p
-    logging.info(f'Weibull probability density function of wind speeds in {self.country} computed.')
+    logging.info(f'Weibull probability density function of wind speeds in {self.data.attrs["country"]} computed.')
 
 
 def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
@@ -278,12 +281,12 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     """
     cap_factor = []
 
-    for turbine_model in self.wind_turbines:
+    for turbine_model in self.data.coords["turbine"].values:
         inputs = {
             "weibull_pdf": self.data["weibull_pdf"],
             "terrain_roughness_length": self.data["terrain_roughness_length"],
-            "u_power_curve": self.power_curves.index.values,
-            "p_power_curve": self.power_curves[turbine_model].values,
+            "u_power_curve": self.data.coords["wind_speed"].values,
+            "p_power_curve": self.data.power_curve.sel(turbine=turbine_model).values,
             "h_turbine": self.get_turbine_attribute(turbine_model, "hub_height"),
             "correction_factor": bias_correction
         }
@@ -294,13 +297,13 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
             cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
 
         # cf = cf * self.data["air_density_correction"]
-        cf = cf.expand_dims(turbine_models=[turbine_model])
-        logging.info(f"Capacity factors for {turbine_model} in {self.country} computed.")
+        cf = cf.expand_dims(turbine=[turbine_model])
+        logging.info(f"Capacity factors for {turbine_model} in {self.data.attrs['country']} computed.")
         # cap_factor = xr.merge([cap_factor, cf.rename("capacity_factor")])
         cap_factor.append(cf)
 
-    cap_factor = xr.concat(cap_factor, dim="turbine_models")
-    cap_factor = cap_factor.assign_coords(turbine_models=self.wind_turbines)
+    cap_factor = xr.concat(cap_factor, dim="turbine")
+    # cap_factor = cap_factor.assign_coords(turbine=self.wind_turbines)
     cap_factor = cap_factor.rename("capacity_factor")
 
     if "capacity_factors" not in self.data:
@@ -321,11 +324,11 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
     :type turbine_cost_share: float
     """
     lcoe_list = []
-    for turbine_model in self.wind_turbines:
+    for turbine_model in self.data.coords["turbine"].values:
 
         inputs = {
             "power": self.get_turbine_attribute(turbine_model, "capacity"),
-            "capacity_factors": self.data["capacity_factors"].sel(turbine_models=turbine_model),
+            "capacity_factors": self.data["capacity_factors"].sel(turbine=turbine_model),
             "overnight_cost": self.get_overnight_cost(turbine_model) *
                               self.get_turbine_attribute(turbine_model, "capacity") * turbine_cost_share,
             "grid_cost": grid_connect_cost(self.get_turbine_attribute(turbine_model, "capacity")),
@@ -340,11 +343,11 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
         else:
             lcoe = compute_chunked(self, levelized_cost, chunk_size, **inputs)
 
-        lcoe = lcoe.expand_dims(turbine_models=[turbine_model])
+        lcoe = lcoe.expand_dims(turbine=[turbine_model])
         lcoe_list.append(lcoe)
 
-    self.data["lcoe"] = xr.concat(lcoe_list, dim='turbine_models').rename("lcoe").assign_attrs(units="EUR/MWh")
-    logging.info(f"Levelized Cost of Electricity in {self.country} computed.")
+    self.data["lcoe"] = xr.concat(lcoe_list, dim='turbine').rename("lcoe").assign_attrs(units="EUR/MWh")
+    logging.info(f"Levelized Cost of Electricity in {self.data.attrs['country']} computed.")
 
 
 def minimum_lcoe(self):
@@ -352,14 +355,14 @@ def minimum_lcoe(self):
     Calculate the minimum lcoe for each location among all turbines
     """
     lcoe = self.data["lcoe"]
-    lc_min = lcoe.min(dim='turbine_models', keep_attrs=True)
-    lc_min = lc_min.assign_coords({'turbine_models': 'min_lcoe'})
+    lc_min = lcoe.min(dim='turbine', keep_attrs=True)
+    lc_min = lc_min.assign_coords({'turbine': 'min_lcoe'})
     self.data["min_lcoe"] = lc_min.rename("minimal_lcoe")
 
 
 def compute_optimal_power_energy(self):
     # compute optimal power
-    least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine_models').compute()
+    least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine').compute()
 
     def parse_capacity(string):
         if isinstance(string, str):
@@ -374,9 +377,9 @@ def compute_optimal_power_energy(self):
 
     self.data["optimal_power"] = power
     # compute optimal energy
-    least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine_models').compute()
-    energy = self.data["capacity_factors"].isel(turbine_models=least_cost_index).drop_vars("turbine_models")
-    energy = energy.assign_coords({'turbine_models': "min_lcoe"})
+    least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
+    energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
+    energy = energy.assign_coords({'turbine': "min_lcoe"})
     energy = energy * power  * 8760 / 10**6
     # TODO: set unit on energy
     self.data["optimal_energy"] = energy

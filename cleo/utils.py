@@ -3,6 +3,8 @@ import sys
 import shutil
 import urllib3
 import certifi
+import requests
+from requests.auth import HTTPProxyAuth
 import logging
 import logging.config
 import numpy as np
@@ -34,38 +36,49 @@ def stylish_tqdm(total, desc):
     )
 
 
-def download_file(url, save_to, proxy=None, proxy_user=None, proxy_pass=None, overwrite=False):
+def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=None, overwrite=False):
     """
-    downloads a file from a specified url to disk
-    :param overwrite:
-    :param proxy_pass: proxy password
-    :param proxy_user: proxy username
-    :param proxy: proxy url:port
-    :param url: url-string
-    :param save_to: destination file name (string)
-    :return:
+    Download a file from a given URL.
+
+    Parameters:
+    url (str): The URL of the file to download.
+    filename (str, optional): The name to save the file as. If not provided, the file will be saved with its original name.
+    proxy (str, optional): The URL and port of the proxy to use for the download.
+    proxy_user (str, optional): The username for the proxy.
+    proxy_pass (str, optional): The password for the proxy.
+    overwrite (bool, optional): Whether to overwrite the file if it already exists. Defaults to False.
+
+    Returns:
+    Bool -- True if the file was successfully downloaded
     """
-    dld = False
-    if (not Path(save_to).is_file()) or (overwrite is True):
-        if proxy is not None:
-            default_headers = urllib3.make_headers(proxy_basic_auth=f'{proxy_user}:{proxy_pass}')
-            http = urllib3.ProxyManager(proxy, proxy_headers=default_headers, ca_certs=certifi.where())
-        else:
-            http = urllib3.PoolManager(ca_certs=certifi.where())
-        try:
-            with http.request('GET', url.replace('"', '').replace(' ', ''),
-                              preload_content=False) as r, open(save_to, 'wb') as out_file:
-                shutil.copyfileobj(r, out_file)
-        except:
-            try:
-                http = urllib3.PoolManager(cert_reqs='CERT_NONE')
-                with http.request('GET', url.replace('"', '').replace(' ', ''),
-                                  preload_content=False) as r, open(save_to, 'wb') as out_file:
-                    shutil.copyfileobj(r, out_file)
-            except:
-                raise Exception
-        dld = True
-    return dld
+    # If filename wasn't provided
+    if not save_to:
+        # Get the file name from the URL
+        save_to = url.split("/")[-1]
+    # Check if the file already exists and if we should overwrite it
+    if Path(save_to).is_file() and not overwrite:
+        logging.info(f"File {save_to} already exists and overwrite is set to False.")
+        return
+    # Set up the proxies for the request
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    auth = HTTPProxyAuth(proxy_user, proxy_pass) if proxy_user and proxy_pass else None
+    # Set a custom User-Agent
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0"
+    }
+    # Send an HTTP request to the URL of the file
+    response = requests.get(url, stream=True, proxies=proxies, auth=auth, headers=headers)
+    # Check if the request was successful
+    if response.status_code == 200:
+        # Write the contents of the response to a file
+        with open(save_to, 'wb') as file:
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    file.write(chunk)
+        return True
+    else:
+        logging.info(f"Failed to download file. HTTP response code: {response.status_code}")
+        return False
 
 
 def _process_chunk(self, processing_func, chunk_size, start_x, start_y, **kwargs):
@@ -129,7 +142,7 @@ def compute_chunked(self, processing_func, chunk_size, **kwargs):
     return reassembled_data[reassembled_data_vars[0]]
 
 
-def _setup_logging(self):
+def setup_logging(self):
     """
     Setup logging in the logs directory
     :param self: an instance of the Atlas class
@@ -230,11 +243,11 @@ def flatten(self, digits=5, exclude_template=True):
 def add(self, other, name=None) -> None:
     """
     Merge other into self
-    :param self: an instance of the WindScape- or GeoScape-class
+    :param self: an instance of the WindAtlas- or Landscape-class (wrapping a xarray Dataset)
     :param other: an instance of the xarray.DataArray- or xarray.Dataset-class
     :return:
     """
-    # duck typing to check if other is an xarray.Dataset, xarray.DataArray, WindScape or GeoScape object
+    # duck typing to check if other is a xarray.Dataset, xarray.DataArray
     if not hasattr(other, "dims"):
         raise TypeError(f"'{other}' must be an instance of the xr.Dataset- or xr.DataArray-class.")
 
@@ -258,10 +271,10 @@ def add(self, other, name=None) -> None:
 
     # merge data
     self.data = xr.merge([self.data, other])
-    logging.info(f"Merged '{name}' into '{self.country}'-data.")
+    logging.info(f"Merged '{name}' into '{self.data.attrs['country']}'-data.")
 
 
-def convert(self, data_variable, to_unit, inplace=False):
+def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
     """
     Convert a data variable from the current unit to the specified unit
     """
@@ -273,12 +286,16 @@ def convert(self, data_variable, to_unit, inplace=False):
         raise ValueError("data_variable must be a string or a list of strings.")
 
     converted_arrays = {}
+
     for var in data_variable:
         data_var = self.data[var]
-        unit = data_var.attrs.get("unit")
+        if from_unit is not None:
+            unit = from_unit
+        else:
+            unit = data_var.attrs.get("unit")
 
         if unit is None:
-            raise ValueError("DataArray has no unit. Cannot perform unit conversion.")
+            raise ValueError("No from-unit given. Cannot perform unit conversion.")
 
         converted_arrays[var] = xr.DataArray(
             (data_var.data * ureg(unit)).to(to_unit).magnitude,

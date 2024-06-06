@@ -44,6 +44,7 @@ class GeoScape:
     """
     Represents geospatial data describing potential wind turbine sites
     """
+
     def __init__(self, atlas):
         self.path = atlas.path
         self.country = atlas.country
@@ -212,7 +213,7 @@ class GeoScape:
                             for info in nested_zip_info:
                                 info.filename = f'{info.filename[:-4]}_{index}.{info.filename[-3:]}'
                                 nested_zip.extract(info)
-    
+
     def clip_to(self, clip_shape, region=None, inplace=True):
         """
         Wrapper function to enable inplace-operations for clip_to_geometry-function
@@ -221,11 +222,11 @@ class GeoScape:
         :return:
         """
         data_clipped, clip_shape_used = clip_to_geometry(self, clip_shape)
-        
-        if self.clip_shape is None:    
+
+        if self.clip_shape is None:
             # add clip shape to atlas
             self.clip_shape = clip_shape_used
-        
+
         if inplace:
             self.data = data_clipped
         else:
@@ -303,3 +304,7 @@ class GeoScape:
 
         logging.info(
             f"GeoScape data saved to {str(self.path / 'data' / 'processed' / f'geoscape_{self.country}.nc')}")
+
+
+def load_and_extract_from_dict():
+    return None

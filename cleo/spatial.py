@@ -56,20 +56,21 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
     if not all(clip_shape.is_valid):
         logging.error("Invalid geometry in clipping shape")
 
-    # Ensure data is loaded and get atlas CRS
+    # Ensure data is loaded
     if self.data is None:
-        self._build_netcdf()
+        raise ValueError(f"There is no data in {self}")
 
     # Reproject clip_shape if CRS mismatch
-    if self.crs != clip_shape.crs:
-        logging.info(f"Reprojecting clip_shape to {self.crs}")
+    if self.data.rio.crs != clip_shape.crs:
+        logging.info(f"Reprojecting clip_shape to {self.parent.crs}")
         try:
-            clip_shape = clip_shape.to_crs(self.crs)
+            clip_shape = clip_shape.to_crs(self.parent.crs)
         except Exception as e:
             logging.error(f"Error reprojecting clip_shape: {e}")
 
     # Clip each DataArray in the DataSet using the clip_shape geometry
     data_clipped = xr.Dataset()
+    data_clipped = data_clipped.rio.write_crs(self.data.rio.crs.to_string())
     for var_name, var in self.data.data_vars.items():
         try:
             data_clipped[var_name] = var.rio.clip(clip_shape.geometry)

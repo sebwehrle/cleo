@@ -18,7 +18,7 @@ def get_cost_assumptions(self, attribute_name):
     :type attribute_name: str
     :return: Value of the specific cost assumption
     """
-    with open(str(self.path / "resources/cost_assumptions.yml")) as f:
+    with open(str(self.parent.path / "resources/cost_assumptions.yml")) as f:
         data = yaml.safe_load(f)
     return data[attribute_name]
 
@@ -33,7 +33,7 @@ def get_turbine_attribute(self, turbine, attribute_name):
     :type attribute_name: str
     :return: Value of the specific turbine attribute
     """
-    with open(str(self.path / "resources" / turbine) + ".yml") as f:
+    with open(str(self.parent.path / "resources" / turbine) + ".yml") as f:
         data = yaml.safe_load(f)
     return data[attribute_name]
 
@@ -66,22 +66,25 @@ def load_weibull_parameters(self, height):
     :return: Tuple containing Weibull parameter rasters (a, k)
     :rtype: Tuple[xarray.DataArray, xarray.DataArray]
     """
-    path_raw_country = self.path / "data" / "raw" / f"{self.country}"
+    path_raw_country = self.parent.path / "data" / "raw" / f"{self.parent.country}"
     try:
-        a = rxr.open_rasterio(path_raw_country / f"{self.country}_combined-Weibull-A_{height}.tif").chunk("auto")
-        k = rxr.open_rasterio(path_raw_country / f"{self.country}_combined-Weibull-k_{height}.tif").chunk("auto")
+        a = rxr.open_rasterio(path_raw_country / f"{self.parent.country}_combined-Weibull-A_{height}.tif").chunk("auto")
+        k = rxr.open_rasterio(path_raw_country / f"{self.parent.country}_combined-Weibull-k_{height}.tif").chunk("auto")
         a.name = "weibull_a"
         k.name = "weibull_k"
 
-        if a.rio.crs != self.crs:
-            a = a.rio.reproject(self.crs)
+        if a.rio.crs != self.parent.crs:
+            a = a.rio.reproject(self.parent.crs)
 
-        if k.rio.crs != self.crs:
-            k = k.rio.reproject(self.crs)
+        if k.rio.crs != self.parent.crs:
+            k = k.rio.reproject(self.parent.crs)
 
-        if self.clip_shape is not None:
-            a = a.rio.clip(self.clip_shape.geometry)
-            k = k.rio.clip(self.clip_shape.geometry)
+        if self.parent.region is not None:
+            clip_shape = self.parent.get_nuts_region(self.parent.region)
+            if clip_shape.crs != self.parent.crs:
+                clip_shape = clip_shape.to_crs(self.parent.crs)
+            a = a.rio.clip(clip_shape.geometry)
+            k = k.rio.clip(clip_shape.geometry)
 
         return a, k
     except Exception as e:

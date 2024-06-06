@@ -23,7 +23,7 @@ from cleo.spatial import (
 )
 from cleo.utils import (
     download_file,
-    _setup_logging,
+    setup_logging,
 )
 from cleo.loaders import (
     get_cost_assumptions,
@@ -307,7 +307,7 @@ class WindScape:
             logging.warning("WindScape already clipped to another clip shape. Operation aborted.")
 
     # utils
-    _setup_logging = _setup_logging
+    _setup_logging = setup_logging
     # data handling: get from yaml, load from GWA-tiffs
     get_cost_assumptions = get_cost_assumptions
     get_turbine_attribute = get_turbine_attribute

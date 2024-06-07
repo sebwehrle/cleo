@@ -12,7 +12,6 @@ from typing import Union
 def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Dataset, gpd.GeoDataFrame):
     """
     Clip the atlas data to the provided geopandas shapefile
-    :param clip_shape_path: Path to the geopandas shapefile representing the clipping area
     :type clip_shape_path: str
     :param inplace: If True, the atlas data will be overwritten with the clipped data. Default is True.
     :type inplace: bool

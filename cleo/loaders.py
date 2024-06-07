@@ -1,10 +1,13 @@
 # helpers for the Atlas class
 # %% imports
 import yaml
+import zipfile
+import requests
 import pandas as pd
 import rioxarray as rxr
 import logging
 from cleo.assess import turbine_overnight_cost
+from cleo.utils import download_file
 
 
 # %% methods

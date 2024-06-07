@@ -2,14 +2,11 @@
 import os
 import numpy as np
 import xarray as xr
-import rioxarray as rxr
 import pyproj
 import rasterio.crs
 import geopandas as gpd
 import yaml
 import logging
-import shutil
-import requests
 import zipfile
 import pycountry as pct
 from pathlib import Path
@@ -35,9 +32,10 @@ from cleo.utils import (
 from cleo.loaders import (
     get_cost_assumptions,
     get_overnight_cost,
-    get_powercurves,
     get_turbine_attribute,
-    load_weibull_parameters
+    load_weibull_parameters,
+    load_gwa,
+    load_nuts,
 )
 
 from cleo.spatial import (
@@ -282,6 +280,7 @@ class _WindAtlas:
     compute_weibull_pdf = compute_weibull_pdf
     simulate_capacity_factors = simulate_capacity_factors
     compute_lcoe = compute_lcoe
+    compute_optimal_power_energy = compute_optimal_power_energy
     minimum_lcoe = minimum_lcoe
 
 
@@ -346,7 +345,7 @@ class _LandscapeAtlas:
         :type name: str
         :param all_touched: if True, all pixels touched by polygon are assigned. If False, only pixels whose center
         point is inside the polygon is assigned. Default is False.
-        :return: merges rasterized DataArray into self.data
+        :return: merges rasterized DataArray into `self.data`
         """
         # check whether column input is sensible
         if column is not None:
@@ -367,7 +366,8 @@ class _LandscapeAtlas:
         raster = self.data["template"].copy()
         for _, row in shape.iterrows():
             # mask is np.nan where not in shape and 0 where in shape
-            mask = self.data["template"].rio.clip([row.geometry], self.data.rio.crs, drop=False, all_touched=all_touched)
+            mask = self.data["template"].rio.clip([row.geometry], self.data.rio.crs, drop=False,
+                                                  all_touched=all_touched)
 
             if column is None:
                 raster = xr.where(mask == 0, 1, raster, keep_attrs=True)

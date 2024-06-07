@@ -141,6 +141,7 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
 
 
 def compute_optimal_power_energy(self):
+    # TODO: check if required data_vars exist
     # compute optimal power
     least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine').compute()
 

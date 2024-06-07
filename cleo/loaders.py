@@ -1,10 +1,15 @@
 # helpers for the Atlas class
 # %% imports
+import zipfile
+
+import requests
 import yaml
 import pandas as pd
+import geopandas as gpd
 import rioxarray as rxr
 import logging
 from cleo.assess import turbine_overnight_cost
+from cleo.utils import download_file
 
 
 # %% methods
@@ -195,3 +200,37 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
         logging.info(f"Extracted {file_name}")
     else:
         logging.info(f"NUTS borders initialised.")
+
+
+    def load_corine_land_cover(self):
+        """
+        loads Corine Land Cover
+        :return:
+        """
+        # TODO: add corine land cover codes to resources
+        # TODO: download corine land cover data for Europe
+        # TODO: clip corine land cover data to country with get_nuts_borders() from cleo.loaders
+        # TODO: merge corine land cover data into SiteData.data (with add method?) as site.data.corine_land_cover
+        # TODO: current code is very slow
+
+        # Corine Land Cover - pastures and crop area
+        clc = gpd.read_file(self.path / 'data' / 'site' / 'clc' / 'CLC_2018_AT.shp')
+        clc['CODE_18'] = clc['CODE_18'].astype('int')
+        clc = clc.to_crs(self.crs)
+        if self.clip_shape is not None:
+            clc = clc.clip(self.clip_shape.geometry)
+        clc = clc.dissolve(by="CODE_18")
+
+        clc_array = []
+        for key, cat in clc_codes.items():
+            if key in clc.index:
+                cat_layer = clc.loc[[key]]
+                cat_raster = self.rasterize(cat_layer, name="corine_land_cover", all_touched=False, inplace=False)
+                cat_raster = cat_raster.expand_dims(dim="clc_class", axis=0)
+                cat_raster.coords["clc_class"] = [cat]
+                clc_array.append(cat_raster)
+
+        clc_3d = xr.concat(clc_array, dim="clc_class")
+        clc_3d = clc_3d.rio.write_crs(self.crs)
+        self.add(clc_3d, name="corine_land_cover")
+        logging.info(f"Corine Land Cover loaded.")

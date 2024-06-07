@@ -15,15 +15,21 @@ setuptools.setup(
     project_urls={},
     license="MIT License",
     packages=["cleo"],
+    package_data={'cleo': ['resources/*.yml']},
     install_requires=[
         "urllib3",
         "certifi",
+        "tqdm",
+        "netcdf4",
         "scipy",
         "numpy",
         "rasterio",
         "pandas",
+        "openpyxl",
         "xarray",
         "rioxarray",
-        "geopandas"
+        "geopandas",
+        "pycountry",
+        "pint",
     ]
 )

@@ -1,16 +1,139 @@
 # %% imports
 import sys
-import shutil
-import urllib3
-import certifi
+import requests
+from requests.auth import HTTPProxyAuth
 import logging
 import logging.config
 import numpy as np
+import pandas as pd
 import xarray as xr
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
-
 from pathlib import Path
+from pint import UnitRegistry
+
+from cleo.spatial import bbox
+
+
+# %% methods
+def add(self, other, name=None) -> None:
+    """
+    Merge other into self
+    :param self: an instance of the WindAtlas- or Landscape-class (wrapping a xarray Dataset)
+    :param other: an instance of the xarray.DataArray- or xarray.Dataset-class
+    :return:
+    """
+    # duck typing to check if other is a xarray.Dataset, xarray.DataArray
+    if not hasattr(other, "dims"):
+        raise TypeError(f"'{other}' must be an instance of the xr.Dataset- or xr.DataArray-class.")
+
+    if self.data.rio.crs != other.rio.crs:
+        xarray_data = other.rio.reproject(self.crs)
+
+    # clip other if necessary
+    if bbox(self) != bbox(other):
+        other = other.rio.clip(self.clip_shape.geometry)
+
+    # check if spatial coordinates of self and other align
+    if not (np.array_equal(self.data["x"].data, other["x"].data)
+            and np.array_equal(self.data["y"].data, other["y"].data)):
+        template = self.data["template"] if "template" in self.data.data_vars else self.data
+        other = other.interp_like(template)
+
+        logging.warning(f"Spatial coordinates do not align. 'other' interpolated like 'self'.")
+
+    if name is not None:
+        other.name = name
+
+    # merge data
+    self.data = xr.merge([self.data, other])
+    logging.info(f"Merged '{name}' into '{self.data.attrs['country']}'-data.")
+
+
+def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
+    """
+    Convert a data variable from the current unit to the specified unit
+    """
+    ureg = UnitRegistry()
+
+    if isinstance(data_variable, str):
+        data_variable = [data_variable]
+    elif not isinstance(data_variable, list):
+        raise ValueError("data_variable must be a string or a list of strings.")
+
+    converted_arrays = {}
+
+    for var in data_variable:
+        data_var = self.data[var]
+        if from_unit is not None:
+            unit = from_unit
+        else:
+            unit = data_var.attrs.get("unit")
+
+        if unit is None:
+            raise ValueError("No from-unit given. Cannot perform unit conversion.")
+
+        converted_arrays[var] = xr.DataArray(
+            (data_var.data * ureg(unit)).to(to_unit).magnitude,
+            coords=data_var.coords,
+            dims=data_var.dims,
+            attrs={"unit": to_unit}
+        )
+
+    if inplace:
+        self.data.update({var: converted_array for var, converted_array in converted_arrays.items()})
+    else:
+        return converted_arrays
+
+
+def flatten(self, digits=5, exclude_template=True):
+    """
+    Converts data in a xarray.Dataset to a pandas.DataFrame in a slower but more memory efficient way than
+    xarray.Dataset.to_dataframe. Rounding of coordinates facilitates merging across data variables. The default
+    'digits' value of 5 results in a precision loss of at most about 50 cm when CRS is standard epsg:4326.
+    :param self: an instance of the WindResourceAtlas- or SiteData-class
+    :param digits: number of digits to round x and y coordinates to
+    :return: a pandas.Dataframe with one column per data variable and non-spatial coordinate
+    """
+
+    collect_df = []
+
+    data_variables = self.data.data_vars
+    if exclude_template:
+        data_variables = [data_var for data_var in data_variables if data_var != "template"]
+
+    for var_name in data_variables:
+        data_var = self.data[var_name]
+        # drop non-dimensional coordinates
+        non_dim_coords = set(data_var.coords) - set(data_var.dims)
+        data_var = data_var.drop_vars(non_dim_coords)
+
+        if {"x", "y"} == set(data_var.dims):
+            df = data_var.to_dataframe().dropna()
+            df.index = pd.MultiIndex.from_arrays([
+                np.round(df.index.get_level_values("y"), digits),
+                np.round(df.index.get_level_values("x"), digits),
+            ])
+            collect_df.append(df)
+
+        elif len(data_var.dims) == 3 and {"x", "y"}.issubset(set(data_var.dims)):
+            non_spatial_dim = next(iter(set(data_var.dims) - {"x", "y"}))
+
+            for coord in data_var.coords[non_spatial_dim]:
+                data_slice = data_var.sel({non_spatial_dim: coord})
+                data_slice = data_slice.drop_vars(non_spatial_dim)
+                data_slice.name = f"{var_name}_{non_spatial_dim}_{coord.data}"
+                df = data_slice.to_dataframe().dropna()
+                df.index = pd.MultiIndex.from_arrays([
+                    np.round(df.index.get_level_values("y"), digits),
+                    np.round(df.index.get_level_values("x"), digits),
+                ])
+                collect_df.append(df)
+
+        else:
+            raise ValueError(f"Error in {var_name}. Only 3-dimensional data with 'x' and 'y'-coordinates are supported")
+
+    return pd.concat(collect_df, axis=1)
 
 
 # %% functions
@@ -27,40 +150,6 @@ def stylish_tqdm(total, desc):
         leave=True,
         position=0
     )
-
-
-def download_file(url, save_to, proxy=None, proxy_user=None, proxy_pass=None, overwrite=False):
-    """
-    downloads a file from a specified url to disk
-    :param overwrite:
-    :param proxy_pass: proxy password
-    :param proxy_user: proxy username
-    :param proxy: proxy url:port
-    :param url: url-string
-    :param save_to: destination file name (string)
-    :return:
-    """
-    dld = False
-    if (not Path(save_to).is_file()) or (overwrite is True):
-        if proxy is not None:
-            default_headers = urllib3.make_headers(proxy_basic_auth=f'{proxy_user}:{proxy_pass}')
-            http = urllib3.ProxyManager(proxy, proxy_headers=default_headers, ca_certs=certifi.where())
-        else:
-            http = urllib3.PoolManager(ca_certs=certifi.where())
-        try:
-            with http.request('GET', url.replace('"', '').replace(' ', ''),
-                              preload_content=False) as r, open(save_to, 'wb') as out_file:
-                shutil.copyfileobj(r, out_file)
-        except:
-            try:
-                http = urllib3.PoolManager(cert_reqs='CERT_NONE')
-                with http.request('GET', url.replace('"', '').replace(' ', ''),
-                                  preload_content=False) as r, open(save_to, 'wb') as out_file:
-                    shutil.copyfileobj(r, out_file)
-            except:
-                raise Exception
-        dld = True
-    return dld
 
 
 def _process_chunk(self, processing_func, chunk_size, start_x, start_y, **kwargs):
@@ -124,174 +213,46 @@ def compute_chunked(self, processing_func, chunk_size, **kwargs):
     return reassembled_data[reassembled_data_vars[0]]
 
 
-def _setup_logging(self):
+def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=None, overwrite=False):
     """
-    Setup logging in the logs directory
-    :param self: an instance of the Atlas class
+    Download a file from a given URL.
+
+    Parameters:
+    url (str): The URL of the file to download.
+    filename (str, optional): The name to save the file as. If not provided, the file will be saved with its original name.
+    proxy (str, optional): The URL and port of the proxy to use for the download.
+    proxy_user (str, optional): The username for the proxy.
+    proxy_pass (str, optional): The password for the proxy.
+    overwrite (bool, optional): Whether to overwrite the file if it already exists. Defaults to False.
+
+    Returns:
+    Bool -- True if the file was successfully downloaded
     """
-    fname = self.path / "logs" / "logfile.log"
-    colors = {
-        'reset': '\33[m',
-        'green': '\33[32m',
-        'purple': '\33[35m',
-        'orange': '\33[33m',
+    # If filename wasn't provided
+    if not save_to:
+        # Get the file name from the URL
+        save_to = url.split("/")[-1]
+    # Check if the file already exists and if we should overwrite it
+    if Path(save_to).is_file() and not overwrite:
+        logging.info(f"File {save_to} already exists and overwrite is set to False.")
+        return
+    # Set up the proxies for the request
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    auth = HTTPProxyAuth(proxy_user, proxy_pass) if proxy_user and proxy_pass else None
+    # Set a custom User-Agent
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0"
     }
-
-    logging_config = {
-        'version': 1,
-        'disable_existing_loggers': False,
-        'formatters': {
-            'default': {
-                'format': '[%(asctime)s] %(levelname)-4s - %(name)-4s - %(message)s'
-            },
-            'color': {
-                'format': f"{colors['green']}[%(asctime)s]{colors['reset']} {colors['purple']}%(levelname)-5s{colors['reset']} - {colors['orange']}%(name)-5s{colors['reset']}: %(message)s"
-            }
-        },
-        'handlers': {
-            'stream': {
-                'class': 'logging.StreamHandler',
-                'formatter': 'color',
-            }
-        },
-        'root': {
-            'handlers': ['stream'],
-            'level': logging.INFO,
-        },
-    }
-
-    if fname:
-        logging_config['handlers']['file'] = {
-            'class': 'logging.FileHandler',
-            'formatter': 'default',
-            'level': logging.DEBUG,
-            'filename': fname,
-        }
-        logging_config['root']['handlers'].append('file')
-
-    logging.config.dictConfig(logging_config)
-
-
-def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
-    """
-    Calculates probability density at points in u_power_curve given Weibull parameters in k and A
-    :param u_power_curve: Power curve wind speeds
-    :param weibull_k: k-parameter of the Weibull distribution of wind speed
-    :param weibull_a: A-parameter of the Weibull distribution of wind speed
-    :return:
-    """
-    uar = np.asarray(u_power_curve)
-    prb = [(weibull_k / weibull_a * (z / weibull_a) ** (weibull_k - 1)) * (np.exp(-(z / weibull_a) ** weibull_k)) for z
-           in uar]
-    pdf = xr.concat(prb, dim='wind_speed')
-    pdf = pdf.assign_coords({'wind_speed': u_power_curve})
-    pdf = pdf.squeeze().rename("weibull_probability_density")
-    return pdf
-
-
-def capacity_factor(weibull_pdf, terrain_roughness_length, u_power_curve, p_power_curve, h_turbine, h_reference=100,
-                    correction_factor=1):
-    """
-    calculates wind turbine capacity factors given Weibull probability density pdf, roughness factor alpha, wind turbine
-    power curve data in u_power_curve and p_power_curve, turbine height h_turbine and reference height of wind speed
-    modelling h_reference
-    :param correction_factor:
-    :param weibull_pdf: probability density function from weibull_probability_density()
-    :param terrain_roughness_length: terrain roughness length
-    :param u_power_curve: power curve wind speed
-    :param p_power_curve: power curve output
-    :param h_turbine: hub height of wind turbine in m
-    :param h_reference: reference height at which weibull pdf is computed
-    :return:
-    """
-    power_curve = xr.DataArray(data=p_power_curve, coords={'wind_speed': u_power_curve})
-    u_adjusted = xr.DataArray(data=u_power_curve, coords={'wind_speed': u_power_curve}) @ (
-            h_turbine / h_reference) ** terrain_roughness_length
-    cap_factor_values = np.trapz(weibull_pdf * power_curve, u_adjusted, axis=0)
-    cap_factor = terrain_roughness_length.copy()
-    cap_factor.values = cap_factor_values * correction_factor
-    cap_factor.name = "capacity_factor"
-    return cap_factor
-
-
-def discount_factor(discount_rate, period):
-    """
-    Calculate the discount factor for a given discount rate and period.
-    :param discount_rate: discount rate (fraction of 1)
-    :type discount_rate: float
-    :param period: Number of years
-    :type period: int
-    :return: Discount factor
-    :rtype: float
-    """
-    dcf_numerator = 1 - (1 + discount_rate) ** (-period)
-    dcf_denominator = 1 - (1 + discount_rate) ** (-1)
-    dcf = dcf_numerator / dcf_denominator
-    return dcf
-
-
-def turbine_overnight_cost(power, hub_height, rotor_diameter, year):
-    """
-    calculates wind turbine investment cost in EUR per MW based on >>Rinne et al. (2018): Effects of turbine technology
-    and land use on wind power resource potential, Nature Energy<<
-    :param power: rated power in MW
-    :param hub_height: hub height in meters
-    :param rotor_diameter: rotor diameter in meters
-    :return: overnight investment cost in EUR per kW
-    """
-    rotor_area = np.pi * (rotor_diameter / 2) ** 2
-    spec_power = power * 10 ** 6 / rotor_area
-    cost = ((620 * np.log(hub_height)) - (1.68 * spec_power) + (182 * (2016 - year) ** 0.5) - 1005)
-    return cost.astype('float')
-
-
-def grid_connect_cost(power):
-    """
-    Calculates grid connection cost according to §54 (3,4) ElWOG https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=20007045
-    :param power: power in kW
-    :return:
-    """
-    cost = 50 * power
-    return cost
-
-
-def levelized_cost(power, capacity_factors, overnight_cost, grid_cost, om_fixed, om_variable, discount_rate, lifetime,
-                   hours_per_year=8766, per_mwh=True):
-    """
-    Calculates wind turbines' levelized cost of electricity in EUR per MWh
-    :param per_mwh: Returns LCOE in currency per megawatt hour if true (default). Else returns LCOE in currency per kwh.
-    :type per_mwh: bool
-    :param hours_per_year: Number of hours per year. Default is 8766 to account for leap years.
-    :param power: rated power in kW
-    :type power: float
-    :param capacity_factors: wind turbine capacity factor (share of year)
-    :type capacity_factors: xarray.DataArray
-    :param overnight_cost: in EUR/MW
-    :type overnight_cost: float
-    :param grid_cost: cost for connecting to the electricity grid
-    :type grid_cost: xarray.DataArray
-    :param om_fixed: EUR/kW
-    :type om_fixed: float
-    :param om_variable: EUR/kWh
-    :type om_variable: float
-    :param discount_rate: percent
-    :type discount_rate: float
-    :param lifetime: years
-    :type lifetime: int
-    :return: lcoe in EUR/kWh
-    """
-    npv_factor = discount_factor(discount_rate, lifetime)
-
-    # calculate net present amount of electricity generated over lifetime
-    npv_electricity = capacity_factors * hours_per_year * power * npv_factor
-
-    # calculate net present value of cost
-    npv_cost = (om_variable * capacity_factors * hours_per_year + om_fixed) * power * npv_factor
-    npv_cost = npv_cost + overnight_cost + grid_cost
-
-    lcoe = npv_cost / npv_electricity
-
-    if per_mwh:
-        return lcoe * 1000
+    # Send an HTTP request to the URL of the file
+    response = requests.get(url, stream=True, proxies=proxies, auth=auth, headers=headers)
+    # Check if the request was successful
+    if response.status_code == 200:
+        # Write the contents of the response to a file
+        with open(save_to, 'wb') as file:
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    file.write(chunk)
+        return True
     else:
-        return lcoe
+        logging.info(f"Failed to download file. HTTP response code: {response.status_code}")
+        return False

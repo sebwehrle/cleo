@@ -11,8 +11,11 @@ dependencies:
   - scipy
   - numpy
   - pandas
+  - openpyxl
   - netcdf4
   - xarray
   - rasterio
   - rioxarray
   - geopandas
+  - pint
+  - pycountry

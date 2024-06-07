@@ -1,0 +1,21 @@
+# Wind turbine data
+manufacturer: Vestas
+model: V150
+# rated capacity in kW
+capacity: 4200
+# rotor diameter in meters
+rotor_diameter: 150
+# hub height in meters
+hub_height: 155
+# commissioning year for Rinne cost model | max is 2016
+commissioning_year: 2016
+
+# wind turbine power curve
+# wind velocity in m/s
+V: [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5, 12, 12.5, 13,
+    13.5, 14, 14.5, 15, 15.5, 16, 16.5, 17, 17.5, 18, 18.5, 19, 19.5, 20, 20.5, 21, 21.5, 22, 22.5, 23, 23.5, 24, 24.5,
+    25, 25.5, 26, 26.5, 27, 27.5, 28, 28.5, 29, 29.5, 30]
+# capacity factor in % of rated power
+cf: [0, 0, 0, 0, 0, 0.02025, 0.043, 0.07125, 0.106, 0.14925, 0.20225, 0.2655, 0.34025, 0.42725, 0.52525, 0.63625,
+     0.7535, 0.8645, 0.9445, 0.9835, 0.99525, 0.99975, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.99875,
+     0.9355, 0.82725, 0.6825, 0.5385, 0.45125, 0.3815, 0.321, 0.279, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]

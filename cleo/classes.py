@@ -18,19 +18,25 @@ from tempfile import NamedTemporaryFile
 
 from dask.diagnostics import ProgressBar
 
+from cleo.class_helpers import (
+    build_netcdf,
+    deploy_resources,
+    set_attributes,
+    setup_logging,
+)
+
 from cleo.utils import (
     add,
     flatten,
     convert,
     download_file,
-    setup_logging,
 )
 
 from cleo.loaders import (
     get_cost_assumptions,
-    get_turbine_attribute,
     get_overnight_cost,
-    load_powercurves,
+    get_powercurves,
+    get_turbine_attribute,
     load_weibull_parameters
 )
 
@@ -40,163 +46,14 @@ from cleo.spatial import (
 
 from cleo.assess import (
     compute_air_density_correction,
+    compute_lcoe,
     compute_mean_wind_speed,
+    compute_optimal_power_energy,
     compute_terrain_roughness_length,
     compute_weibull_pdf,
-    simulate_capacity_factors,
-    compute_lcoe,
     minimum_lcoe,
-    compute_optimal_power_energy,
+    simulate_capacity_factors,
 )
-
-
-# %% Methods
-def load_gwa(self):
-    """
-    Download wind resource data for the specified country from GWA API
-    Downloads air density, combined Weibull parameters, and ground elevation data for multiple heights
-    """
-    url = "https://globalwindatlas.info/api/gis/country"
-    layers = ['air-density', 'combined-Weibull-A', 'combined-Weibull-k']
-    ground = ['elevation_w_bathymetry']
-    height = ['50', '100', '150', '200']
-
-    c = self.parent.country
-    path_raw = self.parent.path / "data" / "raw" / self.parent.country
-    logging.info(f"Initializing WindScape with Global Wind Atlas data")
-
-    for l in layers:
-        for h in height:
-            fname = f'{c}_{l}_{h}.tif'
-            fpath = path_raw / fname
-
-            if not fpath.is_file():
-                try:
-                    if not fpath.is_file():
-                        durl = f"{url}/{c}/{l}/{h}"
-                        download_file(durl, fpath)
-                        logging.info(f'Download of {fname} from {durl} complete')
-                except requests.RequestException as e:
-                    logging.error(f'Error downloading {fname}: {e}')
-
-    for g in ground:
-        fname = f'{c}_{g}.tif'
-        fpath = path_raw / fname
-        if not fpath.is_file():
-            try:
-                if not fpath.is_file():
-                    durl = f'{url}/{c}/{g}'
-                    download_file(durl, fpath)
-                    logging.info(f'Download of {fname} from {durl} complete')
-            except requests.RequestException as e:
-                logging.error(f'Error downloading {fname}: {e}')
-
-    logging.info(f'Global Wind Atlas data for {c} initialized.')
-
-
-def load_nuts(self, resolution="03M", year=2021, crs=4326):
-    RESOLUTION = ["01M", "03M", "10M", "20M", "60M"]
-    YEAR = [2021, 2016, 2013, 2010, 2006, 2003]
-    CRS = [3035, 4326, 3857]
-
-    if resolution not in RESOLUTION:
-        raise ValueError(f'Invalid resolution: {resolution}')
-
-    if year not in YEAR:
-        raise ValueError(f'Invalid year: {year}')
-
-    if crs not in CRS:
-        raise ValueError(f'Invalid crs: {crs}')
-
-    nuts_path = self.parent.path / "data" / "nuts"
-
-    if not nuts_path.is_dir():
-        nuts_path.mkdir()
-
-    url = "https://gisco-services.ec.europa.eu/distribution/v2/nuts/download/"
-    file_collection = f"ref-nuts-{year}-{resolution}.shp.zip"
-    file_name = f"NUTS_RG_{resolution}_{year}_{crs}.shp.zip"
-
-    if not (nuts_path / file_name).is_file():
-        download_file(url + file_collection, nuts_path / file_collection)
-        logging.info(f"Downloaded {file_collection}")
-
-        with zipfile.ZipFile(str(nuts_path / file_collection), "r") as zip_ref:
-            if file_name in zip_ref.namelist():
-                zip_ref.extract(file_name, nuts_path)
-
-                with zipfile.ZipFile(str(nuts_path / file_name), "r") as zip_inner:
-                    zip_inner.extractall(nuts_path)
-
-            else:
-                raise FileNotFoundError(f"File {file_name}")
-
-        logging.info(f"Extracted {file_name}")
-    else:
-        logging.info(f"NUTS borders initialised.")
-
-
-def build_netcdf(self, atlas_type):
-    """
-    Build a NetCDF file from the downloaded data or open an existing one.
-    The NetCDF file stores the wind resource data in a structured format.
-    """
-    path_raw = self.parent.path / "data" / "raw" / self.parent.country
-    path_netcdf = self.parent.path / "data" / "processed"
-    if self.parent.region is not None:
-        fname_netcdf = path_netcdf / f"{atlas_type}_{self.parent.country}_{self.parent.region}.nc"
-    else:
-        fname_netcdf = path_netcdf / f"{atlas_type}_{self.parent.country}.nc"
-
-    if not fname_netcdf.is_file():
-        logging.info(f"Building new {atlas_type} object at {str(path_netcdf)}")
-        # get coords from GWA
-        with rxr.open_rasterio(path_raw / f"{self.parent.country}_combined-Weibull-A_100.tif",
-                               parse_coordinates=True).squeeze() as weibull_a_100:
-            self.data = xr.Dataset(coords=weibull_a_100.coords)
-            self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
-
-            if atlas_type == "LandscapeAtlas":
-                nan_mask = np.isnan(weibull_a_100)
-                self.data["template"] = xr.where(nan_mask, np.nan, 0)
-
-            self.data.to_netcdf(path_raw / fname_netcdf)
-
-    else:
-        with xr.open_dataset(fname_netcdf) as dataset:
-            self.data = dataset
-        logging.info(f"Existing {atlas_type} at {str(path_netcdf)} opened.")
-
-    if self.data.rio.crs != self.parent.crs:
-        self.data = self.data.rio.reproject(self.parent.crs)
-
-    if self.data.rio.crs is None:
-        self.data = self.data.rio.write_crs(self.parent.crs)
-        logging.warning(f"Coordinate reference system of {self} set to {self.parent.crs}")
-
-
-def set_attributes(self):
-    self.data.attrs['country'] = self.parent.country
-    self.data.attrs['region'] = self.parent.region
-    if self.data.rio.crs is None:
-        raise AttributeError(f"{self.data} does not have a coordinate reference system.")
-    if self.data.rio.crs != self.parent.crs:
-        raise ValueError(f"Coordinate reference system mismatch: {self.parent.crs} and {self.data.rio.crs}")
-
-
-def deploy_resources(self):
-    """
-    Copy yaml-resource files to the destination directory
-    """
-    # Path to the directory containing YAML files within the package
-    source_dir = Path(__file__).parent.parent / 'resources'
-    # create destination directory
-    (self.path / "resources").mkdir(parents=True, exist_ok=True)
-    # Iterate over each YAML file in the source folder
-    for file_path in source_dir.glob('*.yml'):
-        # Copy the YAML file to the destination folder
-        shutil.copy(file_path, self.path / "resources")
-    logging.info(f"Resource files copied to {self.path / 'resources'}.")
 
 
 # %% classes

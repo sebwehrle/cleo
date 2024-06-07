@@ -2,13 +2,12 @@
 # %% imports
 import yaml
 import pandas as pd
-import geopandas as gpd
 import rioxarray as rxr
-import pycountry as pct
 import logging
 from cleo.assess import turbine_overnight_cost
 
 
+# %% methods
 def get_cost_assumptions(self, attribute_name):
     """
     Retrieve cost assumptions from a yaml-file in ./resources
@@ -23,22 +22,15 @@ def get_cost_assumptions(self, attribute_name):
     return data[attribute_name]
 
 
-def get_turbine_attribute(self, turbine, attribute_name):
-    """
-    Retrieve turbine attribute from a yaml-file in ./resources
-
-    :param turbine: Name of the wind turbine in the format "Manufacturer.Type.Power_in_kW"
-    :type turbine: str
-    :param attribute_name: Name of the turbine attribute to retrieve
-    :type attribute_name: str
-    :return: Value of the specific turbine attribute
-    """
-    with open(str(self.parent.path / "resources" / turbine) + ".yml") as f:
-        data = yaml.safe_load(f)
-    return data[attribute_name]
+def get_overnight_cost(self, turbine_model):
+    power = self.get_turbine_attribute(turbine_model, "capacity") / 1000
+    hub_height = self.get_turbine_attribute(turbine_model, "hub_height")
+    rotor_diameter = self.get_turbine_attribute(turbine_model, "rotor_diameter")
+    year = self.get_turbine_attribute(turbine_model, "commissioning_year")
+    return turbine_overnight_cost(power=power, hub_height=hub_height, rotor_diameter=rotor_diameter, year=year)
 
 
-def load_powercurves(self):
+def get_powercurves(self):
     """
     Load power curves from yaml-file in ./resources
     Loads a power curve for each wind turbine in self.wind_turbine
@@ -54,6 +46,21 @@ def load_powercurves(self):
 
     self.power_curves = pd.concat(power_curves, axis=1)
     logging.info(f"Power curves for {self.wind_turbines} loaded.")
+
+
+def get_turbine_attribute(self, turbine, attribute_name):
+    """
+    Retrieve turbine attribute from a yaml-file in ./resources
+
+    :param turbine: Name of the wind turbine in the format "Manufacturer.Type.Power_in_kW"
+    :type turbine: str
+    :param attribute_name: Name of the turbine attribute to retrieve
+    :type attribute_name: str
+    :return: Value of the specific turbine attribute
+    """
+    with open(str(self.parent.path / "resources" / turbine) + ".yml") as f:
+        data = yaml.safe_load(f)
+    return data[attribute_name]
 
 
 def load_weibull_parameters(self, height):
@@ -92,21 +99,99 @@ def load_weibull_parameters(self, height):
         return None, None
 
 
-def get_overnight_cost(self, turbine_model):
-    power = self.get_turbine_attribute(turbine_model, "capacity") / 1000
-    hub_height = self.get_turbine_attribute(turbine_model, "hub_height")
-    rotor_diameter = self.get_turbine_attribute(turbine_model, "rotor_diameter")
-    year = self.get_turbine_attribute(turbine_model, "commissioning_year")
-    return turbine_overnight_cost(power=power, hub_height=hub_height, rotor_diameter=rotor_diameter, year=year)
+# %% methods
+# def get_nuts_borders(self):
+#     alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
+#     border = gpd.read_file(self.path / "data" / "nuts" / "NUTS_RG_03M_2021_4326.shp")
+#     if any(border["CNTR_CODE"].str.contains(alpha_2)):
+#         # border = border.loc[(border["CNTR_CODE"].str.contains(alpha_2)) & (border["LEVL_CODE"] == 0)]
+#         border = border.loc[border["CNTR_CODE"].str.contains(alpha_2)]
+#     else:
+#         raise ValueError(f"'{alpha_2}' is not a valid NUTS country code")
+#
+#     return border
 
 
-def get_nuts_borders(self):
-    alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
-    border = gpd.read_file(self.path / "data" / "nuts" / "NUTS_RG_03M_2021_4326.shp")
-    if any(border["CNTR_CODE"].str.contains(alpha_2)):
-        # border = border.loc[(border["CNTR_CODE"].str.contains(alpha_2)) & (border["LEVL_CODE"] == 0)]
-        border = border.loc[border["CNTR_CODE"].str.contains(alpha_2)]
+def load_gwa(self):
+    """
+    Download wind resource data for the specified country from GWA API
+    Downloads air density, combined Weibull parameters, and ground elevation data for multiple heights
+    """
+    url = "https://globalwindatlas.info/api/gis/country"
+    layers = ['air-density', 'combined-Weibull-A', 'combined-Weibull-k']
+    ground = ['elevation_w_bathymetry']
+    height = ['50', '100', '150', '200']
+
+    c = self.parent.country
+    path_raw = self.parent.path / "data" / "raw" / self.parent.country
+    logging.info(f"Initializing WindScape with Global Wind Atlas data")
+
+    for l in layers:
+        for h in height:
+            fname = f'{c}_{l}_{h}.tif'
+            fpath = path_raw / fname
+
+            if not fpath.is_file():
+                try:
+                    if not fpath.is_file():
+                        durl = f"{url}/{c}/{l}/{h}"
+                        download_file(durl, fpath)
+                        logging.info(f'Download of {fname} from {durl} complete')
+                except requests.RequestException as e:
+                    logging.error(f'Error downloading {fname}: {e}')
+
+    for g in ground:
+        fname = f'{c}_{g}.tif'
+        fpath = path_raw / fname
+        if not fpath.is_file():
+            try:
+                if not fpath.is_file():
+                    durl = f'{url}/{c}/{g}'
+                    download_file(durl, fpath)
+                    logging.info(f'Download of {fname} from {durl} complete')
+            except requests.RequestException as e:
+                logging.error(f'Error downloading {fname}: {e}')
+
+    logging.info(f'Global Wind Atlas data for {c} initialized.')
+
+
+def load_nuts(self, resolution="03M", year=2021, crs=4326):
+    RESOLUTION = ["01M", "03M", "10M", "20M", "60M"]
+    YEAR = [2021, 2016, 2013, 2010, 2006, 2003]
+    CRS = [3035, 4326, 3857]
+
+    if resolution not in RESOLUTION:
+        raise ValueError(f'Invalid resolution: {resolution}')
+
+    if year not in YEAR:
+        raise ValueError(f'Invalid year: {year}')
+
+    if crs not in CRS:
+        raise ValueError(f'Invalid crs: {crs}')
+
+    nuts_path = self.parent.path / "data" / "nuts"
+
+    if not nuts_path.is_dir():
+        nuts_path.mkdir()
+
+    url = "https://gisco-services.ec.europa.eu/distribution/v2/nuts/download/"
+    file_collection = f"ref-nuts-{year}-{resolution}.shp.zip"
+    file_name = f"NUTS_RG_{resolution}_{year}_{crs}.shp.zip"
+
+    if not (nuts_path / file_name).is_file():
+        download_file(url + file_collection, nuts_path / file_collection)
+        logging.info(f"Downloaded {file_collection}")
+
+        with zipfile.ZipFile(str(nuts_path / file_collection), "r") as zip_ref:
+            if file_name in zip_ref.namelist():
+                zip_ref.extract(file_name, nuts_path)
+
+                with zipfile.ZipFile(str(nuts_path / file_name), "r") as zip_inner:
+                    zip_inner.extractall(nuts_path)
+
+            else:
+                raise FileNotFoundError(f"File {file_name}")
+
+        logging.info(f"Extracted {file_name}")
     else:
-        raise ValueError(f"'{alpha_2}' is not a valid NUTS country code")
-
-    return border
+        logging.info(f"NUTS borders initialised.")

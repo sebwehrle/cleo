@@ -8,32 +8,7 @@ import xarray as xr
 from typing import Union
 
 
-def reproject(self, new_crs: str) -> None:
-    """
-    Reproject the atlas' data to the provided coordinate reference system
-    :param self: an instance of the Atlas class
-    :param new_crs:  The new coordinate reference system to use
-    :type new_crs:  str
-    """
-
-    def reproject_var(var):  # xr.DataArray):
-        return var.rio.reproject(
-            dst_crs=new_crs,
-            nodata=np.nan
-        )
-    if self.crs == rasterio.crs.CRS.from_string(new_crs):
-        logging.info(f"Data already in projected in CRS '{new_crs}'")
-    else:
-        try:
-            # reproject each data variable in the dataset
-            data_reproj = self.data.map(reproject_var, keep_attrs=True)
-            logging.info(f"Reprojection of data variables to crs {new_crs} completed")
-            self.data = data_reproj
-            self.crs = rasterio.crs.CRS.from_string(new_crs)
-        except Exception as e:
-            logging.error(f"Error during reprojecting atlas: {e}")
-
-
+# %% methods
 def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Dataset, gpd.GeoDataFrame):
     """
     Clip the atlas data to the provided geopandas shapefile
@@ -82,6 +57,7 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
     return data_clipped, clip_shape
 
 
+# %% functions
 def bbox(self):
     """
     Get the bounding box of the object
@@ -104,3 +80,29 @@ def bbox(self):
         )
     else:
         raise ValueError("Unsupported object type for bbox")
+
+
+def reproject(self, new_crs: str) -> None:
+    """
+    Reproject the atlas' data to the provided coordinate reference system
+    :param self: an instance of the Atlas class
+    :param new_crs:  The new coordinate reference system to use
+    :type new_crs:  str
+    """
+
+    def reproject_var(var):  # xr.DataArray):
+        return var.rio.reproject(
+            dst_crs=new_crs,
+            nodata=np.nan
+        )
+    if self.crs == rasterio.crs.CRS.from_string(new_crs):
+        logging.info(f"Data already in projected in CRS '{new_crs}'")
+    else:
+        try:
+            # reproject each data variable in the dataset
+            data_reproj = self.data.map(reproject_var, keep_attrs=True)
+            logging.info(f"Reprojection of data variables to crs {new_crs} completed")
+            self.data = data_reproj
+            self.crs = rasterio.crs.CRS.from_string(new_crs)
+        except Exception as e:
+            logging.error(f"Error during reprojecting atlas: {e}")

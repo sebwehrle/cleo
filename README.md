@@ -26,28 +26,28 @@ CLEO's functions are documented in-line.
 We are working towards an improved documentation.
 
 ### How to get started
-To get started, initialize a `WindResourceAtlas`-class object via
+To get started, initialize a `Atlas`-class object via
 ```Python
-from cleo.wind_atlas import WindResourceAtlas
+from cleo.classes import Atlas
 
-atlas = WindResourceAtlas("path/to/base/dir", "XYZ")
+atlas = Atlas("path/to/base/dir", "XYZ", "epsg:1234")
 ```
-where `XYZ` is a 3-digit ISO country code as used by the GWA API.
+where `XYZ` is a 3-digit ISO country code as used by the GWA API and `epsg:1234` specifies a coordinate reference system.
 Upon initialization, the class will download data for `XYZ`.
-The class wraps an `xarray.Dataset` and data is accessible through `atlas.data`.
+The class wraps two `xarray.Dataset`s, one for wind resources and one for further spatial characteristics.
+The corresponding data is accessible through `atlas.wind.data` and `atlas.landscape.data`, respectively
 
 #### Properties
 An `Atlas`-object has the following properties:
-* `atlas.path`: the atlas base-path
+* `path`: the atlas base-path
 * `country`: 3-digit ISO code of the country to assess
-* `wind_turbines`: list of wind turbine models to process. Defaults to `Vestas.V112.3075`. Further turbines can be added 
-as a list. Additional turbines require a data file in the `/resources`-directory.
+* `region`: (optional) the Latin name of a EU NUTS-region within a `country`. 
 * `crs`: coordinate reference system of the `WindResourceAtlas`' spatial data.
-* `power_curves`: loaded power curves.
+* `wind_turbines`: list of wind turbine models to process. **Must** be set by the user to allow wind resource assessment. 
+Further turbines can be added as a list. Additional turbines require a data file in the `/resources`-directory.
 
 #### Methods
-The `WindResourceAtlas`-class provides several methods, including:
-* `load_powercurves()`: loads powercurves from `
+The `WindAtlas`-subclass provides several methods, including:
 * `compute_terrain_roughness_length()`: computes terrain roughness length
 * `compute_air_density_correction()`: computes air density correction factor alpha
 * `compute_weibull_pdf()`: computes a Weibull pdf of wind speeds
@@ -56,9 +56,7 @@ Before simulating capacity factors, properly named (`manufacturer.model.power.ym
 wind turbines in `atlas.wind_turbine` must be loaded with `atlas.load_powercurves()`. 
 * `compute_lcoe()`: calculates LCOE for each pixel and each wind turbine in `atlas.wind_turbines` based on the 
 cost-assumptions in `/resources/cost_assumptions.yml`. By default, overnight cost of wind turbines are estimated with 
-the [Rinne et al. cost model](https://doi.org/10.1038/s41560-018-0137-9), which is implemented in 
-`turbine_overnight_cost()` in `cleo.utils`.
-* `process()`: performs all required computations to generate LCOE estimates.
+the [Rinne et al. cost model](https://doi.org/10.1038/s41560-018-0137-9), which is implemented in `turbine_overnight_cost()` in `cleo.assess`.
 
 ### Author and Copyright
 Copyright (c) 2024 Sebastian Wehrle

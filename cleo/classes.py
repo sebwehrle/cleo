@@ -345,6 +345,8 @@ class _LandscapeAtlas:
         :type name: str
         :param all_touched: if True, all pixels touched by polygon are assigned. If False, only pixels whose center
         point is inside the polygon is assigned. Default is False.
+        :param inplace: adds raster to `self.data` if True. Default is True.
+        :type inplace: bool
         :return: merges rasterized DataArray into `self.data`
         """
         # check whether column input is sensible
@@ -393,6 +395,8 @@ class _LandscapeAtlas:
         Compute distance from non-zero values in data_var to closest non-zero value in data_var
         :param data_var: name of a data variable in self.data
         :type data_var: str
+        :param inplace: adds distance to `self.data` if True. Default is True.
+        :type inplace: bool
         :return: DataArray with distances
         :rtype: xarray.DataArray
         """

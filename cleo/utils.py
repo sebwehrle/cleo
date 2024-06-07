@@ -21,6 +21,7 @@ def add(self, other, name=None) -> None:
     Merge other into self
     :param self: an instance of the WindAtlas- or Landscape-class (wrapping a xarray Dataset)
     :param other: an instance of the xarray.DataArray- or xarray.Dataset-class
+    :param name: a name for the merged data variable
     :return:
     """
     # duck typing to check if other is a xarray.Dataset, xarray.DataArray
@@ -28,7 +29,7 @@ def add(self, other, name=None) -> None:
         raise TypeError(f"'{other}' must be an instance of the xr.Dataset- or xr.DataArray-class.")
 
     if self.data.rio.crs != other.rio.crs:
-        xarray_data = other.rio.reproject(self.crs)
+        other = other.rio.reproject(self.crs)
 
     # clip other if necessary
     if bbox(self) != bbox(other):
@@ -93,6 +94,7 @@ def flatten(self, digits=5, exclude_template=True):
     'digits' value of 5 results in a precision loss of at most about 50 cm when CRS is standard epsg:4326.
     :param self: an instance of the WindResourceAtlas- or SiteData-class
     :param digits: number of digits to round x and y coordinates to
+    :param exclude_template: a boolean flag to exclude the template-data variable
     :return: a pandas.Dataframe with one column per data variable and non-spatial coordinate
     """
 
@@ -219,7 +221,8 @@ def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=Non
 
     Parameters:
     url (str): The URL of the file to download.
-    filename (str, optional): The name to save the file as. If not provided, the file will be saved with its original name.
+    filename (str, optional): The name to save the file as. If not provided, the file will be saved with its original
+    name.
     proxy (str, optional): The URL and port of the proxy to use for the download.
     proxy_user (str, optional): The username for the proxy.
     proxy_pass (str, optional): The password for the proxy.

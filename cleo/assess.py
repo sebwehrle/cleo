@@ -96,8 +96,6 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     :type height: int
     :param chunk_size: number of chunks for chunked computation. If None, computation is not chunked.
     :type chunk_size: int
-    :param replace: if True, replace existing wind speed data. Defaults to False.
-    :type replace: bool
     """
     # TODO: re-computing at a given height adds dataarray a second time (with duplicate height-coord)
 
@@ -161,7 +159,7 @@ def compute_optimal_power_energy(self):
     least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
     energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
     energy = energy.assign_coords({'turbine': "min_lcoe"})
-    energy = energy * power  * 8760 / 10**6
+    energy = energy * power * 8760 / 10**6
     # TODO: set unit on energy
     self.data["optimal_energy"] = energy
 
@@ -312,6 +310,7 @@ def turbine_overnight_cost(power, hub_height, rotor_diameter, year):
     :param power: rated power in MW
     :param hub_height: hub height in meters
     :param rotor_diameter: rotor diameter in meters
+    :param year: year of first commercial deployment
     :return: overnight investment cost in EUR per kW
     """
     rotor_area = np.pi * (rotor_diameter / 2) ** 2

@@ -12,10 +12,10 @@ from typing import Union
 def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Dataset, gpd.GeoDataFrame):
     """
     Clip the atlas data to the provided geopandas shapefile
-    :type clip_shape_path: str
-    :param inplace: If True, the atlas data will be overwritten with the clipped data. Default is True.
-    :type inplace: bool
-    :return:
+    :param self: an Atlas-subclass instance that is to be clipped.
+    :param clip_shape: a geopandas GeoDataFrame or a path-string pointing to a shapefile. Defines the area to clip to.
+    :type clip_shape: Union[str, gpd.GeoDataFrame]
+    :return: a xr.Dataset clipped to clip_shape and the gpd.GeoDataFrame used to clip the data.
     """
     # Handle clip_shape argument type
     if isinstance(clip_shape, str):

@@ -154,6 +154,14 @@ class Atlas:
         else:
             raise ValueError(f"{region} is not a valid region in {self.country}.")
 
+    def get_nuts_country(self):
+        nuts_dir = self.path / "data" / "nuts"
+        nuts_shape = list(nuts_dir.rglob('*.shp'))[0]
+        nuts = gpd.read_file(nuts_shape)
+        alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
+        clip_shape = nuts.loc[(nuts["CNTR_CODE"] == alpha_2) & (nuts["LEVL_CODE"] == 0), :]
+        return clip_shape
+
     def clip_to_nuts(self, region, inplace=True):
         """
         Clips all Atlas datasets to the specified NUTS region

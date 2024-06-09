@@ -33,7 +33,10 @@ def add(self, other, name=None) -> None:
 
     # clip other if necessary
     if bbox(self) != bbox(other):
-        other = other.rio.clip(self.clip_shape.geometry)
+        if self.parent.region is not None:
+            other = other.rio.clip(self.parent.get_nuts_region(self.parent.region).geometry)
+        else:
+            other = other.rio.clip(self.parent.get_nuts_country().geometry)
 
     # check if spatial coordinates of self and other align
     if not (np.array_equal(self.data["x"].data, other["x"].data)

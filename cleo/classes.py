@@ -2,14 +2,11 @@
 import os
 import numpy as np
 import xarray as xr
-import rioxarray as rxr
 import pyproj
 import rasterio.crs
 import geopandas as gpd
 import yaml
 import logging
-import shutil
-import requests
 import zipfile
 import pycountry as pct
 from pathlib import Path
@@ -35,9 +32,10 @@ from cleo.utils import (
 from cleo.loaders import (
     get_cost_assumptions,
     get_overnight_cost,
-    get_powercurves,
     get_turbine_attribute,
-    load_weibull_parameters
+    load_weibull_parameters,
+    load_gwa,
+    load_nuts,
 )
 
 from cleo.spatial import (
@@ -133,10 +131,13 @@ class Atlas:
         yaml_file = self.path / "resources" / f"{turbine_name}.yml"
         if not yaml_file.is_file():
             raise FileNotFoundError(f"The YAML file for {turbine_name} does not exist.")
-        # Add the turbine data to the wind atlas
-        self.wind.add_turbine_data(yaml_file)
-        # Add the turbine name to the list of wind turbines
-        self._wind_turbines.append(turbine_name)
+        if turbine_name not in self._wind_turbines:
+            # Add the turbine data to the wind atlas
+            self.wind.add_turbine_data(yaml_file)
+            # Add the turbine name to the list of wind turbines
+            self._wind_turbines.append(turbine_name)
+        else:
+            logging.warning(f"Turbine {turbine_name} already added.")
 
     def get_nuts_region(self, region):
         nuts_dir = self.path / "data" / "nuts"
@@ -148,9 +149,18 @@ class Atlas:
         feasible_regions = nuts.loc[nuts['CNTR_CODE'] == alpha_2, ["LEVL_CODE", "NAME_LATN"]]
         if feasible_regions["NAME_LATN"].str.contains(region).any():
             clip_shape = nuts.loc[nuts["NAME_LATN"] == region, :]
+            clip_shape = clip_shape.to_crs(self.crs)
             return clip_shape
         else:
             raise ValueError(f"{region} is not a valid region in {self.country}.")
+
+    def get_nuts_country(self):
+        nuts_dir = self.path / "data" / "nuts"
+        nuts_shape = list(nuts_dir.rglob('*.shp'))[0]
+        nuts = gpd.read_file(nuts_shape)
+        alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
+        clip_shape = nuts.loc[(nuts["CNTR_CODE"] == alpha_2) & (nuts["LEVL_CODE"] == 0), :]
+        return clip_shape
 
     def clip_to_nuts(self, region, inplace=True):
         """
@@ -244,26 +254,24 @@ class _WindAtlas:
         Returns:
         None
         """
-        # Load the YAML file
-        with yaml_file.open("r") as file:
-            turbine_data = yaml.safe_load(file)
-
-        # Extract the turbine name, type and capacity
+        # # Load the YAML file
+        with yaml_file.open('r') as f:
+            turbine_data = yaml.safe_load(f)
+        # extract wind turbine data
         turbine_name = f"{turbine_data['manufacturer']}.{turbine_data['model']}.{turbine_data['capacity']}"
-        wind_speed = turbine_data['V']
-        power_output = turbine_data['cf']
+        wind_speed = list(map(float, turbine_data['V']))
+        power_output = list(map(float, turbine_data['cf']))
 
-        # Create a DataArray for the power curve
-        power_curve = xr.DataArray(power_output, coords=[wind_speed], dims=["wind_speed"])
-        power_curve = power_curve.assign_coords(turbine=turbine_name)
+        # initialize wind turbine power curves
+        power_curve = xr.DataArray(data=power_output, coords={'wind_speed': wind_speed}, dims=['wind_speed'])
+        power_curve = power_curve.assign_coords(turbine=turbine_name).expand_dims('turbine')
 
-        # Check if 'power_curve' DataArray already exists in the Dataset
         if 'power_curve' in self.data:
-            # If it exists, concatenate the new power curve with the existing one
-            self.data['power_curve'] = xr.concat([self.data['power_curve'], power_curve], dim="turbine")
-        else:
-            # If it doesn't exist, add the new power curve to the Dataset
-            self.data['power_curve'] = power_curve
+            power_curve = xr.concat([self.data['power_curve'], power_curve], dim='turbine')
+
+        # merge into xarray dataset
+        power_curve.name = 'power_curve'
+        self.data = xr.merge([self.data, power_curve])
 
     _load_gwa = load_gwa
     _build_netcdf = build_netcdf
@@ -282,6 +290,7 @@ class _WindAtlas:
     compute_weibull_pdf = compute_weibull_pdf
     simulate_capacity_factors = simulate_capacity_factors
     compute_lcoe = compute_lcoe
+    compute_optimal_power_energy = compute_optimal_power_energy
     minimum_lcoe = minimum_lcoe
 
 
@@ -346,7 +355,9 @@ class _LandscapeAtlas:
         :type name: str
         :param all_touched: if True, all pixels touched by polygon are assigned. If False, only pixels whose center
         point is inside the polygon is assigned. Default is False.
-        :return: merges rasterized DataArray into self.data
+        :param inplace: adds raster to `self.data` if True. Default is True.
+        :type inplace: bool
+        :return: merges rasterized DataArray into `self.data`
         """
         # check whether column input is sensible
         if column is not None:
@@ -367,7 +378,8 @@ class _LandscapeAtlas:
         raster = self.data["template"].copy()
         for _, row in shape.iterrows():
             # mask is np.nan where not in shape and 0 where in shape
-            mask = self.data["template"].rio.clip([row.geometry], self.data.rio.crs, drop=False, all_touched=all_touched)
+            mask = self.data["template"].rio.clip([row.geometry], self.data.rio.crs, drop=False,
+                                                  all_touched=all_touched)
 
             if column is None:
                 raster = xr.where(mask == 0, 1, raster, keep_attrs=True)
@@ -393,6 +405,8 @@ class _LandscapeAtlas:
         Compute distance from non-zero values in data_var to closest non-zero value in data_var
         :param data_var: name of a data variable in self.data
         :type data_var: str
+        :param inplace: adds distance to `self.data` if True. Default is True.
+        :type inplace: bool
         :return: DataArray with distances
         :rtype: xarray.DataArray
         """

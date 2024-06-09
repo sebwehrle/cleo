@@ -4,6 +4,8 @@ import zipfile
 
 import requests
 import yaml
+import zipfile
+import requests
 import pandas as pd
 import geopandas as gpd
 import rioxarray as rxr
@@ -74,7 +76,7 @@ def load_weibull_parameters(self, height):
     :param self: an  instance of the Atlas class
     :param height: Height for which to load Weibull parameters. Possible values are [50, 100, 150].
     GWA also provides 10 and 200 m data, which, however, is not loaded by Atlas class currently.
-    : type height: int
+    :type height: int
     :return: Tuple containing Weibull parameter rasters (a, k)
     :rtype: Tuple[xarray.DataArray, xarray.DataArray]
     """
@@ -131,15 +133,15 @@ def load_gwa(self):
     path_raw = self.parent.path / "data" / "raw" / self.parent.country
     logging.info(f"Initializing WindScape with Global Wind Atlas data")
 
-    for l in layers:
+    for ly in layers:
         for h in height:
-            fname = f'{c}_{l}_{h}.tif'
+            fname = f'{c}_{ly}_{h}.tif'
             fpath = path_raw / fname
 
             if not fpath.is_file():
                 try:
                     if not fpath.is_file():
-                        durl = f"{url}/{c}/{l}/{h}"
+                        durl = f"{url}/{c}/{ly}/{h}"
                         download_file(durl, fpath)
                         logging.info(f'Download of {fname} from {durl} complete')
                 except requests.RequestException as e:

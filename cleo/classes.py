@@ -131,10 +131,13 @@ class Atlas:
         yaml_file = self.path / "resources" / f"{turbine_name}.yml"
         if not yaml_file.is_file():
             raise FileNotFoundError(f"The YAML file for {turbine_name} does not exist.")
-        # Add the turbine data to the wind atlas
-        self.wind.add_turbine_data(yaml_file)
-        # Add the turbine name to the list of wind turbines
-        self._wind_turbines.append(turbine_name)
+        if turbine_name not in self._wind_turbines:
+            # Add the turbine data to the wind atlas
+            self.wind.add_turbine_data(yaml_file)
+            # Add the turbine name to the list of wind turbines
+            self._wind_turbines.append(turbine_name)
+        else:
+            logging.warning(f"Turbine {turbine_name} already added.")
 
     def get_nuts_region(self, region):
         nuts_dir = self.path / "data" / "nuts"
@@ -146,6 +149,7 @@ class Atlas:
         feasible_regions = nuts.loc[nuts['CNTR_CODE'] == alpha_2, ["LEVL_CODE", "NAME_LATN"]]
         if feasible_regions["NAME_LATN"].str.contains(region).any():
             clip_shape = nuts.loc[nuts["NAME_LATN"] == region, :]
+            clip_shape = clip_shape.to_crs(self.crs)
             return clip_shape
         else:
             raise ValueError(f"{region} is not a valid region in {self.country}.")
@@ -242,26 +246,24 @@ class _WindAtlas:
         Returns:
         None
         """
-        # Load the YAML file
-        with yaml_file.open("r") as file:
-            turbine_data = yaml.safe_load(file)
-
-        # Extract the turbine name, type and capacity
+        # # Load the YAML file
+        with yaml_file.open('r') as f:
+            turbine_data = yaml.safe_load(f)
+        # extract wind turbine data
         turbine_name = f"{turbine_data['manufacturer']}.{turbine_data['model']}.{turbine_data['capacity']}"
-        wind_speed = turbine_data['V']
-        power_output = turbine_data['cf']
+        wind_speed = list(map(float, turbine_data['V']))
+        power_output = list(map(float, turbine_data['cf']))
 
-        # Create a DataArray for the power curve
-        power_curve = xr.DataArray(power_output, coords=[wind_speed], dims=["wind_speed"])
-        power_curve = power_curve.assign_coords(turbine=turbine_name)
+        # initialize wind turbine power curves
+        power_curve = xr.DataArray(data=power_output, coords={'wind_speed': wind_speed}, dims=['wind_speed'])
+        power_curve = power_curve.assign_coords(turbine=turbine_name).expand_dims('turbine')
 
-        # Check if 'power_curve' DataArray already exists in the Dataset
         if 'power_curve' in self.data:
-            # If it exists, concatenate the new power curve with the existing one
-            self.data['power_curve'] = xr.concat([self.data['power_curve'], power_curve], dim="turbine")
-        else:
-            # If it doesn't exist, add the new power curve to the Dataset
-            self.data['power_curve'] = power_curve
+            power_curve = xr.concat([self.data['power_curve'], power_curve], dim='turbine')
+
+        # merge into xarray dataset
+        power_curve.name = 'power_curve'
+        self.data = xr.merge([self.data, power_curve])
 
     _load_gwa = load_gwa
     _build_netcdf = build_netcdf

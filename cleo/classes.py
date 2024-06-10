@@ -68,6 +68,7 @@ class Atlas:
         # automatically instantiate WindAtlas and LandscapeAtlas
         self.wind = _WindAtlas(self)
         self.landscape = _LandscapeAtlas(self)
+        self._check_and_load_datasets()
 
     @property
     def path(self):
@@ -125,6 +126,28 @@ class Atlas:
         for path in [path_raw, path_processed, path_logging]:
             if not path.is_dir():
                 path.mkdir(parents=True)
+
+    def _check_and_load_datasets(self) -> None:
+        """
+        Check for the existence of saved NetCDF files for WindAtlas and LandscapeAtlas. If they exist, load the datasets
+        and set the properties of the Atlas class.
+        """
+        wind_atlas_path = self.path / "data" / "processed" / f"WindAtlas_{self.country}.nc"
+        landscape_atlas_path = self.path / "data" / "processed" / f"LandscapeAtlas_{self.country}.nc"
+
+        # check if datasets exist and open
+        if wind_atlas_path.is_file():
+            wind_dataset = xr.open_dataset(wind_atlas_path)
+
+        if landscape_atlas_path.is_file():
+            landscape_dataset = xr.open_dataset(landscape_atlas_path)
+
+        if wind_dataset and landscape_dataset:
+            wind_attrs = wind_dataset.attrs
+            landscape_attrs = landscape_dataset.attrs
+
+            if wind_attrs != landscape_attrs:
+                raise ValueError("Attributes of WindAtlas and LandscapeAtlas do not match")
 
     def add_turbine(self, turbine_name):
         # Check if the YAML file exists

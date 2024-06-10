@@ -29,7 +29,7 @@ def add(self, other, name=None) -> None:
         raise TypeError(f"'{other}' must be an instance of the xr.Dataset- or xr.DataArray-class.")
 
     if self.data.rio.crs != other.rio.crs:
-        other = other.rio.reproject(self.crs)
+        other = other.rio.reproject(self.data.rio.crs)
 
     # clip other if necessary
     if bbox(self) != bbox(other):

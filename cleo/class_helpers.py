@@ -40,7 +40,7 @@ def build_netcdf(self, atlas_type):
         logging.info(f"Existing {atlas_type} at {str(path_netcdf)} opened.")
 
     if self.data.rio.crs != self.parent.crs:
-        self.data = self.data.rio.reproject(self.parent.crs)
+        self.data = self.data.rio.reproject(self.parent.crs, nodata=np.nan)
 
     if self.data.rio.crs is None:
         self.data = self.data.rio.write_crs(self.parent.crs)

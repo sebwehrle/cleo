@@ -29,7 +29,7 @@ def add(self, other, name=None) -> None:
         raise TypeError(f"'{other}' must be an instance of the xr.Dataset- or xr.DataArray-class.")
 
     if self.data.rio.crs != other.rio.crs:
-        other = other.rio.reproject(self.crs)
+        other = other.rio.reproject(self.crs, nodata=np.nan)
 
     # clip other if necessary
     if bbox(self) != bbox(other):
@@ -143,6 +143,16 @@ def flatten(self, digits=5, exclude_template=True):
 
 # %% functions
 def stylish_tqdm(total, desc):
+    """
+    Create a stylish progress bar using tqdm.
+
+    :param total: Total iterations for the progress bar.
+    :type total: int
+    :param desc: Description to be displayed alongside the progress bar.
+    :type desc: str
+    :return: A tqdm progress bar.
+    :rtype: tqdm
+    """
     return tqdm(
         total=total,
         desc=desc,
@@ -158,6 +168,23 @@ def stylish_tqdm(total, desc):
 
 
 def _process_chunk(self, processing_func, chunk_size, start_x, start_y, **kwargs):
+    """
+    Process a chunk of data.
+
+    :param self: An instance of the Atlas-class.
+    :param processing_func: A function that takes data chunks and properties as input and returns processed data.
+    :type processing_func: Callable
+    :param chunk_size: Size of the chunks along x and y coordinates for processing.
+    :type chunk_size: int
+    :param start_x: Starting index for the x-coordinate.
+    :type start_x: int
+    :param start_y: Starting index for the y-coordinate.
+    :type start_y: int
+    :param kwargs: Additional inputs to the processing_func.
+    :type kwargs: dict
+    :return: Processed data.
+    :rtype: xarray.Dataset
+    """
     end_x = min(start_x + chunk_size, len(self.data.coords["x"]))
     end_y = min(start_y + chunk_size, len(self.data.coords["y"]))
 
@@ -186,8 +213,6 @@ def compute_chunked(self, processing_func, chunk_size, **kwargs):
     :return Reassembled dataset containing the processed data.
     :rtype xarray.Dataset
     """
-    reassembled_data = xr.Dataset()
-
     x_chunks = range(0, len(self.data.coords["x"]), chunk_size)
     y_chunks = range(0, len(self.data.coords["y"]), chunk_size)
     total_chunks = len(x_chunks) * len(y_chunks)

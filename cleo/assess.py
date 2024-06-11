@@ -32,7 +32,7 @@ def compute_air_density_correction(self, chunk_size=None):
     elevation = elevation.rename("elevation").squeeze()
 
     if elevation.rio.crs != self.parent.crs:
-        elevation = elevation.rio.reproject(self.parent.crs).squeeze()
+        elevation = elevation.rio.reproject(self.parent.crs, nodata=np.nan).squeeze()
 
     if self.parent.region is not None:
         clip_shape = self.parent.get_nuts_region(self.parent.region)

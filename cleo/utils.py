@@ -213,6 +213,8 @@ def compute_chunked(self, processing_func, chunk_size, **kwargs):
     :return Reassembled dataset containing the processed data.
     :rtype xarray.Dataset
     """
+    reassembled_data = xr.Dataset()
+
     x_chunks = range(0, len(self.data.coords["x"]), chunk_size)
     y_chunks = range(0, len(self.data.coords["y"]), chunk_size)
     total_chunks = len(x_chunks) * len(y_chunks)

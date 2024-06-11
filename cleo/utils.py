@@ -19,6 +19,7 @@ from cleo.spatial import bbox
 def add(self, other, name=None) -> None:
     """
     Merge other into self
+
     :param self: an instance of the WindAtlas- or Landscape-class (wrapping a xarray Dataset)
     :param other: an instance of the xarray.DataArray- or xarray.Dataset-class
     :param name: a name for the merged data variable
@@ -57,6 +58,11 @@ def add(self, other, name=None) -> None:
 def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
     """
     Convert a data variable from the current unit to the specified unit
+
+    :param data_variable: name(s) of the data variable(s) to be converted
+    :param to_unit: name of the unit to convert to
+    :param from_unit: name of the unit from which to convert from
+    :param inplace: if True (default) the data variable is updated in-place
     """
     ureg = UnitRegistry()
 
@@ -95,6 +101,7 @@ def flatten(self, digits=5, exclude_template=True):
     Converts data in a xarray.Dataset to a pandas.DataFrame in a slower but more memory efficient way than
     xarray.Dataset.to_dataframe. Rounding of coordinates facilitates merging across data variables. The default
     'digits' value of 5 results in a precision loss of at most about 50 cm when CRS is standard epsg:4326.
+
     :param self: an instance of the WindResourceAtlas- or SiteData-class
     :param digits: number of digits to round x and y coordinates to
     :param exclude_template: a boolean flag to exclude the template-data variable

@@ -396,7 +396,7 @@ class _LandscapeAtlas:
             shape = shape.to_crs(self.data.rio.crs)
         # reproject template to single crs if required
         if self.data["template"].rio.crs != self.data.rio.crs:
-            self.data["template"] = self.data["template"].rio.reproject(self.data.rio.crs)
+            self.data["template"] = self.data["template"].rio.reproject(self.data.rio.crs, nodata=np.nan)
 
         raster = self.data["template"].copy()
         for _, row in shape.iterrows():

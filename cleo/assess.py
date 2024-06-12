@@ -25,12 +25,12 @@ def accepts_parameter(func, parameter):
     return parameter in signature.parameters
 
 
-def requires(*dependencies):
+def requires(dep_var_mapping):
     """
     Decorator to ensure dependencies are processed before executing the main function.
 
-    :param dependencies: List of dependency method names.
-    :type dependencies: str
+    :param dep_var_mapping: Dictionary mapping dependency method names to data variable names.
+    :type dep_var_mapping: dict
     :return: Decorated function.
     :rtype: callable
     """
@@ -49,8 +49,8 @@ def requires(*dependencies):
             func_signature = inspect.signature(func)
             provided_args = {k: v for k, v in kwargs.items() if k in func_signature.parameters}
 
-            for dependency in dependencies:
-                if dependency not in self.data.data_vars:
+            for dependency, data_var in dep_var_mapping.items():
+                if data_var not in self.data.data_vars:
                     dep_func = getattr(self, dependency)
                     # Filter args to pass only those that the dependency accepts
                     dep_args = {k: v for k, v in provided_args.items() if accepts_parameter(dep_func, k)}
@@ -200,7 +200,7 @@ def compute_weibull_pdf(self, chunk_size=None):
 
 
 # %% dependent methods
-@requires('compute_terrain_roughness_length', 'compute_weibull_pdf')
+@requires({'compute_terrain_roughness_length': 'terrain_roughness_length', 'compute_weibull_pdf': 'weibull_pdf'})
 def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     """
     Simulate capacity factors for specified wind turbine models
@@ -244,7 +244,7 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
         self.data = self.data.combine_first(cap_factor)
 
 
-@requires('simulate_capacity_factors')
+@requires({'simulate_capacity_factors': 'capacity_factors'})
 def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
     """
     Compute levelized cost of electricity (LCOE) for specified wind turbine models
@@ -283,7 +283,7 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
     logging.info(f"Levelized Cost of Electricity in {self.data.attrs['country']} computed.")
 
 
-@requires('compute_lcoe')
+@requires({'compute_lcoe': 'lcoe'})
 def compute_optimal_power_energy(self):
     # TODO: check if required data_vars exist
     # compute optimal power
@@ -310,7 +310,7 @@ def compute_optimal_power_energy(self):
     self.data["optimal_energy"] = energy
 
 
-@requires('compute_lcoe')
+@requires({'compute_lcoe': 'lcoe'})
 def minimum_lcoe(self):
     """
     Calculate the minimum lcoe for each location among all turbines

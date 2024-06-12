@@ -33,9 +33,11 @@ from cleo.loaders import (
     get_cost_assumptions,
     get_overnight_cost,
     get_turbine_attribute,
+    get_clc_codes,
     load_weibull_parameters,
     load_gwa,
     load_nuts,
+    add_corine_land_cover,
 )
 
 from cleo.spatial import (
@@ -331,6 +333,8 @@ class _LandscapeAtlas:
     add = add
     flatten = flatten
     convert = convert
+    get_clc_codes = get_clc_codes
+    add_corine_land_cover = add_corine_land_cover
 
     @staticmethod
     def load_and_extract_from_dict(source_dict, proxy=None, proxy_user=None, proxy_pass=None):

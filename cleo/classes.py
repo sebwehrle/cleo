@@ -70,9 +70,6 @@ class Atlas:
         # automatically instantiate WindAtlas and LandscapeAtlas
         self.wind = _WindAtlas(self)
         self.landscape = _LandscapeAtlas(self)
-        # TODO. BUG: re-opening atlas netcdfs does not restore wind_turbines
-        # set properties to attributes in xarray.Datasets
-        # TODO: attributes of Datasets not set
         self._check_and_load_datasets()
 
     @property
@@ -138,23 +135,25 @@ class Atlas:
         and set the properties of the Atlas class.
         """
         wind_atlas_path = self.path / "data" / "processed" / f"WindAtlas_{self.country}.nc"
-        landscape_atlas_path = self.path / "data" / "processed" / f"LandscapeAtlas_{self. country}.nc"
-
-        wind_dataset = None
-        landscape_dataset = None
+        landscape_atlas_path = self.path / "data" / "processed" / f"LandscapeAtlas_{self.country}.nc"
 
         # check if datasets exist and open
         if wind_atlas_path.is_file():
             wind_dataset = xr.open_dataset(wind_atlas_path)
-            self._set_and_check_attributes(wind_dataset, 'wind')
 
         if landscape_atlas_path.is_file():
             landscape_dataset = xr.open_dataset(landscape_atlas_path)
-            self._set_and_check_attributes(landscape_dataset, 'landscape')
 
         if wind_dataset and landscape_dataset:
-            if wind_dataset.attrs != landscape_dataset.attrs:
+            wind_attrs = wind_dataset.attrs
+            landscape_attrs = landscape_dataset.attrs
+
+            if wind_attrs != landscape_attrs:
                 raise ValueError("Attributes of WindAtlas and LandscapeAtlas do not match")
+
+        self.country = wind_attrs.get('country')
+        self.region = wind_attrs.get('region')
+        self.crs = wind_dataset.rio.crs.to_string()
 
         if wind_dataset:
             self.wind.data = wind_dataset
@@ -162,48 +161,6 @@ class Atlas:
         if landscape_dataset:
             self.landscape.data = landscape_dataset
             landscape_dataset.close()
-
-    def _set_and_check_attributes(self, dataset, atlas_type):
-        """
-        Set and validate the attributes of the dataset to ensure they match the Atlas class properties.
-        This method updates the dataset's attributes with the values from the Atlas class properties if they are not
-        already set. If the attributes are set, it validates that they match the expected values. It also sets the CRS
-        using rioxarray.
-
-        Parameters
-        ----------
-        dataset : xarray.Dataset
-            The dataset whose attributes are to be set and checked.
-        atlas_type : str
-            The type of atlas ('wind' or 'landscape') to which the dataset belongs.
-
-        Raises
-        ------
-        ValueError
-            If any attribute in the dataset does not match the expected value from the Atlas class properties.
-        """
-        # Define the expected attributes based on the Atlas class properties
-        expected_attrs = {
-            'country': self.country,
-            'region': self.region if self.region is not None else dataset.attrs.get('region', None)
-        }
-
-        # Update the dataset's attributes if they are not set, else check for consistency
-        for attr, expected_value in expected_attrs.items():
-            if attr not in dataset.attrs:
-                dataset.attrs[attr] = expected_value
-            elif dataset.attrs[attr] != expected_value:
-                raise ValueError(f"{atlas_type} dataset attribute '{attr}' mismatch: "
-                                 f"expected '{expected_value}', found '{dataset.attrs[attr]}'")
-
-        # Set CRS using rioxarray, if different
-        current_crs = dataset.rio.crs.to_string() if dataset.rio.crs else None
-        if current_crs != self.crs:
-            dataset.rio.write_crs(self.crs, inplace=True)
-
-        # Ensure all attributes are consistent with the Atlas class properties
-        if not all(dataset.attrs.get(attr) == expected_value for attr, expected_value in expected_attrs.items()):
-            raise ValueError(f"{atlas_type} dataset attributes do not match the Atlas class properties.")
 
     def add_turbine(self, turbine_name):
         # Check if the YAML file exists

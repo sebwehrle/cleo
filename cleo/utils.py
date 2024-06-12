@@ -19,6 +19,7 @@ from cleo.spatial import bbox
 def add(self, other, name=None) -> None:
     """
     Merge other into self
+
     :param self: an instance of the WindAtlas- or Landscape-class (wrapping a xarray Dataset)
     :param other: an instance of the xarray.DataArray- or xarray.Dataset-class
     :param name: a name for the merged data variable
@@ -29,7 +30,7 @@ def add(self, other, name=None) -> None:
         raise TypeError(f"'{other}' must be an instance of the xr.Dataset- or xr.DataArray-class.")
 
     if self.data.rio.crs != other.rio.crs:
-        other = other.rio.reproject(self.data.rio.crs)
+        other = other.rio.reproject(self.crs, nodata=np.nan)
 
     # clip other if necessary
     if bbox(self) != bbox(other):
@@ -57,6 +58,11 @@ def add(self, other, name=None) -> None:
 def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
     """
     Convert a data variable from the current unit to the specified unit
+
+    :param data_variable: name(s) of the data variable(s) to be converted
+    :param to_unit: name of the unit to convert to
+    :param from_unit: name of the unit from which to convert from
+    :param inplace: if True (default) the data variable is updated in-place
     """
     ureg = UnitRegistry()
 
@@ -95,6 +101,7 @@ def flatten(self, digits=5, exclude_template=True):
     Converts data in a xarray.Dataset to a pandas.DataFrame in a slower but more memory efficient way than
     xarray.Dataset.to_dataframe. Rounding of coordinates facilitates merging across data variables. The default
     'digits' value of 5 results in a precision loss of at most about 50 cm when CRS is standard epsg:4326.
+
     :param self: an instance of the WindResourceAtlas- or SiteData-class
     :param digits: number of digits to round x and y coordinates to
     :param exclude_template: a boolean flag to exclude the template-data variable
@@ -143,6 +150,16 @@ def flatten(self, digits=5, exclude_template=True):
 
 # %% functions
 def stylish_tqdm(total, desc):
+    """
+    Create a stylish progress bar using tqdm.
+
+    :param total: Total iterations for the progress bar.
+    :type total: int
+    :param desc: Description to be displayed alongside the progress bar.
+    :type desc: str
+    :return: A tqdm progress bar.
+    :rtype: tqdm
+    """
     return tqdm(
         total=total,
         desc=desc,
@@ -158,6 +175,23 @@ def stylish_tqdm(total, desc):
 
 
 def _process_chunk(self, processing_func, chunk_size, start_x, start_y, **kwargs):
+    """
+    Process a chunk of data.
+
+    :param self: An instance of the Atlas-class.
+    :param processing_func: A function that takes data chunks and properties as input and returns processed data.
+    :type processing_func: Callable
+    :param chunk_size: Size of the chunks along x and y coordinates for processing.
+    :type chunk_size: int
+    :param start_x: Starting index for the x-coordinate.
+    :type start_x: int
+    :param start_y: Starting index for the y-coordinate.
+    :type start_y: int
+    :param kwargs: Additional inputs to the processing_func.
+    :type kwargs: dict
+    :return: Processed data.
+    :rtype: xarray.Dataset
+    """
     end_x = min(start_x + chunk_size, len(self.data.coords["x"]))
     end_y = min(start_y + chunk_size, len(self.data.coords["y"]))
 

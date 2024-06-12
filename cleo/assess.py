@@ -1,4 +1,5 @@
 # resource assessment methods of the Atlas class
+import inspect
 import numpy as np
 import xarray as xr
 import rioxarray as rxr
@@ -8,12 +9,64 @@ from scipy.special import gamma
 from cleo.utils import compute_chunked
 
 
-# %% methods
+# %% decorator
+def accepts_parameter(func, parameter):
+    """
+    Check if a function accepts a specific parameter.
+
+    :param func: Function to check.
+    :type func: callable
+    :param parameter: Parameter name to check for.
+    :type parameter: str
+    :return: True if the function accepts the parameter, False otherwise.
+    :rtype: bool
+    """
+    signature = inspect.signature(func)
+    return parameter in signature.parameters
+
+
+def requires(dep_var_mapping):
+    """
+    Decorator to ensure dependencies are processed before executing the main function.
+
+    :param dep_var_mapping: Dictionary mapping dependency method names to data variable names.
+    :type dep_var_mapping: dict
+    :return: Decorated function.
+    :rtype: callable
+    """
+    def decorator(func):
+        def wrapper(self, *args, **kwargs):
+            """
+            Wrapper function to check and process dependencies.
+
+            :param self: Instance of the class.
+            :type self: object
+            :param args: Positional arguments for the main function.
+            :param kwargs: Keyword arguments for the main function.
+            :return: Result of the main function.
+            """
+            # Get the arguments passed to the main function
+            func_signature = inspect.signature(func)
+            provided_args = {k: v for k, v in kwargs.items() if k in func_signature.parameters}
+
+            for dependency, data_var in dep_var_mapping.items():
+                if data_var not in self.data.data_vars:
+                    dep_func = getattr(self, dependency)
+                    # Filter args to pass only those that the dependency accepts
+                    dep_args = {k: v for k, v in provided_args.items() if accepts_parameter(dep_func, k)}
+                    dep_func(**dep_args)
+            return func(self, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# %% independent methods
 def compute_air_density_correction(self, chunk_size=None):
     """
     Compute air density correction factor rho based on elevation data.
     See https://wind-data.ch/tools/luftdichte.php for methodology details
 
+    :param self: an instance of the _WindAtlas class
     :param chunk_size: size of chunks in pixels for chunked computation. If None, computation is not chunked
     """
 
@@ -32,7 +85,7 @@ def compute_air_density_correction(self, chunk_size=None):
     elevation = elevation.rename("elevation").squeeze()
 
     if elevation.rio.crs != self.parent.crs:
-        elevation = elevation.rio.reproject(self.parent.crs).squeeze()
+        elevation = elevation.rio.reproject(self.parent.crs, nodata=np.nan).squeeze()
 
     if self.parent.region is not None:
         clip_shape = self.parent.get_nuts_region(self.parent.region)
@@ -49,44 +102,6 @@ def compute_air_density_correction(self, chunk_size=None):
     logging.info(f'Air density correction for {self.parent.country} computed.')
 
 
-def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
-    """
-    Compute levelized cost of electricity (LCOE) for specified wind turbine models
-
-    :param self: an instance of the Atlas-class
-    :param chunk_size: Size of chunk in pixels. If None, computation is not chunked.
-    :type chunk_size: int
-    :param turbine_cost_share: Share of location-independent investment cost to compute pseudo-LCOE (see
-    Wehrle et al. 2023, Inferring Local Social Cost of Wind Power. Evidence from Lower Austria)
-    :type turbine_cost_share: float
-    """
-    lcoe_list = []
-    for turbine_model in self.data.coords["turbine"].values:
-
-        inputs = {
-            "power": self.get_turbine_attribute(turbine_model, "capacity"),
-            "capacity_factors": self.data["capacity_factors"].sel(turbine=turbine_model),
-            "overnight_cost": self.get_overnight_cost(turbine_model) *
-                              self.get_turbine_attribute(turbine_model, "capacity") * turbine_cost_share,
-            "grid_cost": grid_connect_cost(self.get_turbine_attribute(turbine_model, "capacity")),
-            "om_fixed": self.get_cost_assumptions("fixed_om_cost"),
-            "om_variable": self.get_cost_assumptions("variable_om_cost"),
-            "discount_rate": self.get_cost_assumptions("discount_rate"),
-            "lifetime": self.get_cost_assumptions("turbine_lifetime")
-        }
-
-        if chunk_size is None:
-            lcoe = levelized_cost(**inputs)
-        else:
-            lcoe = compute_chunked(self, levelized_cost, chunk_size, **inputs)
-
-        lcoe = lcoe.expand_dims(turbine=[turbine_model])
-        lcoe_list.append(lcoe)
-
-    self.data["lcoe"] = xr.concat(lcoe_list, dim='turbine').rename("lcoe").assign_attrs(units="EUR/MWh")
-    logging.info(f"Levelized Cost of Electricity in {self.data.attrs['country']} computed.")
-
-
 def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     """
     Compute mean wind speed for a given height
@@ -96,7 +111,9 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     :type height: int
     :param chunk_size: number of chunks for chunked computation. If None, computation is not chunked.
     :type chunk_size: int
+    :param inplace: If True, add mean wind speed to Dataset
     """
+
     # TODO: re-computing at a given height adds dataarray a second time (with duplicate height-coord)
 
     def calculate_mean_wind_speed(weibull_a, weibull_k):
@@ -138,32 +155,6 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
         return mean_wind_speed_data
 
 
-def compute_optimal_power_energy(self):
-    # TODO: check if required data_vars exist
-    # compute optimal power
-    least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine').compute()
-
-    def parse_capacity(string):
-        if isinstance(string, str):
-            parts = string.split('.')
-            capacity = parts[-1]
-            return float(capacity)
-        else:
-            return np.nan
-
-    power = xr.apply_ufunc(parse_capacity, least_cost_turbine, vectorize=True)
-    # TODO: set unit on energy'
-
-    self.data["optimal_power"] = power
-    # compute optimal energy
-    least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
-    energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
-    energy = energy.assign_coords({'turbine': "min_lcoe"})
-    energy = energy * power * 8760 / 10**6
-    # TODO: set unit on energy
-    self.data["optimal_energy"] = energy
-
-
 def compute_terrain_roughness_length(self, chunk_size=None):
     """
     Compute terrain roughness length
@@ -189,6 +180,7 @@ def compute_weibull_pdf(self, chunk_size=None):
     """
     Compute weibull probability density function for reference wind speeds
 
+    :param self: an instance of the _WindAtlas class
     :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
     :type chunk_size: int
     """
@@ -207,16 +199,8 @@ def compute_weibull_pdf(self, chunk_size=None):
     logging.info(f'Weibull probability density function of wind speeds in {self.data.attrs["country"]} computed.')
 
 
-def minimum_lcoe(self):
-    """
-    Calculate the minimum lcoe for each location among all turbines
-    """
-    lcoe = self.data["lcoe"]
-    lc_min = lcoe.min(dim='turbine', keep_attrs=True)
-    lc_min = lc_min.assign_coords({'turbine': 'min_lcoe'})
-    self.data["min_lcoe"] = lc_min.rename("minimal_lcoe")
-
-
+# %% dependent methods
+@requires({'compute_terrain_roughness_length': 'terrain_roughness_length', 'compute_weibull_pdf': 'weibull_pdf'})
 def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     """
     Simulate capacity factors for specified wind turbine models
@@ -258,6 +242,83 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
         self.data["capacity_factors"] = cap_factor
     else:
         self.data = self.data.combine_first(cap_factor)
+
+
+@requires({'simulate_capacity_factors': 'capacity_factors'})
+def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
+    """
+    Compute levelized cost of electricity (LCOE) for specified wind turbine models
+
+    :param self: an instance of the Atlas-class
+    :param chunk_size: Size of chunk in pixels. If None, computation is not chunked.
+    :type chunk_size: int
+    :param turbine_cost_share: Share of location-independent investment cost to compute pseudo-LCOE (see
+    Wehrle et al. 2023, Inferring Local Social Cost of Wind Power. Evidence from Lower Austria)
+    :type turbine_cost_share: float
+    """
+    lcoe_list = []
+    for turbine_model in self.data.coords["turbine"].values:
+
+        inputs = {
+            "power": self.get_turbine_attribute(turbine_model, "capacity"),
+            "capacity_factors": self.data["capacity_factors"].sel(turbine=turbine_model),
+            "overnight_cost": self.get_overnight_cost(turbine_model) *
+                              self.get_turbine_attribute(turbine_model, "capacity") * turbine_cost_share,
+            "grid_cost": grid_connect_cost(self.get_turbine_attribute(turbine_model, "capacity")),
+            "om_fixed": self.get_cost_assumptions("fixed_om_cost"),
+            "om_variable": self.get_cost_assumptions("variable_om_cost"),
+            "discount_rate": self.get_cost_assumptions("discount_rate"),
+            "lifetime": self.get_cost_assumptions("turbine_lifetime")
+        }
+
+        if chunk_size is None:
+            lcoe = levelized_cost(**inputs)
+        else:
+            lcoe = compute_chunked(self, levelized_cost, chunk_size, **inputs)
+
+        lcoe = lcoe.expand_dims(turbine=[turbine_model])
+        lcoe_list.append(lcoe)
+
+    self.data["lcoe"] = xr.concat(lcoe_list, dim='turbine').rename("lcoe").assign_attrs(units="EUR/MWh")
+    logging.info(f"Levelized Cost of Electricity in {self.data.attrs['country']} computed.")
+
+
+@requires({'compute_lcoe': 'lcoe'})
+def compute_optimal_power_energy(self):
+    # TODO: check if required data_vars exist
+    # compute optimal power
+    least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine').compute()
+
+    def parse_capacity(string):
+        if isinstance(string, str):
+            parts = string.split('.')
+            capacity = parts[-1]
+            return float(capacity)
+        else:
+            return np.nan
+
+    power = xr.apply_ufunc(parse_capacity, least_cost_turbine, vectorize=True)
+    # TODO: set unit on energy'
+
+    self.data["optimal_power"] = power
+    # compute optimal energy
+    least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
+    energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
+    energy = energy.assign_coords({'turbine': "min_lcoe"})
+    energy = energy * power * 8760 / 10 ** 6
+    # TODO: set unit on energy
+    self.data["optimal_energy"] = energy
+
+
+@requires({'compute_lcoe': 'lcoe'})
+def minimum_lcoe(self):
+    """
+    Calculate the minimum lcoe for each location among all turbines
+    """
+    lcoe = self.data["lcoe"]
+    lc_min = lcoe.min(dim='turbine', keep_attrs=True)
+    lc_min = lc_min.assign_coords({'turbine': 'min_lcoe'})
+    self.data["min_lcoe"] = lc_min.rename("minimal_lcoe")
 
 
 # %% functions
@@ -321,7 +382,8 @@ def turbine_overnight_cost(power, hub_height, rotor_diameter, year):
 
 def grid_connect_cost(power):
     """
-    Calculates grid connection cost according to §54 (3,4) ElWOG https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=20007045
+    Calculates grid connection cost according to §54 (3,4) ElWOG
+    https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=20007045
     :param power: power in kW
     :return:
     """
@@ -354,6 +416,7 @@ def levelized_cost(power, capacity_factors, overnight_cost, grid_cost, om_fixed,
     :type lifetime: int
     :return: lcoe in EUR/kWh
     """
+
     def discount_factor(discount_rate, period):
         """
         Calculate the discount factor for a given discount rate and period.

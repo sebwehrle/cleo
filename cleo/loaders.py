@@ -6,6 +6,7 @@ import requests
 import yaml
 import zipfile
 import requests
+import numpy as np
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
@@ -89,10 +90,10 @@ def load_weibull_parameters(self, height):
         k.name = "weibull_k"
 
         if a.rio.crs != self.parent.crs:
-            a = a.rio.reproject(self.parent.crs)
+            a = a.rio.reproject(self.parent.crs, nodata=np.nan)
 
         if k.rio.crs != self.parent.crs:
-            k = k.rio.reproject(self.parent.crs)
+            k = k.rio.reproject(self.parent.crs, nodata=np.nan)
 
         if self.parent.region is not None:
             clip_shape = self.parent.get_nuts_region(self.parent.region)

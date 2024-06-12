@@ -70,9 +70,7 @@ class Atlas:
         # automatically instantiate WindAtlas and LandscapeAtlas
         self.wind = _WindAtlas(self)
         self.landscape = _LandscapeAtlas(self)
-        # set properties to attributes in xarray.Datasets
         self._check_and_load_datasets()
-        # TODO. BUG: re-opening atlas netcdfs does not restore wind_turbines
 
     @property
     def path(self):
@@ -152,17 +150,6 @@ class Atlas:
 
             if wind_attrs != landscape_attrs:
                 raise ValueError("Attributes of WindAtlas and LandscapeAtlas do not match")
-
-        self.country = wind_attrs.get('country')
-        self.region = wind_attrs.get('region')
-        self.crs = wind_dataset.rio.crs.to_string()
-
-        if wind_dataset:
-            self.wind.data = wind_dataset
-            wind_dataset.close()
-        if landscape_dataset:
-            self.landscape.data = landscape_dataset
-            landscape_dataset.close()
 
     def add_turbine(self, turbine_name):
         # Check if the YAML file exists
@@ -413,7 +400,7 @@ class _LandscapeAtlas:
             shape = shape.to_crs(self.data.rio.crs)
         # reproject template to single crs if required
         if self.data["template"].rio.crs != self.data.rio.crs:
-            self.data["template"] = self.data["template"].rio.reproject(self.data.rio.crs)
+            self.data["template"] = self.data["template"].rio.reproject(self.data.rio.crs, nodata=np.nan)
 
         raster = self.data["template"].copy()
         for _, row in shape.iterrows():

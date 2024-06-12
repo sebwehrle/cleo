@@ -24,12 +24,16 @@ setuptools.setup(
         "scipy",
         "numpy",
         "rasterio",
+        "gdal",
         "pandas",
         "openpyxl",
         "xarray",
+        "dask",
         "rioxarray",
+        "xarray-spatial",
         "geopandas",
         "pycountry",
         "pint",
+        "pyyaml",
     ]
 )

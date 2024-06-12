@@ -4,7 +4,7 @@ channels:
   - conda-forge
 
 dependencies:
-  - python <= 3.9
+  - python >= 3.9
   - urllib3
   - certifi
   - tqdm
@@ -14,8 +14,12 @@ dependencies:
   - openpyxl
   - netcdf4
   - xarray
+  - dask
   - rasterio
+  - gdal
   - rioxarray
+  - xarray-spatial
   - geopandas
   - pint
   - pycountry
+  - pyyaml

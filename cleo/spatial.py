@@ -47,7 +47,10 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
     data_clipped = data_clipped.rio.write_crs(self.data.rio.crs.to_string())
     for var_name, var in self.data.data_vars.items():
         try:
-            data_clipped[var_name] = var.rio.clip(clip_shape.geometry)
+            if 'x' in var.dims and 'y' in var.dims:
+                data_clipped[var_name] = var.rio.clip(clip_shape.geometry)
+            else:
+                data_clipped[var_name] = var
         except Exception as e:
             logging.error(f"Error clipping data variable {var_name}: {e}")
             continue

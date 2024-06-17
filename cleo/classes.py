@@ -59,10 +59,10 @@ from cleo.assess import (
 # %% classes
 class Atlas:
     def __init__(self, path, country, crs):
-        self.path = path
+        self.path = Path(path)
         self.country = country
         self.region = None
-        self.crs = crs
+        self.crs = self._validate_crs(crs)
         self._wind_turbines = []
         self._setup_directories()
         self._setup_logging()
@@ -78,8 +78,7 @@ class Atlas:
 
     @path.setter
     def path(self, value):
-        value = Path(value)
-        self._path = value
+        self._path = Path(value)
 
     @property
     def region(self):
@@ -95,10 +94,7 @@ class Atlas:
 
     @crs.setter
     def crs(self, value):
-        if pyproj.CRS(value):
-            self._crs = value
-        else:
-            raise ValueError(f"{value} is not a valid coordinate reference system")
+        self._crs = self._validate_crs(value)
 
     @property
     def wind_turbines(self):
@@ -106,16 +102,28 @@ class Atlas:
 
     @wind_turbines.setter
     def wind_turbines(self, turbine_names):
-        if isinstance(turbine_names, str):
-            turbine_names = [turbine_names]
-        elif not isinstance(turbine_names, list):
-            raise ValueError(f"Turbine names must be provided as list or as string")
-
-        for name in turbine_names:
+        new_turbines = [name for name in self._to_list(turbine_names) if name not in self._wind_turbines]
+        for name in new_turbines:
             self.add_turbine(name)
 
     _setup_logging = setup_logging
     _deploy_resources = deploy_resources
+
+    @staticmethod
+    def _validate_crs(crs):
+        try:
+            return pyproj.CRS(crs)
+        except pyproj.exceptions.CRSError:
+            raise ValueError(f"Invalid CRS {crs}")
+
+    @staticmethod
+    def _to_list(value):
+        if isinstance(value, str):
+            return [value]
+        elif isinstance(value, list):
+            return value
+        else:
+            raise ValueError(f"Turbine names must be provided as a list or a string")
 
     def _setup_directories(self) -> None:
         """
@@ -150,17 +158,6 @@ class Atlas:
 
             if wind_attrs != landscape_attrs:
                 raise ValueError("Attributes of WindAtlas and LandscapeAtlas do not match")
-
-        self.country = wind_attrs.get('country')
-        self.region = wind_attrs.get('region')
-        self.crs = wind_dataset.rio.crs.to_string()
-
-        if wind_dataset:
-            self.wind.data = wind_dataset
-            wind_dataset.close()
-        if landscape_dataset:
-            self.landscape.data = landscape_dataset
-            landscape_dataset.close()
 
     def add_turbine(self, turbine_name):
         # Check if the YAML file exists
@@ -273,6 +270,34 @@ class Atlas:
         logging.info(
             f"Atlas saved to {str(self.path / 'data' / 'processed')}")
 
+    def save_datasets(self, overwrite=False):
+        """
+        Save the wind and landscape datasets to NetCDF files.
+
+        :param overwrite: Flag indicating whether to overwrite existing files. Default is False.
+        :type overwrite: bool
+        """
+
+        def format_text(text):
+            umlaut_replacements = {
+                'ä': 'ae', 'ö': 'oe', 'ü': 'ue',
+                'Ä': 'Ae', 'Ö': 'Oe', 'Ü': 'Ue', 'ß': 'ss'
+            }
+            return ''.join(umlaut_replacements.get(char, char) for char in text)
+
+        def generate_filename(name):
+            region = f"_{self.region}" if self.region else ''
+            filename = self.path / "data" / "processed" / f"{name}_{format_text(self.country)}{format_text(region)}.nc"
+            counter = 1
+            while not overwrite and filename.exists():
+                filename = self.path / "data" / "processed" / f"{name}_{format_text(self.country)}{format_text(region)}_{counter}.nc"
+                counter += 1
+            return filename
+
+        for dataset, name in [(self.wind.data, "WindAtlas"), (self.landscape.data, "LandscapeAtlas")]:
+            filename = generate_filename(name)
+            dataset.to_netcdf(str(filename), mode='w', format='NETCDF4', compute=True)
+            logging.info(f"Saved dataset to {filename}")
 
 class _WindAtlas:
     def __init__(self, parent):
@@ -302,12 +327,19 @@ class _WindAtlas:
         power_curve = xr.DataArray(data=power_output, coords={'wind_speed': wind_speed}, dims=['wind_speed'])
         power_curve = power_curve.assign_coords(turbine=turbine_name).expand_dims('turbine')
 
+        # check if turbine is already in the dataset
+        if turbine_name not in self.data.turbine.values:
+            # merge into xarray dataset
+            power_curve.name = 'power_curve'
+            self.data = xr.merge([self.data, power_curve])
+        """    
         if 'power_curve' in self.data:
             power_curve = xr.concat([self.data['power_curve'], power_curve], dim='turbine')
 
         # merge into xarray dataset
         power_curve.name = 'power_curve'
         self.data = xr.merge([self.data, power_curve])
+        """
 
     _load_gwa = load_gwa
     _build_netcdf = build_netcdf

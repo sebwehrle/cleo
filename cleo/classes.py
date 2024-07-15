@@ -47,7 +47,7 @@ from cleo.assess import (
     compute_lcoe,
     compute_mean_wind_speed,
     compute_optimal_power_energy,
-    compute_terrain_roughness_length,
+    compute_wind_shear_coefficient,
     compute_weibull_pdf,
     minimum_lcoe,
     simulate_capacity_factors,
@@ -309,7 +309,7 @@ class _WindAtlas:
     # methods for resource assessment
     compute_air_density_correction = compute_air_density_correction
     compute_mean_wind_speed = compute_mean_wind_speed
-    compute_terrain_roughness_length = compute_terrain_roughness_length
+    compute_wind_shear_coefficient = compute_wind_shear_coefficient
     compute_weibull_pdf = compute_weibull_pdf
     simulate_capacity_factors = simulate_capacity_factors
     compute_lcoe = compute_lcoe

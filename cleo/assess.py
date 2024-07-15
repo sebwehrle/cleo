@@ -155,9 +155,9 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
         return mean_wind_speed_data
 
 
-def compute_terrain_roughness_length(self, chunk_size=None):
+def compute_wind_shear(self, chunk_size=None):
     """
-    Compute terrain roughness length
+    Compute wind shear coefficient
 
     :param self: An instance of the Atlas-class
     :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
@@ -172,8 +172,8 @@ def compute_terrain_roughness_length(self, chunk_size=None):
     u_mean_100 = self.data.mean_wind_speed.sel(height=100)
 
     alpha = (np.log(u_mean_100) - np.log(u_mean_50)) / (np.log(100) - np.log(50))
-    self.data['terrain_roughness_length'] = alpha.squeeze().rename("terrain_roughness_length")
-    logging.info(f'Terrain roughness length for {self.parent.country} computed.')
+    self.data['wind_shear'] = alpha.squeeze().rename("wind_shear")
+    logging.info(f'Wind shear coefficient for {self.parent.country} computed.')
 
 
 def compute_weibull_pdf(self, chunk_size=None):
@@ -200,7 +200,7 @@ def compute_weibull_pdf(self, chunk_size=None):
 
 
 # %% dependent methods
-@requires({'compute_terrain_roughness_length': 'terrain_roughness_length', 'compute_weibull_pdf': 'weibull_pdf'})
+@requires({'compute_wind_shear': 'wind_shear', 'compute_weibull_pdf': 'weibull_pdf'})
 def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     """
     Simulate capacity factors for specified wind turbine models
@@ -216,7 +216,7 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     for turbine_model in self.data.coords["turbine"].values:
         inputs = {
             "weibull_pdf": self.data["weibull_pdf"],
-            "terrain_roughness_length": self.data["terrain_roughness_length"],
+            "wind_shear": self.data["wind_shear"],
             "u_power_curve": self.data.coords["wind_speed"].values,
             "p_power_curve": self.data.power_curve.sel(turbine=turbine_model).values,
             "h_turbine": self.get_turbine_attribute(turbine_model, "hub_height"),
@@ -339,7 +339,7 @@ def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
     return pdf
 
 
-def capacity_factor(weibull_pdf, terrain_roughness_length, u_power_curve, p_power_curve, h_turbine, h_reference=100,
+def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_turbine, h_reference=100,
                     correction_factor=1):
     """
     calculates wind turbine capacity factors given Weibull probability density pdf, roughness factor alpha, wind turbine
@@ -347,7 +347,7 @@ def capacity_factor(weibull_pdf, terrain_roughness_length, u_power_curve, p_powe
     modelling h_reference
     :param correction_factor:
     :param weibull_pdf: probability density function from weibull_probability_density()
-    :param terrain_roughness_length: terrain roughness length
+    :param wind_shear: wind shear coefficient
     :param u_power_curve: power curve wind speed
     :param p_power_curve: power curve output
     :param h_turbine: hub height of wind turbine in m
@@ -356,9 +356,9 @@ def capacity_factor(weibull_pdf, terrain_roughness_length, u_power_curve, p_powe
     """
     power_curve = xr.DataArray(data=p_power_curve, coords={'wind_speed': u_power_curve})
     u_adjusted = xr.DataArray(data=u_power_curve, coords={'wind_speed': u_power_curve}) @ (
-            h_turbine / h_reference) ** terrain_roughness_length
+            h_turbine / h_reference) ** wind_shear
     cap_factor_values = np.trapz(weibull_pdf * power_curve, u_adjusted, axis=0)
-    cap_factor = terrain_roughness_length.copy()
+    cap_factor = wind_shear.copy()
     cap_factor.values = cap_factor_values * correction_factor
     cap_factor.name = "capacity_factor"
     return cap_factor

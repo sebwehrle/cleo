@@ -4,7 +4,7 @@ CLEO is a [xarray](https://docs.xarray.dev)-based Python library for converting 
 the [Global Wind Atlas](https://globalwindatlas.info) to wind resource assessment.
 CLEO can produce data such as
 
-* terrain roughness length
+* wind shear
 * air density correction
 * mean wind speed at various heights
 * capacity factor of wind turbines at their hub height
@@ -48,7 +48,7 @@ Further turbines can be added as a list. Additional turbines require a data file
 
 #### Methods
 The `WindAtlas`-subclass provides several methods, including:
-* `compute_terrain_roughness_length()`: computes terrain roughness length
+* `compute_wind_shear()`: computes wind shear factor
 * `compute_air_density_correction()`: computes air density correction factor alpha
 * `compute_weibull_pdf()`: computes a Weibull pdf of wind speeds
 * `simulate_capacity_factors()`: simulate capacity factors of the wind turbines in `atlas.wind_turbine`. 

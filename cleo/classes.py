@@ -164,20 +164,37 @@ class Atlas:
         else:
             logging.warning(f"Turbine {turbine_name} already added.")
 
-    def get_nuts_region(self, region):
+    def get_nuts_region(self, region, merged_name=None):
         nuts_dir = self.path / "data" / "nuts"
-        nuts_shape = list(nuts_dir.rglob('*.shp'))[0]
+        nuts_shape = next(nuts_dir.rglob('*.shp'))
         nuts = gpd.read_file(nuts_shape)
-        # convert three-digit country code to two-digit country code
+
+        # Convert three-digit country code to two-digit country code
         alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
-        # pre-filter possible region names based on two-digit country code
-        feasible_regions = nuts.loc[nuts['CNTR_CODE'] == alpha_2, ["LEVL_CODE", "NAME_LATN"]]
-        if feasible_regions["NAME_LATN"].str.contains(region).any():
-            clip_shape = nuts.loc[nuts["NAME_LATN"] == region, :]
-            clip_shape = clip_shape.to_crs(self.crs)
-            return clip_shape
+
+        # Filter regions by country code
+        feasible_regions = nuts[nuts['CNTR_CODE'] == alpha_2]
+
+        if isinstance(region, str):
+            region_list = [region]
+        elif isinstance(region, list):
+            region_list = region
         else:
-            raise ValueError(f"{region} is not a valid region in {self.country}.")
+            raise TypeError("Region must be a string or a list of strings.")
+
+        # Find invalid regions
+        invalid_regions = [r for r in region_list if r not in feasible_regions["NAME_LATN"].values]
+        if invalid_regions:
+            raise ValueError(f"{', '.join(invalid_regions)} are not valid regions in {self.country}.")
+
+        # Select and merge shapes
+        selected_shapes = feasible_regions[feasible_regions["NAME_LATN"].isin(region_list)]
+        merged_shape = selected_shapes.dissolve()
+
+        # Set the name for the merged region
+        merged_shape["NAME_LATN"] = merged_name if merged_name else ", ".join(region_list)
+
+        return merged_shape.reset_index(drop=True)
 
     def get_nuts_country(self):
         nuts_dir = self.path / "data" / "nuts"
@@ -187,14 +204,15 @@ class Atlas:
         clip_shape = nuts.loc[(nuts["CNTR_CODE"] == alpha_2) & (nuts["LEVL_CODE"] == 0), :]
         return clip_shape
 
-    def clip_to_nuts(self, region, inplace=True):
+    def clip_to_nuts(self, region, merged_name=None, inplace=True):
         """
         Clips all Atlas datasets to the specified NUTS region
+        :param merged_name: name string for union of merged shapes
         :param region: latin name of a NUTS region.
         :param inplace: boolean flag indicating whether clipped data should be updated inplace. Default is True
         :return:
         """
-        clip_shape = self.get_nuts_region(region)
+        clip_shape = self.get_nuts_region(region, merged_name)
         # clip both Datasets to clip_shape
         wind_dataset, _ = clip_to_geometry(self.wind, clip_shape)
         landscape_dataset, _ = clip_to_geometry(self.landscape, clip_shape)

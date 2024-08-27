@@ -6,6 +6,7 @@ import rasterio.crs
 import xarray as xr
 
 from typing import Union
+from pathlib import Path
 
 
 # %% methods
@@ -105,3 +106,69 @@ def reproject(self, new_crs: str) -> None:
             self.crs = rasterio.crs.CRS.from_string(new_crs)
         except Exception as e:
             logging.error(f"Error during reprojecting atlas: {e}")
+
+
+# %%
+def save_to_geotiff(da: xr.DataArray, crs: str, save_path: Path, raster_name: str, nodata_value: int = -9999):
+    """
+    Saves the xarray.DataArray as a GeoTIFF file, with handling for NaN values and coordinate reference system (CRS)
+    information.
+
+    This function processes an `xarray.DataArray` to replace any NaN values with a specified 'no data' value,
+    sets this value in the GeoTIFF metadata, and assigns a coordinate reference system (CRS) before saving the result
+    as a GeoTIFF file. The function also ensures that the output file has a `.tif` or `.tiff` extension.
+
+    Parameters:
+    -----------
+    da : xr.DataArray
+        The input DataArray containing the raster data to be saved as a GeoTIFF. This array may contain NaN values
+        which will be replaced by the specified 'no data' value.
+
+    crs : str
+        The coordinate reference system (CRS) to assign to the GeoTIFF.
+
+    save_path : Path
+        The directory path where the GeoTIFF file will be saved.
+
+    raster_name : str
+        The name of the output GeoTIFF file. If this name does not already include a `.tif` or `.tiff` extension,
+        the function will automatically append `.tif`.
+
+    nodata_value : int, optional
+        The value to use for replacing NaNs in the DataArray and to be set as the 'no data' value
+        in the GeoTIFF metadata. The default is -9999.
+
+    Returns:
+    --------
+    None
+
+    Raises:
+    -------
+    ValueError:
+        If the input DataArray does not contain any NaN values but a 'no data' value is still expected to be set.
+
+    """
+    # Check if DataArray is two-dimensional
+    if not (len(set(da.dims)) == 2) & (set(da.dims) == {'x', 'y'}):
+        raise TypeError('Provided DataArray has more than two dimensions.')
+
+    # Set up nodata value
+    if da.isnull().any():
+
+        # Replace NaNs with nodata value
+        da = da.fillna(nodata_value)
+
+        # Write the default nodata value for the raster
+        da.rio.write_nodata(nodata_value, inplace=True)
+
+    else:
+        raise ValueError('No NaN values found in DataArray. Nodata value is not set.')
+
+    # Write CRS for the raster
+    da.rio.write_crs(crs, inplace=True)
+
+    if not raster_name.lower().endswith(('.tif', '.tiff')):
+        raster_name += '.tif'
+
+    # Save raster as GeoTIFF
+    da.rio.to_raster(save_path / raster_name)

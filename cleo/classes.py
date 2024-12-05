@@ -41,7 +41,7 @@ from cleo.loaders import (
 )
 
 from cleo.spatial import (
-    clip_to_geometry,
+    clip_to_geometry, reproject,
 )
 
 from cleo.assess import (
@@ -164,7 +164,7 @@ class Atlas:
         else:
             logging.warning(f"Turbine {turbine_name} already added.")
 
-    def get_nuts_region(self, region, merged_name=None):
+    def get_nuts_region(self, region, merged_name=None, to_atlascrs=True):
         nuts_dir = self.path / "data" / "nuts"
         nuts_shape = next(nuts_dir.rglob('*.shp'))
         nuts = gpd.read_file(nuts_shape)
@@ -193,8 +193,12 @@ class Atlas:
 
         # Set the name for the merged region
         merged_shape["NAME_LATN"] = merged_name if merged_name else ", ".join(region_list)
+        merged_shape = merged_shape.reset_index(drop=True)
 
-        return merged_shape.reset_index(drop=True)
+        if to_atlascrs:
+            merged_shape = merged_shape.to_crs(self.crs)
+
+        return merged_shape
 
     def get_nuts_country(self):
         nuts_dir = self.path / "data" / "nuts"

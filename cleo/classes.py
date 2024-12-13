@@ -1,19 +1,18 @@
 # %% imports
 import os
-import numpy as np
-import xarray as xr
-import pyproj
-import rasterio.crs
-import geopandas as gpd
+import re
 import yaml
+import pyproj
 import logging
 import zipfile
+import datetime
+import rasterio.crs
+import numpy as np
+import xarray as xr
+import geopandas as gpd
 import pycountry as pct
 from pathlib import Path
 from xrspatial import proximity
-from tempfile import NamedTemporaryFile
-
-from dask.diagnostics import ProgressBar
 
 from cleo.class_helpers import (
     build_netcdf,
@@ -67,10 +66,10 @@ class Atlas:
         self._setup_directories()
         self._setup_logging()
         self._deploy_resources()
+        self.index_file = self.path / "data" / "index.txt"
         # automatically instantiate WindAtlas and LandscapeAtlas
         self.wind = _WindAtlas(self)
         self.landscape = _LandscapeAtlas(self)
-        self._check_and_load_datasets()
 
     @property
     def path(self):
@@ -129,27 +128,78 @@ class Atlas:
             if not path.is_dir():
                 path.mkdir(parents=True)
 
-    def _check_and_load_datasets(self) -> None:
+        # Create the index file in the data directory if it doesn't exist
+        index_file_path = self.path / "data" / "index.txt"
+        if not index_file_path.exists():
+            index_file_path.touch()  # Create an empty file
+            logging.info(f"Created new index file: {index_file_path}")
+
+    def load(self, user_string = None, *, region='None', scenario='default', timestamp='latest'):
         """
-        Check for the existence of saved NetCDF files for WindAtlas and LandscapeAtlas. If they exist, load the datasets
-        and set the properties of the Atlas class.
+        Load the datasets for the specified country, region, and scenario. If no region is specified, the datasets for
+        the entire country are loaded. If no scenario is specified, the default scenario is loaded.
         """
-        wind_atlas_path = self.path / "data" / "processed" / f"WindAtlas_{self.country}.nc"
-        landscape_atlas_path = self.path / "data" / "processed" / f"LandscapeAtlas_{self.country}.nc"
+        filename_pattern = re.compile(
+            r"(?P<type>[A-Za-z]+Atlas)_(?P<country>[A-Z]+)_(?P<region>[^\d_]+)_(?P<scenario>[A-Za-z0-9]+)_(?P<timestamp>\d{8}T\d{6})\.nc"
+        )
+        # Parse the user string
+        if user_string:
+            match = filename_pattern.match(user_string)
+            if not match:
+                raise ValueError(f"{user_string} does not match the expected format.")
+            metadata = match.groupdict()
+            region = metadata["region"]
+            scenario = metadata["scenario"]
+            timestamp = metadata["timestamp"]
+            if metadata["country"] != self.country:
+                raise ValueError(f"Country code in {user_string} does not match the country code of the Atlas.")
 
-        # check if datasets exist and open
-        if wind_atlas_path.is_file():
-            wind_dataset = xr.open_dataset(wind_atlas_path)
+        # locate the appropriate directory
+        if scenario != 'default':
+            directory = self.path / "data" / "processed" / scenario
+            if not directory.exists():
+                raise FileNotFoundError(f"Scenario directory for {scenario} does not exist.")
+        else:
+            directory = self.path / "data" / "processed"
 
-        if landscape_atlas_path.is_file():
-            landscape_dataset = xr.open_dataset(landscape_atlas_path)
+        # find matching files
+        matching_files = []
+        for file in directory.glob(f"*.nc"):
+            match = filename_pattern.match(file.name)
+            if match:
+                file_metadata = match.groupdict()
+                if (
+                        file_metadata["country"] == self.country
+                        and file_metadata["region"] == region
+                        and file_metadata["scenario"] == scenario
+                        and (timestamp == 'latest' or file_metadata["timestamp"] == timestamp)
+                ):
+                    matching_files.append((file, file_metadata))
 
-        if wind_dataset and landscape_dataset:
-            wind_attrs = wind_dataset.attrs
-            landscape_attrs = landscape_dataset.attrs
+        if not matching_files:
+            raise FileNotFoundError(f"No matching files found in {directory}.")
 
-            if wind_attrs != landscape_attrs:
-                raise ValueError("Attributes of WindAtlas and LandscapeAtlas do not match")
+        if timestamp == 'latest':
+            matching_files.sort(key=lambda x: x[1]["timestamp"], reverse=True)
+
+        for file, metadata in matching_files:
+            subclass = metadata["type"]
+            if subclass == "WindAtlas":
+                wind_data = xr.open_dataset(file, engine="netcdf4")
+                self.wind.data = wind_data
+                self._wind_turbines = self.wind.data.coords['turbine'].values.tolist()
+                self._crs = f"epsg:{self.wind.data.rio.crs.to_epsg()}"
+                if region != 'None':
+                    self._region = region
+                logging.info(f"Wind dataset loaded successfully: {file}")
+            elif subclass == "LandscapeAtlas":
+                landscape_data = xr.open_dataset(file, engine="netcdf4")
+                self.landscape.data = landscape_data
+                logging.info(f"Landscape dataset loaded successfully: {file}")
+            else:
+                logging.warning(f"Unknown subclass: {subclass}")
+
+        return self
 
     def add_turbine(self, turbine_name):
         # Check if the YAML file exists
@@ -235,54 +285,105 @@ class Atlas:
         else:
             return wind_dataset, landscape_dataset
 
-    def write_netcdfs(self, complevel=4):
+    def save(self, scenario=None):
         """
-        Save NetCDF data safely to a file
+        Save NetCDF files for WindAtlas and LandscapeAtlas, adding a timestamp for versioning.
         """
-        def save_tempfile(dataset, folder):
-
-            with NamedTemporaryFile(suffix=".tmp", dir=folder, delete=False) as tmp_file:
-                tmp_file_path = Path(tmp_file.name)
-
-            logging.debug(f"Writing data to {tmp_file_path} ...")
-            encoding = {}
-
-            for var_name, var in dataset.variables.items():
-                encoding[var_name] = {"zlib": True, "complevel": complevel}
-
-            write_job = dataset.to_netcdf(
-                str(tmp_file_path), compute=False, format="NETCDF4", engine="netcdf4", encoding=encoding)
-
-            with ProgressBar():
-                write_job.compute()
-
-            return tmp_file_path
-
-        tmp_wind = save_tempfile(self.wind.data, self.path / "data" / "processed")
-        tmp_landscape = save_tempfile(self.landscape.data, self.path / "data" / "processed")
-
-        # close and unlink target files if they exist
-        if self.region is None:
-            wind_atlas_file = self.path / "data" / "processed" / f"WindAtlas_{self.country}.nc"
-            landscape_atlas_file = self.path / "data" / "processed" / f"LandscapeAtlas_{self.country}.nc"
+        # create directory if non-existent
+        if not (self.path / 'data' / 'processed').is_dir():
+            self.path.mkdir(parents=True, exist_ok=True)
+        if scenario:
+            savepath = self.path / 'data' / 'processed' / scenario
+            savepath.mkdir(parents=True, exist_ok=True)
         else:
-            wind_atlas_file = self.path / "data" / "processed" / f"WindAtlas_{self.country}_{self.region}.nc"
-            landscape_atlas_file = self.path / "data" / "processed" / f"LandscapeAtlas_{self.country}_{self.region}.nc"
+            savepath = self.path / 'data' / 'processed'
 
-        if wind_atlas_file.exists():
-            self.wind.data.close()
-            wind_atlas_file.unlink()
+        # Get the current timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
 
-        if landscape_atlas_file.exists():
-            self.landscape.data.close()
-            landscape_atlas_file.unlink()
+        # Define file paths with scenario and timestamp
+        scenario_suffix = f"_{scenario}" if scenario else ""
+        wind_file = savepath / f"WindAtlas_{self.country}_{self.region or 'None'}{scenario_suffix}_{timestamp}.nc"
+        landscape_file = savepath / f"LandscapeAtlas_{self.country}_{self.region or 'None'}{scenario_suffix}_{timestamp}.nc"
 
-        # rename temporary files
-        tmp_wind.rename(wind_atlas_file)
-        tmp_landscape.rename(landscape_atlas_file)
+        # Save datasets
+        try:
+            self.wind.data.to_netcdf(wind_file, format="NETCDF4", engine="netcdf4")
+            self.landscape.data.to_netcdf(landscape_file, format="NETCDF4", engine="netcdf4")
+            logging.info(f"Datasets saved successfully: {wind_file}, {landscape_file}")
+        except Exception as e:
+            logging.error(f"Failed to save dataset: {e}")
+
+        # Log to index
+        index_entries = [
+            f"WindAtlas:{self.country}:{self.region or 'None'}:{scenario or 'default'}:{wind_file}:{timestamp}\n",
+            f"LandscapeAtlas:{self.country}:{self.region or 'None'}:{scenario or 'default'}:{landscape_file}:{timestamp}\n",
+        ]
+        # write to index file
+        try:
+            with open(self.index_file, "a") as f:
+                f.writelines(index_entries)
+            logging.info(f"index updated with entries: {index_entries}")
+        except Exception as e:
+            logging.error(f"Failed to update index file: {e}")
+            raise
+
+    def _read_index(self):
+        """Read the index file into a list of tuples."""
+        if not isinstance(self.index_file, Path):
+            self.index_file = Path(self.index_file)
+
+        if not self.index_file.is_file():
+            logging.warning("index file not found.")
+            return []
+
+        with open(self.index_file, "r") as f:
+            index_list = [line.strip().split(":") for line in f]
+            logging.info(f"index list: {index_list}")
+
+        return [tuple(entry) for entry in index_list]
+
+    def _write_index(self, entries):
+        """Write updated entries to the index file."""
+        with open(self.index_file, "w") as f:
+            for entry in entries:
+                f.write(":".join(entry) + "\n")
+
+    def cleanup_datasets(self, scenario=None):
+        """
+        Retain only the most recent version of the dataset for the current country, region, and scenario.
+        """
+        entries = self._read_index()
+
+        # Filter entries for the current country, region, and scenario
+        filtered_entries = [
+            entry for entry in entries
+            if entry[1] == self.country and entry[2] == (self.region or "None") and
+               (scenario is None or entry[3] == scenario)
+        ]
+
+        # Group by subclass (WindAtlas, LandscapeAtlas) and keep the latest
+        latest_entries = {}
+        for entry in filtered_entries:
+            subclass = entry[0]
+            if subclass not in latest_entries or entry[5] > latest_entries[subclass][5]:
+                latest_entries[subclass] = entry
+
+        # Delete older versions
+        for entry in filtered_entries:
+            if entry not in latest_entries.values():
+                file_path = Path(entry[4])
+                if file_path.exists():
+                    file_path.unlink()
+
+        # Update the index
+        remaining_entries = [
+                                entry for entry in entries if entry not in filtered_entries
+                            ] + list(latest_entries.values())
+        self._write_index(remaining_entries)
 
         logging.info(
-            f"Atlas saved to {str(self.path / 'data' / 'processed')}")
+            f"Cleanup complete for {self.country}, region {self.region or 'None'}, scenario {scenario or 'all'}.")
 
 
 class _WindAtlas:

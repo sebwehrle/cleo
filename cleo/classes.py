@@ -256,6 +256,7 @@ class Atlas:
         nuts = gpd.read_file(nuts_shape)
         alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
         clip_shape = nuts.loc[(nuts["CNTR_CODE"] == alpha_2) & (nuts["LEVL_CODE"] == 0), :]
+        clip_shape = clip_shape.to_crs(self.crs)
         return clip_shape
 
     def clip_to_nuts(self, region, merged_name=None, inplace=True):

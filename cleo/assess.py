@@ -305,7 +305,7 @@ def compute_optimal_power_energy(self):
     least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
     energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
     energy = energy.assign_coords({'turbine': "min_lcoe"})
-    energy = energy * power * 8760 / 10 ** 6
+    energy = energy * power * 8766 / 10 ** 6
     # TODO: set unit on energy
     self.data["optimal_energy"] = energy
 

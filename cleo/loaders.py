@@ -1,5 +1,6 @@
 # helpers for the Atlas class
 # %% imports
+import json
 import zipfile
 
 import requests
@@ -38,10 +39,17 @@ def fetch_gwa_crs(iso3):
     }
     response = requests.get(url, headers=headers)
     response.raise_for_status()
-    data = response.json()
+    payload = response.json()
+
+    # Handle double-encoded JSON (response.json() returns a string containing JSON)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse GWA GeoJSON response for country {iso3}: {e}")
 
     try:
-        crs = data["crs"]["properties"]["name"]
+        crs = payload["crs"]["properties"]["name"]
     except (KeyError, TypeError):
         raise ValueError(f"CRS missing from GWA GeoJSON response for country {iso3}")
 
@@ -68,6 +76,82 @@ def ensure_crs_from_gwa(ds, iso3):
 
     crs = fetch_gwa_crs(iso3)
     return ds.rio.write_crs(crs)
+
+
+def load_elevation(base_dir, iso3, reference_da):
+    """
+    Load elevation data with legacy-file preference.
+
+    If local elevation_w_bathymetry.tif exists and can be opened, use it.
+    Otherwise, build elevation from Copernicus DEM tiles.
+
+    :param base_dir: Base directory (Path) containing country data folders
+    :param iso3: ISO 3166-1 alpha-3 country code
+    :param reference_da: Reference DataArray for CRS/bounds/grid alignment
+    :return: Elevation DataArray aligned to reference grid
+    :rtype: xarray.DataArray
+    :raises FileNotFoundError: If neither legacy file nor CopDEM tiles available
+    """
+    from pathlib import Path
+    from cleo.copdem import download_copdem_tiles_for_bbox, build_copdem_elevation_like
+
+    path_raw_country = Path(base_dir) / "data" / "raw" / iso3
+    legacy_path = path_raw_country / f"{iso3}_elevation_w_bathymetry.tif"
+
+    # Try legacy file first
+    if legacy_path.exists():
+        try:
+            elevation = rxr.open_rasterio(legacy_path)
+            elevation = elevation.rename("elevation").squeeze()
+            elevation = ensure_crs_from_gwa(elevation, iso3)
+            logging.info(f"Loaded legacy elevation from {legacy_path}")
+            return elevation
+        except Exception as e:
+            logging.warning(f"Legacy elevation file exists but failed to open: {e}")
+
+    # Fall back to CopDEM
+    logging.info(f"Legacy elevation not available, building from Copernicus DEM")
+
+    # If reference_da lacks CRS, try to use air-density file as reference
+    if reference_da.rio.crs is None:
+        air_density_path = path_raw_country / f"{iso3}_air-density_100.tif"
+        if air_density_path.exists():
+            try:
+                reference_da = rxr.open_rasterio(air_density_path).squeeze(drop=True)
+                logging.info(f"Using air-density raster as CRS reference: {air_density_path}")
+            except Exception as e:
+                raise ValueError(
+                    f"Reference DataArray has no CRS and air-density file failed to open: {e}"
+                )
+        else:
+            raise ValueError(
+                f"Reference DataArray has no CRS and air-density reference file not found: {air_density_path}"
+            )
+
+        if reference_da.rio.crs is None:
+            raise ValueError(
+                f"Reference DataArray has no CRS and air-density file also lacks CRS: {air_density_path}"
+            )
+
+    # Get bounds from reference raster
+    bounds = reference_da.rio.bounds()
+    min_lon, min_lat, max_lon, max_lat = bounds
+
+    # Download tiles
+    tile_paths = download_copdem_tiles_for_bbox(
+        base_dir,
+        iso3,
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
+    )
+
+    # Build elevation matched to reference
+    elevation = build_copdem_elevation_like(reference_da, tile_paths)
+    logging.info(f"Built elevation from {len(tile_paths)} Copernicus DEM tiles")
+
+    return elevation
 
 
 # %% methods
@@ -202,8 +286,11 @@ def load_gwa(self):
                 try:
                     if not fpath.is_file():
                         durl = f"{url}/{c}/{ly}/{h}"
-                        download_file(durl, fpath)
-                        logging.info(f'Download of {fname} from {durl} complete')
+                        success = download_file(durl, fpath)
+                        if success:
+                            logging.info(f'Download of {fname} from {durl} complete')
+                        else:
+                            logging.info(f'Download of {fname} from {durl} failed')
                 except requests.RequestException as e:
                     logging.error(f'Error downloading {fname}: {e}')
 
@@ -214,8 +301,11 @@ def load_gwa(self):
             try:
                 if not fpath.is_file():
                     durl = f'{url}/{c}/{g}'
-                    download_file(durl, fpath)
-                    logging.info(f'Download of {fname} from {durl} complete')
+                    success = download_file(durl, fpath)
+                    if success:
+                        logging.info(f'Download of {fname} from {durl} complete')
+                    else:
+                        logging.info(f'Download of {fname} from {durl} failed')
             except requests.RequestException as e:
                 logging.error(f'Error downloading {fname}: {e}')
 

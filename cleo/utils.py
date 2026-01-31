@@ -275,7 +275,7 @@ def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=Non
     # Check if the file already exists and if we should overwrite it
     if Path(save_to).is_file() and not overwrite:
         logging.info(f"File {save_to} already exists and overwrite is set to False.")
-        return
+        return True
     # Set up the proxies for the request
     proxies = {"http": proxy, "https": proxy} if proxy else None
     auth = HTTPProxyAuth(proxy_user, proxy_pass) if proxy_user and proxy_pass else None

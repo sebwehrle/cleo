@@ -26,14 +26,22 @@ CLEO's functions are documented in-line.
 We are working towards an improved documentation.
 
 ### How to get started
-To get started, initialize a `Atlas`-class object via
+To get started, initialize an `Atlas`-class object via
 ```Python
-from cleo.classes import Atlas
+from cleo import Atlas
 
-atlas = Atlas("path/to/base/dir", "XYZ", "epsg:1234")
+atlas = Atlas("/path/to/cleo-workdir", "AUT", "EPSG:4326")
+
+# Compute wind resource metrics
+atlas.wind.compute_wind_shear_coefficient()
+atlas.wind.compute_air_density_correction()
+atlas.wind.compute_mean_wind_speed(100)
 ```
-where `XYZ` is a 3-digit ISO country code as used by the GWA API and `epsg:1234` specifies a coordinate reference system.
-Upon initialization, the class will download data for `XYZ`.
+where `AUT` is a 3-digit ISO country code as used by the GWA API and `EPSG:4326` specifies a coordinate reference system.
+Upon initialization, the class will download data for the specified country.
+
+**GWA v4 compatibility:** v4 rasters may lack CRS metadata; cleo infers CRS from country GeoJSON metadata automatically. Elevation uses legacy `elevation_w_bathymetry` if present, otherwise falls back to Copernicus DEM.
+
 The class wraps two `xarray.Dataset`s, one for wind resources and one for further spatial characteristics.
 The corresponding data is accessible through `atlas.wind.data` and `atlas.landscape.data`, respectively
 
@@ -48,7 +56,7 @@ Further turbines can be added as a list. Additional turbines require a data file
 
 #### Methods
 The `WindAtlas`-subclass provides several methods, including:
-* `compute_wind_shear()`: computes wind shear coefficient
+* `compute_wind_shear_coefficient()`: computes wind shear coefficient
 * `compute_air_density_correction()`: computes air density correction factor alpha
 * `compute_weibull_pdf()`: computes a Weibull pdf of wind speeds
 * `simulate_capacity_factors()`: simulate capacity factors of the wind turbines in `atlas.wind_turbine`. 

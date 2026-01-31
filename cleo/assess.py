@@ -80,14 +80,16 @@ def compute_air_density_correction(self, chunk_size=None):
         rho_correction_factor = rho_correction_factor.squeeze().rename("air_density_correction_factor")
         return rho_correction_factor
 
-    from cleo.loaders import ensure_crs_from_gwa
+    from cleo.loaders import load_elevation
 
+    # Use A_100 raster as reference for grid alignment
     path_raw_country = self.parent.path / "data" / "raw" / f"{self.parent.country}"
-    elevation = rxr.open_rasterio(path_raw_country / f"{self.parent.country}_elevation_w_bathymetry.tif")
-    elevation = elevation.rename("elevation").squeeze()
+    reference_da = rxr.open_rasterio(
+        path_raw_country / f"{self.parent.country}_combined-Weibull-A_100.tif"
+    ).squeeze()
 
-    # Ensure CRS is set before reprojection
-    elevation = ensure_crs_from_gwa(elevation, self.parent.country)
+    # Load elevation with legacy-file preference, falling back to CopDEM
+    elevation = load_elevation(self.parent.path, self.parent.country, reference_da)
 
     if elevation.rio.crs != self.parent.crs:
         elevation = elevation.rio.reproject(self.parent.crs, nodata=np.nan).squeeze()
@@ -119,7 +121,10 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     :param inplace: If True, add mean wind speed to Dataset
     """
 
-    # TODO: re-computing at a given height adds dataarray a second time (with duplicate height-coord)
+    # Early return if height already exists (idempotent)
+    if "mean_wind_speed" in self.data and height in self.data["mean_wind_speed"].coords["height"].values:
+        logging.info(f"Mean wind speed at height '{height} m' already exists, skipping computation")
+        return
 
     def calculate_mean_wind_speed(weibull_a, weibull_k):
         """
@@ -147,17 +152,11 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
 
     if "mean_wind_speed" not in self.data:
         self.data["mean_wind_speed"] = mean_wind_speed_data
-    elif height not in self.data["mean_wind_speed"].coords["height"].values:
-        mean_wind_speed_concatenated = xr.concat([self.data["mean_wind_speed"], mean_wind_speed_data], dim="height")
-        self.data = self.data.drop_vars(["mean_wind_speed", "height"])
-        self.data["mean_wind_speed"] = mean_wind_speed_concatenated
-    elif height in self.data["mean_wind_speed"].coords["height"].values and inplace:
-        mean_wind_speed_concatenated = xr.concat([self.data["mean_wind_speed"], mean_wind_speed_data], dim="height")
-        self.data = self.data.drop_vars(["mean_wind_speed", "height"])
-        self.data["mean_wind_speed"] = mean_wind_speed_concatenated
     else:
-        logging.warning(f"Mean wind speed at height '{height} m' already exists")
-        return mean_wind_speed_data
+        # Height doesn't exist yet (checked by early return), so concat
+        mean_wind_speed_concatenated = xr.concat([self.data["mean_wind_speed"], mean_wind_speed_data], dim="height")
+        self.data = self.data.drop_vars(["mean_wind_speed", "height"])
+        self.data["mean_wind_speed"] = mean_wind_speed_concatenated
 
 
 def compute_wind_shear_coefficient(self, chunk_size=None):

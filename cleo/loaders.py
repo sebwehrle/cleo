@@ -16,6 +16,60 @@ from cleo.assess import turbine_overnight_cost
 from cleo.utils import download_file
 
 
+# %% CRS inference from GWA
+def fetch_gwa_crs(iso3):
+    """
+    Fetch CRS from Global Wind Atlas GeoJSON API for a given country.
+
+    :param iso3: ISO 3166-1 alpha-3 country code
+    :type iso3: str
+    :return: CRS string from the GeoJSON response
+    :rtype: str
+    :raises ValueError: If CRS is missing from the GeoJSON response
+    :raises requests.RequestException: If the HTTP request fails
+    """
+    url = f"https://globalwindatlas.info/api/gdal/country/geojson?areaId={iso3}"
+    headers = {
+        "Accept": "application/geo+json,application/json;q=0.9,*/*;q=0.8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://globalwindatlas.info",
+        "Referer": "https://globalwindatlas.info/en/download/gis-files",
+        "User-Agent": "Mozilla/5.0",
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+
+    try:
+        crs = data["crs"]["properties"]["name"]
+    except (KeyError, TypeError):
+        raise ValueError(f"CRS missing from GWA GeoJSON response for country {iso3}")
+
+    return crs
+
+
+def ensure_crs_from_gwa(ds, iso3):
+    """
+    Ensure a raster DataArray has a CRS set, fetching from GWA if needed.
+
+    If ds.rio.crs is already set, returns ds unchanged.
+    If ds.rio.crs is None, fetches CRS from GWA GeoJSON API and writes it.
+
+    :param ds: Raster DataArray or Dataset
+    :type ds: xarray.DataArray or xarray.Dataset
+    :param iso3: ISO 3166-1 alpha-3 country code
+    :type iso3: str
+    :return: DataArray/Dataset with CRS set
+    :rtype: xarray.DataArray or xarray.Dataset
+    :raises ValueError: If CRS is missing from the GeoJSON response
+    """
+    if ds.rio.crs is not None:
+        return ds
+
+    crs = fetch_gwa_crs(iso3)
+    return ds.rio.write_crs(crs)
+
+
 # %% methods
 def get_cost_assumptions(self, attribute_name):
     """
@@ -88,6 +142,10 @@ def load_weibull_parameters(self, height):
         k = rxr.open_rasterio(path_raw_country / f"{self.parent.country}_combined-Weibull-k_{height}.tif").chunk("auto")
         a.name = "weibull_a"
         k.name = "weibull_k"
+
+        # Ensure CRS is set before reprojection
+        a = ensure_crs_from_gwa(a, self.parent.country)
+        k = ensure_crs_from_gwa(k, self.parent.country)
 
         if a.rio.crs != self.parent.crs:
             a = a.rio.reproject(self.parent.crs, nodata=np.nan)

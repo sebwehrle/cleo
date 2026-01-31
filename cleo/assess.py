@@ -80,9 +80,14 @@ def compute_air_density_correction(self, chunk_size=None):
         rho_correction_factor = rho_correction_factor.squeeze().rename("air_density_correction_factor")
         return rho_correction_factor
 
+    from cleo.loaders import ensure_crs_from_gwa
+
     path_raw_country = self.parent.path / "data" / "raw" / f"{self.parent.country}"
     elevation = rxr.open_rasterio(path_raw_country / f"{self.parent.country}_elevation_w_bathymetry.tif")
     elevation = elevation.rename("elevation").squeeze()
+
+    # Ensure CRS is set before reprojection
+    elevation = ensure_crs_from_gwa(elevation, self.parent.country)
 
     if elevation.rio.crs != self.parent.crs:
         elevation = elevation.rio.reproject(self.parent.crs, nodata=np.nan).squeeze()

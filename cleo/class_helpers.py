@@ -25,6 +25,10 @@ def build_netcdf(self, atlas_type):
         # get coords from GWA
         with rxr.open_rasterio(path_raw / f"{self.parent.country}_combined-Weibull-A_100.tif",
                                parse_coordinates=True).squeeze() as weibull_a_100:
+            # Ensure CRS is set before using it
+            from cleo.loaders import ensure_crs_from_gwa
+            weibull_a_100 = ensure_crs_from_gwa(weibull_a_100, self.parent.country)
+
             self.data = xr.Dataset(coords=weibull_a_100.coords)
             self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
 

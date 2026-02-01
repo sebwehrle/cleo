@@ -62,21 +62,21 @@ def bbox(self):
     """
     Get the bounding box of the object
     :param self: an object
-    :return: (xmin, ymin, xmax, ymax)
+    :return: (xmin, ymin, xmax, ymax) as Python floats
     """
     if hasattr(self, 'coords') and hasattr(self.coords, '__getitem__'):
         return (
-            self.coords["x"].min(),
-            self.coords["y"].min(),
-            self.coords["x"].max(),
-            self.coords["y"].max(),
+            float(self.coords["x"].min().item()),
+            float(self.coords["y"].min().item()),
+            float(self.coords["x"].max().item()),
+            float(self.coords["y"].max().item()),
         )
     elif hasattr(self, 'data') and hasattr(self.data, 'coords') and hasattr(self.data.coords, '__getitem__'):
         return (
-            self.data.coords["x"].min(),
-            self.data.coords["y"].min(),
-            self.data.coords["x"].max(),
-            self.data.coords["y"].max(),
+            float(self.data.coords["x"].min().item()),
+            float(self.data.coords["y"].min().item()),
+            float(self.data.coords["x"].max().item()),
+            float(self.data.coords["y"].max().item()),
         )
     else:
         raise ValueError("Unsupported object type for bbox")

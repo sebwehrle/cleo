@@ -246,16 +246,17 @@ def compute_chunked(self, processing_func, chunk_size, **kwargs):
 
     :param self: an instance of the Atlas-class
     :param processing_func: processing_func (callable): A function that takes data chunks and properties as input and
-    returns processed data.
+    returns processed data (DataArray or Dataset).
     :type processing_func: Callable
     :param chunk_size: Size of the chunks along x and y coordinates for processing.
     :type chunk_size: int
     :param kwargs: inputs to the processing_func
     :type kwargs: dict
-    :return Reassembled dataset containing the processed data.
-    :rtype xarray.Dataset
+    :return Reassembled data matching the type returned by processing_func.
+    :rtype xarray.Dataset or xarray.DataArray
     """
-    reassembled_data = xr.Dataset()
+    reassembled_data = None
+    returns_dataarray = None
 
     x_chunks = range(0, len(self.data.coords["x"]), chunk_size)
     y_chunks = range(0, len(self.data.coords["y"]), chunk_size)
@@ -279,15 +280,35 @@ def compute_chunked(self, processing_func, chunk_size, **kwargs):
 
             for future in futures:
                 processed_chunk = future.result()
-                reassembled_data = xr.merge([reassembled_data, processed_chunk])
+
+                # Detect return type from first chunk
+                if returns_dataarray is None:
+                    returns_dataarray = isinstance(processed_chunk, xr.DataArray)
+                    if returns_dataarray:
+                        reassembled_data = processed_chunk
+                    else:
+                        reassembled_data = xr.Dataset()
+
+                if returns_dataarray:
+                    # Merge DataArrays
+                    reassembled_data = xr.merge(
+                        [reassembled_data, processed_chunk],
+                        compat="no_conflicts",
+                        join="outer"
+                    )[reassembled_data.name]
+                else:
+                    # Merge Datasets, preserving all vars
+                    reassembled_data = xr.merge(
+                        [reassembled_data, processed_chunk],
+                        compat="no_conflicts",
+                        join="outer"
+                    )
                 pbar.update(1)
 
-    # convert xr.Dataset to xr.DataArray by selecting first data variable in xr.Dataset
-    reassembled_data_vars = list(reassembled_data.data_vars)
-    return reassembled_data[reassembled_data_vars[0]]
+    return reassembled_data
 
 
-def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=None, overwrite=False):
+def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=None, overwrite=False, timeout=(10, 60)):
     """
     Download a file from a given URL.
 
@@ -299,6 +320,7 @@ def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=Non
     proxy_user (str, optional): The username for the proxy.
     proxy_pass (str, optional): The password for the proxy.
     overwrite (bool, optional): Whether to overwrite the file if it already exists. Defaults to False.
+    timeout (tuple, optional): Timeout for the request as (connect_timeout, read_timeout) in seconds. Defaults to (10, 60).
 
     Returns:
     Bool -- True if the file was successfully downloaded
@@ -319,7 +341,7 @@ def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=Non
         "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0"
     }
     # Send an HTTP request to the URL of the file
-    response = requests.get(url, stream=True, proxies=proxies, auth=auth, headers=headers)
+    response = requests.get(url, stream=True, proxies=proxies, auth=auth, headers=headers, timeout=timeout)
     # Check if the request was successful
     if response.status_code == 200:
         # Write the contents of the response to a file

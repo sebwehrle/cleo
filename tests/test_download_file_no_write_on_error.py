@@ -19,7 +19,7 @@ def test_download_file_http_403_no_file_written(tmp_path, monkeypatch):
     """HTTP 403 should return False and not create any file."""
     save_path = tmp_path / "bad.tif"
 
-    def mock_get(url, stream=None, proxies=None, auth=None, headers=None):
+    def mock_get(url, **kwargs):
         return MockResponse(status_code=403, content_chunks=[b"error body"])
 
     monkeypatch.setattr("cleo.utils.requests.get", mock_get)
@@ -34,7 +34,7 @@ def test_download_file_http_200_writes_file(tmp_path, monkeypatch):
     """HTTP 200 should return True and write file contents."""
     save_path = tmp_path / "good.tif"
 
-    def mock_get(url, stream=None, proxies=None, auth=None, headers=None):
+    def mock_get(url, **kwargs):
         return MockResponse(status_code=200, content_chunks=[b"OK"])
 
     monkeypatch.setattr("cleo.utils.requests.get", mock_get)

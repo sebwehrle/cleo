@@ -407,11 +407,15 @@ class _WindAtlas:
             turbine_data = yaml.safe_load(f)
         # extract wind turbine data
         turbine_name = f"{turbine_data['manufacturer']}.{turbine_data['model']}.{turbine_data['capacity']}"
-        wind_speed = list(map(float, turbine_data['V']))
-        power_output = list(map(float, turbine_data['cf']))
+        old_u = np.array(list(map(float, turbine_data['V'])))
+        old_p = np.array(list(map(float, turbine_data['cf'])))
 
-        # initialize wind turbine power curves
-        power_curve = xr.DataArray(data=power_output, coords={'wind_speed': wind_speed}, dims=['wind_speed'])
+        # Resample power curve to atlas wind_speed grid
+        u = self.data.coords["wind_speed"].values
+        new_p = np.interp(u, old_u, old_p, left=0.0, right=0.0)
+
+        # initialize wind turbine power curves on atlas grid
+        power_curve = xr.DataArray(data=new_p, coords={'wind_speed': u}, dims=['wind_speed'])
         power_curve = power_curve.assign_coords(turbine=turbine_name).expand_dims('turbine')
 
         if 'power_curve' in self.data:

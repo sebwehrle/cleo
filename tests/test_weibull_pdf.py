@@ -25,7 +25,7 @@ def test_weibull_pdf_integration_mass():
     pdf = (k / A) * (u_over_A ** (k - 1)) * np.exp(-(u_over_A ** k))
 
     # Numerical integration using trapezoidal rule
-    numerical_mass = np.trapz(pdf, x=u)
+    numerical_mass = np.trapezoid(pdf, x=u)
 
     # Analytic oracle: CDF at u_max
     # F(u_max) = 1 - exp(-(u_max/A)^k)

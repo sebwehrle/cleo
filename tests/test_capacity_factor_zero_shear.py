@@ -40,7 +40,7 @@ def test_capacity_factor_zero_shear():
 
     # Oracle: direct integral of weibull_pdf * power_curve
     # expected shape: (y, x)
-    expected = np.trapz(
+    expected = np.trapezoid(
         weibull_pdf.values * p_power_curve[:, None, None],
         x=u_power_curve,
         axis=0,

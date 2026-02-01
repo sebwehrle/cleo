@@ -15,6 +15,44 @@ from pint import UnitRegistry
 from cleo.spatial import bbox
 
 
+# %% private helpers
+def _match_to_template(other: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
+    """
+    Align a raster to a template grid via rio.reproject_match if needed.
+
+    :param other: DataArray to align
+    :param template: Reference DataArray with target x/y coordinates
+    :return: Aligned DataArray with same x/y as template
+    :raises ValueError: If other or template lacks x/y coords
+    :raises ImportError: If rioxarray is not available and alignment is needed
+    """
+    # Validate inputs have x/y coords
+    if "x" not in other.coords or "y" not in other.coords:
+        raise ValueError(
+            f"expected raster DataArray with x/y coords; got coords={list(other.coords)} dims={list(other.dims)}"
+        )
+    if "x" not in template.coords or "y" not in template.coords:
+        raise ValueError(
+            f"template must have x/y coords; got coords={list(template.coords)} dims={list(template.dims)}"
+        )
+
+    # Check if already aligned
+    if (np.array_equal(other.coords["x"].values, template.coords["x"].values) and
+            np.array_equal(other.coords["y"].values, template.coords["y"].values)):
+        return other
+
+    # Need rioxarray for reprojection
+    try:
+        import rioxarray  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "Install rioxarray to align rasters to template grid: pip install rioxarray"
+        )
+
+    aligned = other.rio.reproject_match(template, nodata=np.nan)
+    return aligned
+
+
 # %% methods
 def add(self, other, name=None) -> None:
     """
@@ -39,19 +77,16 @@ def add(self, other, name=None) -> None:
         else:
             other = other.rio.clip(self.parent.get_nuts_country().geometry)
 
-    # check if spatial coordinates of self and other align
-    if not (np.array_equal(self.data["x"].data, other["x"].data)
-            and np.array_equal(self.data["y"].data, other["y"].data)):
-        template = self.data["template"] if "template" in self.data.data_vars else self.data
-        other = other.interp_like(template)
-
-        logging.warning(f"Spatial coordinates do not align. 'other' interpolated like 'self'.")
+    # Align to template grid if needed
+    if "template" in self.data.data_vars:
+        template = self.data["template"]
+        other = _match_to_template(other, template)
 
     if name is not None:
         other.name = name
 
-    # merge data
-    self.data = xr.merge([self.data, other])
+    # merge data with exact join to catch any remaining misalignment
+    self.data = xr.merge([self.data, other], join="exact")
     logging.info(f"Merged '{name}' into '{self.data.attrs['country']}'-data.")
 
 

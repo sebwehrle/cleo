@@ -50,7 +50,7 @@ def test_annual_energy_uses_8766_hours():
     expected_energy = 1.0 * rated_power_kw * 8766.0 / 1e6
 
     # Get the result
-    result_energy = float(mock_self.data["optimal_energy"].values)
+    result_energy = float(mock_self.data["optimal_energy"].values.item())
 
     # Assert exact match within tight tolerance
     assert np.isclose(result_energy, expected_energy, rtol=0, atol=1e-9), (

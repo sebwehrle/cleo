@@ -30,11 +30,11 @@ def test_capacity_factor_scaling_always_rated():
     pdf_1d = (k / A) * (u_over_A ** (k - 1)) * np.exp(-(u_over_A ** k))
 
     # Normalize so that trapz(pdf, x=u) == 1.0 within tolerance
-    norm = np.trapz(pdf_1d, x=u_power_curve)
+    norm = np.trapezoid(pdf_1d, x=u_power_curve)
     pdf_1d = pdf_1d / norm
 
     # Verify normalization
-    assert np.isclose(np.trapz(pdf_1d, x=u_power_curve), 1.0, atol=1e-9)
+    assert np.isclose(np.trapezoid(pdf_1d, x=u_power_curve), 1.0, atol=1e-9)
 
     # Broadcast to (wind_speed, y, x) with y=1, x=1
     pdf_3d = pdf_1d[:, None, None].copy()

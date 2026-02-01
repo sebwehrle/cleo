@@ -6,7 +6,7 @@ import rioxarray as rxr
 import logging
 
 from scipy.special import gamma
-from cleo.utils import compute_chunked
+from cleo.utils import compute_chunked, _match_to_template
 
 
 # %% decorator
@@ -148,14 +148,38 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
         else compute_chunked(self, calculate_mean_wind_speed, chunk_size, **inputs)
     )
 
+    # Align to template grid if available
+    if "template" in self.data.data_vars:
+        template = self.data["template"]
+        mean_wind_speed_data = _match_to_template(mean_wind_speed_data, template)
+
     mean_wind_speed_data = mean_wind_speed_data.expand_dims(height=[height])
 
     if "mean_wind_speed" not in self.data:
         self.data["mean_wind_speed"] = mean_wind_speed_data
     else:
+        # Align existing mean_wind_speed to template if needed
+        if "template" in self.data.data_vars:
+            template = self.data["template"]
+            existing = self.data["mean_wind_speed"]
+            aligned_slices = []
+            for h in existing.coords["height"].values:
+                slice_2d = existing.sel(height=h).drop_vars("height")
+                aligned_slice = _match_to_template(slice_2d, template)
+                aligned_slices.append(aligned_slice.expand_dims(height=[h]))
+            existing_aligned = xr.concat(aligned_slices, dim="height")
+        else:
+            existing_aligned = self.data["mean_wind_speed"]
+
         # Height doesn't exist yet (checked by early return), so concat
-        mean_wind_speed_concatenated = xr.concat([self.data["mean_wind_speed"], mean_wind_speed_data], dim="height")
-        self.data = self.data.drop_vars(["mean_wind_speed", "height"])
+        # Use join="exact" only when template exists (everything is aligned to it)
+        join_mode = "exact" if "template" in self.data.data_vars else "outer"
+        mean_wind_speed_concatenated = xr.concat(
+            [existing_aligned, mean_wind_speed_data], dim="height", join=join_mode
+        )
+        # Rebuild dataset without old mean_wind_speed to avoid height coord conflict
+        other_vars = {k: v for k, v in self.data.data_vars.items() if k != "mean_wind_speed"}
+        self.data = xr.Dataset(other_vars, attrs=self.data.attrs)
         self.data["mean_wind_speed"] = mean_wind_speed_concatenated
 
 
@@ -188,16 +212,30 @@ def compute_weibull_pdf(self, chunk_size=None):
     :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
     :type chunk_size: int
     """
+    a100, k100 = self.load_weibull_parameters(100)
+    u = self.data.coords["wind_speed"].values
+
+    # Align to template grid if available
+    if "template" in self.data.data_vars:
+        tpl = self.data["template"]
+        a100 = _match_to_template(a100, tpl)
+        k100 = _match_to_template(k100, tpl)
+
     inputs = {
-        "weibull_a": self.load_weibull_parameters(100)[0],
-        "weibull_k": self.load_weibull_parameters(100)[1],
-        "u_power_curve": self.data.coords["wind_speed"].values
+        "weibull_a": a100,
+        "weibull_k": k100,
+        "u_power_curve": u
     }
 
     if chunk_size is None:
         p = weibull_probability_density(**inputs)
     else:
         p = compute_chunked(self, weibull_probability_density, chunk_size, **inputs)
+
+    # Align result to template if available
+    if "template" in self.data.data_vars:
+        tpl = self.data["template"]
+        p = _match_to_template(p, tpl)
 
     self.data["weibull_pdf"] = p
     logging.info(f'Weibull probability density function of wind speeds in {self.data.attrs["country"]} computed.')
@@ -337,7 +375,7 @@ def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
     uar = np.asarray(u_power_curve)
     prb = [(weibull_k / weibull_a * (z / weibull_a) ** (weibull_k - 1)) * (np.exp(-(z / weibull_a) ** weibull_k)) for z
            in uar]
-    pdf = xr.concat(prb, dim='wind_speed')
+    pdf = xr.concat(prb, dim='wind_speed', join='exact')
     pdf = pdf.assign_coords({'wind_speed': u_power_curve})
     pdf = pdf.squeeze().rename("weibull_probability_density")
     return pdf
@@ -358,12 +396,56 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
     :param h_reference: reference height at which weibull pdf is computed
     :return:
     """
-    power_curve = xr.DataArray(data=p_power_curve, coords={'wind_speed': u_power_curve})
-    u_adjusted = xr.DataArray(data=u_power_curve, coords={'wind_speed': u_power_curve}) @ (
-            h_turbine / h_reference) ** wind_shear
-    cap_factor_values = np.trapz(weibull_pdf * power_curve, u_adjusted, axis=0)
+    # Compute shear scaling factor s(y,x) = (h_turbine / h_reference) ** wind_shear
+    s = (h_turbine / h_reference) ** wind_shear.values
+
+    # Get spatial shape from wind_shear
+    spatial_shape = wind_shear.shape
+
+    # Ensure u and p are numpy arrays
+    u = np.asarray(u_power_curve)
+    p = np.asarray(p_power_curve)
+    n = len(u)
+
+    # Helper to evaluate power curve at hub-height wind speed (2D)
+    def eval_power_curve(u_ref_scalar, s_2d):
+        u_hub_2d = u_ref_scalar * s_2d
+        flat = u_hub_2d.ravel()
+        p_flat = np.interp(flat, u, p, left=0.0, right=0.0)
+        return p_flat.reshape(spatial_shape)
+
+    # Streaming trapezoidal integration over u_ref
+    acc = np.zeros(spatial_shape, dtype=np.float64)
+
+    # Align weibull_pdf by wind_speed coordinate to match u_power_curve order
+    if "wind_speed" in weibull_pdf.dims:
+        # Check that all required wind speeds are present
+        pdf_wind_speeds = set(weibull_pdf.coords["wind_speed"].values)
+        required_wind_speeds = set(u)
+        missing = required_wind_speeds - pdf_wind_speeds
+        if missing:
+            raise ValueError(
+                f"weibull_pdf missing wind_speed labels: {sorted(missing)}"
+            )
+        # Reindex to match u_power_curve order (label-based alignment)
+        weibull_pdf_aligned = weibull_pdf.sel(wind_speed=u)
+        pdf_vals = weibull_pdf_aligned.values
+    else:
+        pdf_vals = weibull_pdf.values
+
+    for i in range(n - 1):
+        du = u[i + 1] - u[i]
+        pdf_i = pdf_vals[i]
+        pdf_ip1 = pdf_vals[i + 1]
+        pc_i = eval_power_curve(u[i], s)
+        pc_ip1 = eval_power_curve(u[i + 1], s)
+        term_i = pdf_i * pc_i
+        term_ip1 = pdf_ip1 * pc_ip1
+        acc += 0.5 * (term_i + term_ip1) * du
+
+    # Apply correction factor and build result
     cap_factor = wind_shear.copy()
-    cap_factor.values = cap_factor_values * correction_factor
+    cap_factor.values = acc * correction_factor
     cap_factor.name = "capacity_factor"
     return cap_factor
 
@@ -431,10 +513,9 @@ def levelized_cost(power, capacity_factors, overnight_cost, grid_cost, om_fixed,
         :return: Discount factor
         :rtype: float
         """
-        dcf_numerator = 1 - (1 + discount_rate) ** (-period)
-        dcf_denominator = 1 - (1 + discount_rate) ** (-1)
-        dcf = dcf_numerator / dcf_denominator
-        return dcf
+        if discount_rate == 0:
+            return float(period)
+        return (1 - (1 + discount_rate) ** (-period)) / discount_rate
 
     npv_factor = discount_factor(discount_rate, lifetime)
 

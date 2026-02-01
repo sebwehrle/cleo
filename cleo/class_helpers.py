@@ -32,16 +32,36 @@ def build_netcdf(self, atlas_type):
             self.data = xr.Dataset(coords=weibull_a_100.coords)
             self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
 
-            if atlas_type == "LandscapeAtlas":
-                nan_mask = np.isnan(weibull_a_100)
-                self.data["template"] = xr.where(nan_mask, np.nan, 0)
+            # Create template for both WindAtlas and LandscapeAtlas
+            nan_mask = np.isnan(weibull_a_100)
+            self.data["template"] = xr.where(nan_mask, np.nan, 0).rename("template")
 
-            self.data.to_netcdf(path_raw / fname_netcdf)
+            fname_netcdf.parent.mkdir(parents=True, exist_ok=True)
+            self.data.to_netcdf(fname_netcdf)
 
     else:
-        with xr.open_dataset(fname_netcdf) as dataset:
-            self.data = dataset
+        self.data = xr.open_dataset(fname_netcdf)
+        self.data = self.data.rio.write_crs(self.parent.crs)
         logging.info(f"Existing {atlas_type} at {str(path_netcdf)} opened.")
+
+        # Reconstruct template if missing (for legacy NetCDFs)
+        if "template" not in self.data.data_vars:
+            weibull_a_path = path_raw / f"{self.parent.country}_combined-Weibull-A_100.tif"
+            if weibull_a_path.is_file():
+                with rxr.open_rasterio(weibull_a_path, parse_coordinates=True).squeeze() as weibull_a_100:
+                    from cleo.loaders import ensure_crs_from_gwa
+                    weibull_a_100 = ensure_crs_from_gwa(weibull_a_100, self.parent.country)
+                    nan_mask = np.isnan(weibull_a_100)
+                    template = xr.where(nan_mask, np.nan, 0).rename("template")
+                    # Write CRS and transform from source for reprojection
+                    template = template.rio.write_crs(weibull_a_100.rio.crs)
+                    template = template.rio.write_transform(weibull_a_100.rio.transform())
+                    # Align template to existing data coords (legacy migration)
+                    template = template.rio.reproject_match(
+                        self.data, nodata=np.nan
+                    )
+                    self.data["template"] = template
+                    logging.info("Reconstructed template from GWA weibull_a_100")
 
     if self.data.rio.crs != self.parent.crs:
         self.data = self.data.rio.reproject(self.parent.crs, nodata=np.nan)
@@ -49,6 +69,11 @@ def build_netcdf(self, atlas_type):
     if self.data.rio.crs is None:
         self.data = self.data.rio.write_crs(self.parent.crs)
         logging.warning(f"Coordinate reference system of {self} set to {self.parent.crs}")
+
+    # Ensure default wind_speed grid exists (0.0 to 40.0 step 0.5)
+    if "wind_speed" not in self.data.coords:
+        u = np.arange(0.0, 40.0 + 0.5, 0.5)
+        self.data = self.data.assign_coords(wind_speed=u)
 
 
 def deploy_resources(self):

@@ -1,10 +1,24 @@
 # %% imports
 import logging
+import logging.config
 import shutil
 import numpy as np
 import xarray as xr
 import rioxarray as rxr
 from pathlib import Path
+
+
+# %% helpers
+def _sanitize_netcdf_attrs(ds):
+    """
+    Remove None values from Dataset attrs to ensure NetCDF serialization succeeds.
+
+    :param ds: xarray Dataset with potentially None-valued attrs
+    :return: Dataset with None attrs removed
+    """
+    sanitized_attrs = {k: v for k, v in ds.attrs.items() if v is not None}
+    ds.attrs = sanitized_attrs
+    return ds
 
 
 # %% methods

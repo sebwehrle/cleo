@@ -19,6 +19,7 @@ from cleo.class_helpers import (
     deploy_resources,
     set_attributes,
     setup_logging,
+    _sanitize_netcdf_attrs,
 )
 
 from cleo.utils import (
@@ -176,6 +177,25 @@ class Atlas:
                 ):
                     matching_files.append((file, file_metadata))
 
+        # Fallback to legacy filenames if no timestamped files found
+        if not matching_files:
+            # Try legacy pattern: {Type}_{Country}.nc or {Type}_{Country}_{Region}.nc
+            region_str = region if region != 'None' else None
+            for atlas_type in ["WindAtlas", "LandscapeAtlas"]:
+                if region_str:
+                    legacy_name = f"{atlas_type}_{self.country}_{region_str}.nc"
+                else:
+                    legacy_name = f"{atlas_type}_{self.country}.nc"
+                legacy_file = directory / legacy_name
+                if legacy_file.exists():
+                    matching_files.append((legacy_file, {
+                        "type": atlas_type,
+                        "country": self.country,
+                        "region": region,
+                        "scenario": scenario,
+                        "timestamp": "legacy",
+                    }))
+
         if not matching_files:
             raise FileNotFoundError(f"No matching files found in {directory}.")
 
@@ -187,8 +207,10 @@ class Atlas:
             if subclass == "WindAtlas":
                 wind_data = xr.open_dataset(file, engine="netcdf4")
                 self.wind.data = wind_data
-                self._wind_turbines = self.wind.data.coords['turbine'].values.tolist()
-                self._crs = f"epsg:{self.wind.data.rio.crs.to_epsg()}"
+                if 'turbine' in self.wind.data.coords:
+                    self._wind_turbines = self.wind.data.coords['turbine'].values.tolist()
+                if self.wind.data.rio.crs is not None:
+                    self._crs = f"epsg:{self.wind.data.rio.crs.to_epsg()}"
                 if region != 'None':
                     self._region = region
                 logging.info(f"Wind dataset loaded successfully: {file}")
@@ -302,17 +324,22 @@ class Atlas:
         timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
 
         # Define file paths with scenario and timestamp
-        scenario_suffix = f"_{scenario}" if scenario else ""
-        wind_file = savepath / f"WindAtlas_{self.country}_{self.region or 'None'}{scenario_suffix}_{timestamp}.nc"
-        landscape_file = savepath / f"LandscapeAtlas_{self.country}_{self.region or 'None'}{scenario_suffix}_{timestamp}.nc"
+        scenario_name = scenario if scenario else "default"
+        wind_file = savepath / f"WindAtlas_{self.country}_{self.region or 'None'}_{scenario_name}_{timestamp}.nc"
+        landscape_file = savepath / f"LandscapeAtlas_{self.country}_{self.region or 'None'}_{scenario_name}_{timestamp}.nc"
 
-        # Save datasets
+        # Sanitize attrs to remove None values (NetCDF cannot serialize None)
+        _sanitize_netcdf_attrs(self.wind.data)
+        _sanitize_netcdf_attrs(self.landscape.data)
+
+        # Save datasets - only update index on success
         try:
             self.wind.data.to_netcdf(wind_file, format="NETCDF4", engine="netcdf4")
             self.landscape.data.to_netcdf(landscape_file, format="NETCDF4", engine="netcdf4")
             logging.info(f"Datasets saved successfully: {wind_file}, {landscape_file}")
         except Exception as e:
             logging.error(f"Failed to save dataset: {e}")
+            return  # Do not update index if save failed
 
         # Log to index
         index_entries = [
@@ -513,15 +540,15 @@ class _LandscapeAtlas:
         :type inplace: bool
         :return: merges rasterized DataArray into `self.data`
         """
-        # check whether column input is sensible
-        if column is not None:
-            if column not in shape.columns:
-                raise ValueError(f"column {column} is not in shape")
-        # load shapefile if shape is string
-        if isinstance(shape, str):
+        # load shapefile if shape is string or Path
+        if isinstance(shape, (str, Path)):
             shape = gpd.read_file(shape)
         elif not isinstance(shape, gpd.GeoDataFrame):
-            raise TypeError(f"shape must be a GeoDataFrame or a string")
+            raise TypeError(f"shape must be a GeoDataFrame, string, or Path")
+        # check whether column input is sensible (after loading)
+        if column is not None:
+            if column not in shape.columns:
+                raise ValueError(f"column '{column}' not found in shape; available columns: {list(shape.columns)}")
         # project shape to unique crs
         if shape.crs != self.data.rio.crs:
             shape = shape.to_crs(self.data.rio.crs)

@@ -130,9 +130,22 @@ def load_elevation(base_dir, iso3, reference_da):
                 f"Reference DataArray has no CRS and air-density file also lacks CRS: {air_density_path}"
             )
 
-    # Get bounds from reference raster
+    # Get bounds from reference raster and transform to EPSG:4326 for CopDEM tile selection
+    from rasterio.crs import CRS
+    from rasterio.warp import transform_bounds
+
     bounds = reference_da.rio.bounds()
-    min_lon, min_lat, max_lon, max_lat = bounds
+    src_crs = reference_da.rio.crs
+    if src_crs is None:
+        raise ValueError("reference_da has no CRS (.rio.crs is None)")
+
+    src = CRS.from_user_input(src_crs)
+    dst = CRS.from_epsg(4326)
+
+    if src != dst:
+        min_lon, min_lat, max_lon, max_lat = transform_bounds(src, dst, *bounds, densify_pts=21)
+    else:
+        min_lon, min_lat, max_lon, max_lat = bounds
 
     # Download tiles
     tile_paths = download_copdem_tiles_for_bbox(

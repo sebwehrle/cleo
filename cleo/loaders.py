@@ -1,9 +1,6 @@
 # helpers for the Atlas class
 # %% imports
 import json
-import zipfile
-
-import requests
 import yaml
 import zipfile
 import requests
@@ -270,7 +267,6 @@ def load_gwa(self):
     """
     url = "https://globalwindatlas.info/api/gis/country"
     layers = ['air-density', 'combined-Weibull-A', 'combined-Weibull-k']
-    ground = ['elevation_w_bathymetry']
     height = ['50', '100', '150', '200']
 
     c = self.parent.country
@@ -294,20 +290,8 @@ def load_gwa(self):
                 except requests.RequestException as e:
                     logging.error(f'Error downloading {fname}: {e}')
 
-    for g in ground:
-        fname = f'{c}_{g}.tif'
-        fpath = path_raw / fname
-        if not fpath.is_file():
-            try:
-                if not fpath.is_file():
-                    durl = f'{url}/{c}/{g}'
-                    success = download_file(durl, fpath)
-                    if success:
-                        logging.info(f'Download of {fname} from {durl} complete')
-                    else:
-                        logging.info(f'Download of {fname} from {durl} failed')
-            except requests.RequestException as e:
-                logging.error(f'Error downloading {fname}: {e}')
+    # Skip GWA elevation download - elevation is handled via legacy file or Copernicus DEM
+    logging.info("Skipping GWA elevation download; handled via legacy file or Copernicus DEM")
 
     logging.info(f'Global Wind Atlas data for {c} initialized.')
 

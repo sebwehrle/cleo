@@ -91,7 +91,14 @@ def compute_air_density_correction(self, chunk_size=None):
     # Load elevation with legacy-file preference, falling back to CopDEM
     elevation = load_elevation(self.parent.path, self.parent.country, reference_da)
 
-    if elevation.rio.crs != self.parent.crs:
+    # Robust CRS comparison using rasterio.crs.CRS
+    from rasterio.crs import CRS
+    src_crs = elevation.rio.crs
+    if src_crs is None:
+        raise ValueError("elevation DataArray missing CRS (.rio.crs is None)")
+    dst_crs = CRS.from_user_input(self.parent.crs)
+
+    if src_crs != dst_crs:
         elevation = elevation.rio.reproject(self.parent.crs, nodata=np.nan).squeeze()
 
     if self.parent.region is not None:
@@ -199,7 +206,22 @@ def compute_wind_shear_coefficient(self, chunk_size=None):
     u_mean_50 = self.data.mean_wind_speed.sel(height=50)
     u_mean_100 = self.data.mean_wind_speed.sel(height=100)
 
-    alpha = (np.log(u_mean_100) - np.log(u_mean_50)) / (np.log(100) - np.log(50))
+    # Mask invalid cells to avoid log(<=0) which produces inf/NaN
+    valid = (u_mean_50 > 0) & (u_mean_100 > 0) & np.isfinite(u_mean_50) & np.isfinite(u_mean_100)
+    alpha = xr.where(
+        valid,
+        (np.log(u_mean_100) - np.log(u_mean_50)) / (np.log(100) - np.log(50)),
+        np.nan,
+    )
+
+    # Log warning if invalid cells exist
+    invalid_count = int((~valid).sum())
+    if invalid_count > 0:
+        total_count = int(valid.size)
+        logging.warning(
+            f"wind_shear: {invalid_count}/{total_count} cells masked (non-positive or non-finite wind speed)"
+        )
+
     self.data['wind_shear'] = alpha.squeeze().rename("wind_shear")
     logging.info(f'Wind shear coefficient for {self.parent.country} computed.')
 

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cleo"
+version = "0.0.1"
+description = "Cleo supports wind resource assessment with the Global Wind Atlas"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT License"}
+authors = [
+  {name = "Sebastian Wehrle", email = "sebastian.wehrle@boku.ac.at"},
+]
+urls = {Homepage = "https://github.com/sebwehrle/cleo"}
+
+# B1 (conda-first): keep pip deps light and pure-Python / widely-wheeled.
+dependencies = [
+  "urllib3",
+  "certifi",
+  "tqdm",
+  "netcdf4",
+  "scipy",
+  "numpy",
+  "pandas",
+  "openpyxl",
+  "xarray",
+  "dask",
+  "pycountry",
+  "pint",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+# Best-effort pip extras; supported path remains conda-forge via environment.yaml.
+geo = [
+  "rasterio",
+  "rioxarray",
+  "xarray-spatial",
+  "geopandas",
+  "pyproj",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cleo*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+cleo = ["resources/*.yml"]

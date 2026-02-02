@@ -92,17 +92,56 @@ def build_netcdf(self, atlas_type):
 
 def deploy_resources(self):
     """
-    Copy yaml-resource files to the destination directory
+    Ensure YAML resource files are present in the workdir at `<atlas.path>/resources/`.
+
+    Contract (A3, always-deploy, idempotent):
+    - Packaged defaults live under `cleo/resources/*.yml`.
+    - On every Atlas init, ensure workdir has a copy of each packaged YAML.
+    - Do NOT overwrite existing workdir YAMLs (workdir is the override surface).
+    - Fail loudly if packaged resources cannot be found (broken install).
     """
-    # Path to the directory containing YAML files within the package
-    source_dir = Path(__file__).parent.parent / 'resources'
-    # create destination directory
-    (self.path / "resources").mkdir(parents=True, exist_ok=True)
-    # Iterate over each YAML file in the source folder
-    for file_path in source_dir.glob('*.yml'):
-        # Copy the YAML file to the destination folder
-        shutil.copy(file_path, self.path / "resources")
-    logging.info(f"Resource files copied to {self.path / 'resources'}.")
+    import logging
+    import shutil
+    from pathlib import Path
+    from importlib import resources as importlib_resources
+
+    dest_dir = Path(self.path) / "resources"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    pkg_root = importlib_resources.files("cleo").joinpath("resources")
+    if not pkg_root.is_dir():
+        raise FileNotFoundError(
+            "Cleo packaged resources are missing (expected package dir `cleo/resources`). "
+            "This indicates a broken installation/build. "
+            "Reinstall from a proper wheel/sdist, or use the conda environment.yaml install."
+        )
+
+    packaged = [
+        p for p in pkg_root.iterdir()
+        if p.is_file() and p.name.lower().endswith(".yml")
+    ]
+    if not packaged:
+        raise FileNotFoundError(
+            "Cleo packaged resources directory exists but contains no *.yml files. "
+            "This indicates a broken installation/build."
+        )
+
+    copied = 0
+    skipped = 0
+    for p in packaged:
+        dest = dest_dir / p.name
+        if dest.exists():
+            skipped += 1
+            continue
+
+        # `as_file` materializes the resource to a real filesystem path (works for wheels too)
+        with importlib_resources.as_file(p) as src_path:
+            shutil.copy(src_path, dest)
+        copied += 1
+
+    logging.info(
+        f"Resource files ensured in {dest_dir} (copied={copied}, skipped_existing={skipped})."
+    )
 
 
 def set_attributes(self):

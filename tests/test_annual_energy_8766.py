@@ -41,6 +41,14 @@ def test_annual_energy_uses_8766_hours():
         "capacity_factors": capacity_factors,
     })
 
+    # Mock get_turbine_attribute to return rated power
+    def mock_get_turbine_attribute(turbine, attr):
+        if attr == "capacity":
+            return rated_power_kw
+        return None
+
+    mock_self.get_turbine_attribute = mock_get_turbine_attribute
+
     # Call the function
     compute_optimal_power_energy(mock_self)
 

@@ -89,6 +89,14 @@ def test_capacity_factor_scaling_always_rated():
         "capacity_factors": capacity_factors,
     })
 
+    # Mock get_turbine_attribute to return rated power
+    def mock_get_turbine_attribute(turbine, attr):
+        if attr == "capacity":
+            return rated_power_kw
+        return None
+
+    mock_self.get_turbine_attribute = mock_get_turbine_attribute
+
     # Call compute_optimal_power_energy
     compute_optimal_power_energy(mock_self)
 

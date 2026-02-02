@@ -81,12 +81,22 @@ def compute_air_density_correction(self, chunk_size=None):
         return rho_correction_factor
 
     from cleo.loaders import load_elevation
+    from pathlib import Path
+
+    # Normalize path to Path object (handles str input)
+    parent_path = Path(self.parent.path) if not isinstance(self.parent.path, Path) else self.parent.path
 
     # Use A_100 raster as reference for grid alignment
-    path_raw_country = self.parent.path / "data" / "raw" / f"{self.parent.country}"
-    reference_da = rxr.open_rasterio(
-        path_raw_country / f"{self.parent.country}_combined-Weibull-A_100.tif"
-    ).squeeze()
+    path_raw_country = parent_path / "data" / "raw" / f"{self.parent.country}"
+    reference_file = path_raw_country / f"{self.parent.country}_combined-Weibull-A_100.tif"
+
+    if not reference_file.exists():
+        raise FileNotFoundError(
+            f"Raw GWA files missing: {reference_file}. "
+            f"Run Atlas init/download first to fetch data for {self.parent.country}."
+        )
+
+    reference_da = rxr.open_rasterio(reference_file).squeeze()
 
     # Load elevation with legacy-file preference, falling back to CopDEM
     elevation = load_elevation(self.parent.path, self.parent.country, reference_da)
@@ -208,11 +218,14 @@ def compute_wind_shear_coefficient(self, chunk_size=None):
 
     # Mask invalid cells to avoid log(<=0) which produces inf/NaN
     valid = (u_mean_50 > 0) & (u_mean_100 > 0) & np.isfinite(u_mean_50) & np.isfinite(u_mean_100)
-    alpha = xr.where(
-        valid,
-        (np.log(u_mean_100) - np.log(u_mean_50)) / (np.log(100) - np.log(50)),
-        np.nan,
-    )
+
+    # Suppress RuntimeWarning from log(0) - we handle invalid values via xr.where
+    with np.errstate(divide="ignore", invalid="ignore"):
+        alpha = xr.where(
+            valid,
+            (np.log(u_mean_100) - np.log(u_mean_50)) / (np.log(100) - np.log(50)),
+            np.nan,
+        )
 
     # Log warning if invalid cells exist
     invalid_count = int((~valid).sum())
@@ -349,20 +362,23 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
 
 @requires({'compute_lcoe': 'lcoe'})
 def compute_optimal_power_energy(self):
-    # TODO: check if required data_vars exist
-    # compute optimal power
+    # Compute optimal power using turbine metadata (not string parsing)
     least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine').compute()
 
-    def parse_capacity(string):
-        if isinstance(string, str):
-            parts = string.split('.')
-            capacity = parts[-1]
-            return float(capacity)
+    # Build lookup dict from turbine labels to capacity using metadata
+    turbine_labels = self.data.coords["turbine"].values
+    capacity_lookup = {
+        label: self.get_turbine_attribute(label, "capacity")
+        for label in turbine_labels
+    }
+
+    def get_capacity(turbine_label):
+        if isinstance(turbine_label, str) and turbine_label in capacity_lookup:
+            return float(capacity_lookup[turbine_label])
         else:
             return np.nan
 
-    power = xr.apply_ufunc(parse_capacity, least_cost_turbine, vectorize=True)
-    # TODO: set unit on energy'
+    power = xr.apply_ufunc(get_capacity, least_cost_turbine, vectorize=True)
 
     self.data["optimal_power"] = power
     # compute optimal energy
@@ -370,7 +386,6 @@ def compute_optimal_power_energy(self):
     energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
     energy = energy.assign_coords({'turbine': "min_lcoe"})
     energy = energy * power * 8766 / 10 ** 6
-    # TODO: set unit on energy
     self.data["optimal_energy"] = energy
 
 
@@ -395,8 +410,14 @@ def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
     :return:
     """
     uar = np.asarray(u_power_curve)
-    prb = [(weibull_k / weibull_a * (z / weibull_a) ** (weibull_k - 1)) * (np.exp(-(z / weibull_a) ** weibull_k)) for z
-           in uar]
+    prb = []
+    for z in uar:
+        if z == 0:
+            # At u=0, pdf=0 for continuous Weibull (avoids inf when k<1)
+            prb.append(xr.zeros_like(weibull_a))
+        else:
+            p = (weibull_k / weibull_a * (z / weibull_a) ** (weibull_k - 1)) * np.exp(-(z / weibull_a) ** weibull_k)
+            prb.append(p)
     pdf = xr.concat(prb, dim='wind_speed', join='exact')
     pdf = pdf.assign_coords({'wind_speed': u_power_curve})
     pdf = pdf.squeeze().rename("weibull_probability_density")
@@ -418,16 +439,25 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
     :param h_reference: reference height at which weibull pdf is computed
     :return:
     """
+    # Ensure u and p are numpy arrays
+    u = np.asarray(u_power_curve)
+    p = np.asarray(p_power_curve)
+
+    # Validate input length
+    if len(u) < 2:
+        raise ValueError(
+            f"u_power_curve must have at least 2 points for integration, got {len(u)}"
+        )
+    if len(p) != len(u):
+        raise ValueError(
+            f"p_power_curve length ({len(p)}) must match u_power_curve length ({len(u)})"
+        )
+
     # Compute shear scaling factor s(y,x) = (h_turbine / h_reference) ** wind_shear
     s = (h_turbine / h_reference) ** wind_shear.values
 
     # Get spatial shape from wind_shear
     spatial_shape = wind_shear.shape
-
-    # Ensure u and p are numpy arrays
-    u = np.asarray(u_power_curve)
-    p = np.asarray(p_power_curve)
-    n = len(u)
 
     # Helper to evaluate power curve at hub-height wind speed (2D)
     def eval_power_curve(u_ref_scalar, s_2d):
@@ -451,10 +481,12 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
             )
         # Reindex to match u_power_curve order (label-based alignment)
         weibull_pdf_aligned = weibull_pdf.sel(wind_speed=u)
-        pdf_vals = weibull_pdf_aligned.values
+        # Move wind_speed to first axis for consistent indexing
+        pdf_vals = weibull_pdf_aligned.transpose("wind_speed", ...).values
     else:
         pdf_vals = weibull_pdf.values
 
+    n = len(u)
     for i in range(n - 1):
         du = u[i + 1] - u[i]
         pdf_i = pdf_vals[i]

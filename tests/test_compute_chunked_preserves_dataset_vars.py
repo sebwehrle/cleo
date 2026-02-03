@@ -3,7 +3,7 @@
 import numpy as np
 import xarray as xr
 
-from cleo.utils import compute_chunked
+from cleo.chunk import compute_chunked
 
 
 class MockSelf:

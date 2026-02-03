@@ -2,7 +2,7 @@ import numpy as np
 import xarray as xr
 from types import SimpleNamespace
 
-from cleo.utils import compute_chunked
+from cleo.chunk import compute_chunked
 
 
 def test_compute_chunked_supports_extra_dims_time_y_x():

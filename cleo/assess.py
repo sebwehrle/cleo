@@ -6,7 +6,8 @@ import rioxarray as rxr
 import logging
 
 from scipy.special import gamma
-from cleo.utils import compute_chunked, _match_to_template
+from cleo.utils import _match_to_template
+from cleo.chunk import compute_chunked
 
 
 # %% decorator

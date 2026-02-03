@@ -2,7 +2,7 @@ import numpy as np
 import xarray as xr
 import pytest
 from types import SimpleNamespace
-from cleo.utils import compute_chunked
+from cleo.chunk import compute_chunked
 
 def test_compute_chunked_reassembles_exact_dataarray():
     # Small deterministic grid

@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 from pathlib import Path
 from pint import UnitRegistry
+_UREG = UnitRegistry()
 
 from cleo.spatial import bbox
 
@@ -56,51 +57,69 @@ def _match_to_template(other: xr.DataArray, template: xr.DataArray) -> xr.DataAr
 # %% methods
 def add(self, other, name=None) -> None:
     """
-    Merge other into self
+    Merge other into self (exact-grid contract, no silent misalignment).
 
-    :param self: an instance of the WindAtlas- or Landscape-class (wrapping a xarray Dataset)
-    :param other: an instance of the xarray.DataArray- or xarray.Dataset-class
-    :param name: a name for the merged data variable
-    :return:
+    Rules:
+    - If CRS differs: reproject.
+    - If grid differs (even tiny float noise): align to self grid (no clipping).
+    - Only clip if extents differ materially (bbox tolerance).
+    - Final merge must be join="exact".
     """
-    # duck typing to check if other is a xarray.Dataset, xarray.DataArray
     if not hasattr(other, "dims"):
         raise TypeError(f"'{other}' must be an instance of the xr.Dataset- or xr.DataArray-class.")
 
+    # Normalize DataArray
+    if isinstance(other, xr.Dataset):
+        raise TypeError("add() currently expects a DataArray; got Dataset.")
+    if not isinstance(other, xr.DataArray):
+        raise TypeError(f"add() expects xarray.DataArray; got {type(other)}")
+
+    if self.data is None:
+        raise ValueError("self.data is None")
+
+    # CRS discipline
     if self.data.rio.crs != other.rio.crs:
         other = other.rio.reproject(self.crs, nodata=np.nan)
 
-    # clip other if necessary
-    if bbox(self) != bbox(other):
+    # Grid alignment (preferred over bbox checks; fixes tiny coord noise robustly)
+    # Align to template if present, else align to first data var as grid template.
+    if "template" in self.data.data_vars:
+        template = self.data["template"]
+    else:
+        # Pick a stable reference grid from existing dataset variables
+        first_var = next(iter(self.data.data_vars))
+        template = self.data[first_var]
+
+    other = _match_to_template(other, template)
+
+    # Clip only if extents differ materially (not for float noise)
+    b_self = bbox(self)
+    b_other = bbox(other)
+    tol = 1e-9  # in coordinate units; tiny enough for degree grids; prevents 1e-12 triggering
+    if not all(np.isclose(bs, bo, rtol=0.0, atol=tol) for bs, bo in zip(b_self, b_other)):
         if self.parent.region is not None:
             other = other.rio.clip(self.parent.get_nuts_region(self.parent.region).geometry)
         else:
             other = other.rio.clip(self.parent.get_nuts_country().geometry)
-
-    # Align to template grid if needed
-    if "template" in self.data.data_vars:
-        template = self.data["template"]
+        # After clipping, re-align again to template grid
         other = _match_to_template(other, template)
 
     if name is not None:
+        other = other.copy()
         other.name = name
 
-    # merge data with exact join to catch any remaining misalignment
-    self.data = xr.merge([self.data, other], join="exact")
-    logging.info(f"Merged '{name}' into '{self.data.attrs['country']}'-data.")
+    self.data = xr.merge([self.data, other], join="exact", compat="no_conflicts")
+    logging.info(f"Merged '{other.name}' into '{self.data.attrs.get('country', 'atlas')}'-data.")
 
 
 def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
     """
-    Convert a data variable from the current unit to the specified unit
+    Convert one or more data variables to a new unit.
 
-    :param data_variable: name(s) of the data variable(s) to be converted
-    :param to_unit: name of the unit to convert to
-    :param from_unit: name of the unit from which to convert from
-    :param inplace: if True (default) the data variable is updated in-place
+    Contract:
+    - Preserves existing attrs; updates only 'unit'.
+    - Dask-friendly: computes a scalar factor once and multiplies the DataArray by that factor.
     """
-    ureg = UnitRegistry()
-
     if isinstance(data_variable, str):
         data_variable = [data_variable]
     elif not isinstance(data_variable, list):
@@ -110,23 +129,27 @@ def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
 
     for var in data_variable:
         data_var = self.data[var]
-        if from_unit is not None:
-            unit = from_unit
-        else:
-            unit = data_var.attrs.get("unit")
 
+        unit = from_unit if from_unit is not None else data_var.attrs.get("unit")
         if unit is None:
-            raise ValueError("No from-unit given. Cannot perform unit conversion.")
+            raise ValueError(f"No from-unit given and no 'unit' attr present for variable '{var}'.")
+
+        # scalar conversion factor (1 * unit -> to_unit)
+        factor = (1.0 * _UREG(unit)).to(to_unit).magnitude
+
+        attrs = dict(data_var.attrs) if data_var.attrs is not None else {}
+        attrs["unit"] = to_unit
 
         converted_arrays[var] = xr.DataArray(
-            (data_var.data * ureg(unit)).to(to_unit).magnitude,
+            data_var * factor,
             coords=data_var.coords,
             dims=data_var.dims,
-            attrs={"unit": to_unit}
+            attrs=attrs,
+            name=data_var.name,
         )
 
     if inplace:
-        self.data.update({var: converted_array for var, converted_array in converted_arrays.items()})
+        self.data.update(converted_arrays)
     else:
         return converted_arrays
 
@@ -135,7 +158,8 @@ def flatten(self, digits=5, exclude_template=True):
     """
     Converts data in a xarray.Dataset to a pandas.DataFrame in a slower but more memory efficient way than
     xarray.Dataset.to_dataframe. Rounding of coordinates facilitates merging across data variables. The default
-    'digits' value of 5 results in a precision loss of at most about 50 cm when CRS is standard epsg:4326.
+    'digits' value of 5 results in a precision loss of about 1.1 m in latitude per 1e-5 degrees; longitude scales
+    by cos(latitude).
 
     :param self: an instance of the WindResourceAtlas- or SiteData-class
     :param digits: number of digits to round x and y coordinates to
@@ -240,116 +264,394 @@ def _process_chunk(self, processing_func, chunk_size, start_x, start_y, **kwargs
     return processed_data
 
 
-def compute_chunked(self, processing_func, chunk_size, **kwargs):
+def compute_chunked(
+    self,
+    processing_func,
+    chunk_size: int,
+    *,
+    max_workers: int = 1,
+    max_in_flight: int | None = None,
+    show_progress: bool = True,
+    **kwargs,
+):
     """
-    Process data in chunks and merge the results.
+    Process data in x/y chunks and reassemble results on the original x/y template grid.
 
-    :param self: an instance of the Atlas-class
-    :param processing_func: processing_func (callable): A function that takes data chunks and properties as input and
-    returns processed data (DataArray or Dataset).
-    :type processing_func: Callable
-    :param chunk_size: Size of the chunks along x and y coordinates for processing.
-    :type chunk_size: int
-    :param kwargs: inputs to the processing_func
-    :type kwargs: dict
-    :return Reassembled data matching the type returned by processing_func.
-    :rtype xarray.Dataset or xarray.DataArray
+    Contract:
+    - processing_func must return either xr.DataArray or xr.Dataset.
+    - Every returned DataArray (or every Dataset variable) MUST include both 'x' and 'y' dims
+      (plus optional extra dims). Results that drop x/y (e.g. mean over x/y) are not assemble-able
+      by this function and will raise.
+
+    Exact-grid contract:
+    - Returned chunk x/y coords must exactly match the corresponding slice of template coords
+      from self.data.coords['x'/'y'].
+    - Returned non-spatial dims (and their coords) must be identical across chunks.
     """
-    reassembled_data = None
-    returns_dataarray = None
 
-    x_chunks = range(0, len(self.data.coords["x"]), chunk_size)
-    y_chunks = range(0, len(self.data.coords["y"]), chunk_size)
-    total_chunks = len(x_chunks) * len(y_chunks)
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be > 0; got {chunk_size}")
 
-    with stylish_tqdm(total=total_chunks, desc="Processing chunks") as pbar:
-        with ThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(
-                    _process_chunk,
-                    self,
-                    processing_func,
-                    chunk_size,
-                    start_x,
-                    start_y,
-                    **kwargs
-                )
-                for start_x in x_chunks
-                for start_y in y_chunks
-            ]
+    if "x" not in self.data.coords or "y" not in self.data.coords:
+        raise ValueError("self.data must have 'x' and 'y' coordinates for compute_chunked().")
 
-            for future in futures:
-                processed_chunk = future.result()
+    template_x = self.data.coords["x"].values
+    template_y = self.data.coords["y"].values
+    nx_total = len(template_x)
+    ny_total = len(template_y)
 
-                # Detect return type from first chunk
-                if returns_dataarray is None:
-                    returns_dataarray = isinstance(processed_chunk, xr.DataArray)
-                    if returns_dataarray:
-                        reassembled_data = processed_chunk
-                    else:
-                        reassembled_data = xr.Dataset()
+    x_starts = list(range(0, nx_total, chunk_size))
+    y_starts = list(range(0, ny_total, chunk_size))
+    total_chunks = len(x_starts) * len(y_starts)
 
-                if returns_dataarray:
-                    # Merge DataArrays
-                    reassembled_data = xr.merge(
-                        [reassembled_data, processed_chunk],
-                        compat="no_conflicts",
-                        join="outer"
-                    )[reassembled_data.name]
+    if max_workers < 1:
+        raise ValueError(f"max_workers must be >= 1; got {max_workers}")
+
+    if max_in_flight is None:
+        max_in_flight = 2 * max_workers
+    if max_in_flight < 1:
+        raise ValueError(f"max_in_flight must be >= 1; got {max_in_flight}")
+
+    # Will be initialized from the first completed chunk
+    out_is_dataarray: bool | None = None
+    out_da_name: str | None = None
+    out_da_dims: tuple[str, ...] | None = None
+    out_da_coords: dict[str, object] | None = None
+    out_da_attrs: dict | None = None
+    out_da_data = None  # numpy array
+
+    out_ds_vars: dict[str, dict] | None = None  # var_name -> spec dict + numpy array
+
+    def _where(start_x: int, start_y: int) -> str:
+        return f"chunk(start_x={start_x}, start_y={start_y})"
+
+    def _validate_and_get_xy_slices(chunk_obj, start_x: int, start_y: int):
+        if "x" not in chunk_obj.dims or "y" not in chunk_obj.dims:
+            raise ValueError(
+                f"compute_chunked requires results to include dims 'x' and 'y'; got dims={chunk_obj.dims} at {_where(start_x, start_y)}"
+            )
+
+        nx = int(chunk_obj.sizes["x"])
+        ny = int(chunk_obj.sizes["y"])
+
+        # expected coords from template
+        exp_x = template_x[start_x : start_x + nx]
+        exp_y = template_y[start_y : start_y + ny]
+
+        got_x = chunk_obj.coords["x"].values
+        got_y = chunk_obj.coords["y"].values
+
+        if not np.array_equal(got_x, exp_x):
+            raise ValueError(
+                f"Exact-grid violation: x-coords mismatch at {_where(start_x, start_y)} "
+                f"(expected template slice)."
+            )
+        if not np.array_equal(got_y, exp_y):
+            raise ValueError(
+                f"Exact-grid violation: y-coords mismatch at {_where(start_x, start_y)} "
+                f"(expected template slice)."
+            )
+
+        return nx, ny
+
+    def _init_out_from_dataarray(chunk: xr.DataArray):
+        nonlocal out_da_name, out_da_dims, out_da_coords, out_da_attrs, out_da_data
+
+        out_da_name = chunk.name
+        out_da_dims = tuple(chunk.dims)
+        out_da_attrs = dict(chunk.attrs) if chunk.attrs is not None else {}
+
+        coords = {}
+        for d in out_da_dims:
+            if d == "x":
+                coords["x"] = template_x
+            elif d == "y":
+                coords["y"] = template_y
+            else:
+                if d not in chunk.coords:
+                    raise ValueError(f"Missing coord for non-spatial dim '{d}' in chunk result.")
+                coords[d] = chunk.coords[d].values
+        out_da_coords = coords
+
+        # allocate backing array
+        shape = []
+        for d in out_da_dims:
+            if d == "x":
+                shape.append(nx_total)
+            elif d == "y":
+                shape.append(ny_total)
+            else:
+                shape.append(len(coords[d]))
+
+        dtype = chunk.data.dtype
+        fill = np.nan if dtype.kind in ("f", "c") else 0
+        out_da_data = np.full(shape, fill_value=fill, dtype=dtype)
+
+    def _init_out_from_dataset(chunk: xr.Dataset):
+        nonlocal out_ds_vars
+        out_ds_vars = {}
+
+        for var_name, var in chunk.data_vars.items():
+            dims = tuple(var.dims)
+            coords = {}
+            for d in dims:
+                if d == "x":
+                    coords["x"] = template_x
+                elif d == "y":
+                    coords["y"] = template_y
                 else:
-                    # Merge Datasets, preserving all vars
-                    reassembled_data = xr.merge(
-                        [reassembled_data, processed_chunk],
-                        compat="no_conflicts",
-                        join="outer"
-                    )
-                pbar.update(1)
+                    if d not in var.coords:
+                        raise ValueError(f"Missing coord for non-spatial dim '{d}' in var '{var_name}'.")
+                    coords[d] = var.coords[d].values
 
-    return reassembled_data
+            shape = []
+            for d in dims:
+                if d == "x":
+                    shape.append(nx_total)
+                elif d == "y":
+                    shape.append(ny_total)
+                else:
+                    shape.append(len(coords[d]))
+
+            dtype = var.data.dtype
+            fill = np.nan if dtype.kind in ("f", "c") else 0
+            data = np.full(shape, fill_value=fill, dtype=dtype)
+
+            out_ds_vars[var_name] = {
+                "dims": dims,
+                "coords": coords,
+                "attrs": dict(var.attrs) if var.attrs is not None else {},
+                "data": data,
+            }
+
+    def _assert_non_xy_coords_match(expected_coords, got_obj, dims, var_label: str, start_x: int, start_y: int):
+        for d in dims:
+            if d in ("x", "y"):
+                continue
+            exp = expected_coords[d]
+            got = got_obj.coords[d].values
+            if not np.array_equal(got, exp):
+                raise ValueError(
+                    f"Non-spatial coord mismatch for dim '{d}' in {var_label} at {_where(start_x, start_y)}."
+                )
+
+    def _write_chunk_dataarray(chunk: xr.DataArray, start_x: int, start_y: int):
+        nonlocal out_da_data
+        assert out_da_dims is not None and out_da_coords is not None and out_da_data is not None
+
+        # ensure x/y coords match template slice
+        nx, ny = _validate_and_get_xy_slices(chunk, start_x, start_y)
+
+        # ensure non-x/y coords match
+        _assert_non_xy_coords_match(out_da_coords, chunk, out_da_dims, "DataArray", start_x, start_y)
+
+        # write into backing array using dimension-ordered slices
+        sl = []
+        for d in out_da_dims:
+            if d == "x":
+                sl.append(slice(start_x, start_x + nx))
+            elif d == "y":
+                sl.append(slice(start_y, start_y + ny))
+            else:
+                sl.append(slice(None))
+
+        chunk_t = chunk.transpose(*out_da_dims)
+        out_da_data[tuple(sl)] = np.asarray(chunk_t.data)
+
+    def _write_chunk_dataset(chunk: xr.Dataset, start_x: int, start_y: int):
+        assert out_ds_vars is not None
+
+        # ensure same set of variables
+        for var_name in out_ds_vars.keys():
+            if var_name not in chunk.data_vars:
+                raise ValueError(f"Chunk result missing variable '{var_name}' at {_where(start_x, start_y)}.")
+        for var_name in chunk.data_vars.keys():
+            if var_name not in out_ds_vars:
+                raise ValueError(f"Chunk result has unexpected variable '{var_name}' at {_where(start_x, start_y)}.")
+
+        for var_name, spec in out_ds_vars.items():
+            var = chunk[var_name]
+            dims = spec["dims"]
+            coords = spec["coords"]
+            data = spec["data"]
+
+            # must include x/y
+            nx, ny = _validate_and_get_xy_slices(var, start_x, start_y)
+            _assert_non_xy_coords_match(coords, var, dims, f"var '{var_name}'", start_x, start_y)
+
+            sl = []
+            for d in dims:
+                if d == "x":
+                    sl.append(slice(start_x, start_x + nx))
+                elif d == "y":
+                    sl.append(slice(start_y, start_y + ny))
+                else:
+                    sl.append(slice(None))
+
+            var_t = var.transpose(*dims)
+            data[tuple(sl)] = np.asarray(var_t.data)
+
+    # Task generator (deterministic order)
+    tasks = [(sx, sy) for sx in x_starts for sy in y_starts]
+
+    def _run_one(start_x: int, start_y: int):
+        return _process_chunk(self, processing_func, chunk_size, start_x, start_y, **kwargs), start_x, start_y
+
+    pbar_ctx = stylish_tqdm(total=total_chunks, desc="Processing chunks") if show_progress else None
+
+    try:
+        if max_workers == 1:
+            # serial, lowest overhead
+            for sx, sy in tasks:
+                chunk, sx0, sy0 = _run_one(sx, sy)
+
+                if out_is_dataarray is None:
+                    out_is_dataarray = isinstance(chunk, xr.DataArray)
+                    if out_is_dataarray:
+                        _init_out_from_dataarray(chunk)
+                    else:
+                        if not isinstance(chunk, xr.Dataset):
+                            raise TypeError(f"processing_func must return xr.DataArray or xr.Dataset; got {type(chunk)}")
+                        _init_out_from_dataset(chunk)
+
+                if out_is_dataarray:
+                    _write_chunk_dataarray(chunk, sx0, sy0)
+                else:
+                    _write_chunk_dataset(chunk, sx0, sy0)
+
+                if pbar_ctx is not None:
+                    pbar_ctx.update(1)
+
+        else:
+            # bounded parallelism
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                it = iter(tasks)
+                in_flight = {}
+
+                # prime queue
+                for _ in range(min(max_in_flight, total_chunks)):
+                    sx, sy = next(it, (None, None))
+                    if sx is None:
+                        break
+                    in_flight[ex.submit(_run_one, sx, sy)] = (sx, sy)
+
+                while in_flight:
+                    # get one completed future
+                    done = None
+                    for fut in in_flight:
+                        if fut.done():
+                            done = fut
+                            break
+                    if done is None:
+                        # wait on first future (blocks)
+                        done = next(iter(in_flight))
+
+                    sx0, sy0 = in_flight.pop(done)
+                    chunk, sx1, sy1 = done.result()
+
+                    if out_is_dataarray is None:
+                        out_is_dataarray = isinstance(chunk, xr.DataArray)
+                        if out_is_dataarray:
+                            _init_out_from_dataarray(chunk)
+                        else:
+                            if not isinstance(chunk, xr.Dataset):
+                                raise TypeError(f"processing_func must return xr.DataArray or xr.Dataset; got {type(chunk)}")
+                            _init_out_from_dataset(chunk)
+
+                    if out_is_dataarray:
+                        _write_chunk_dataarray(chunk, sx1, sy1)
+                    else:
+                        _write_chunk_dataset(chunk, sx1, sy1)
+
+                    if pbar_ctx is not None:
+                        pbar_ctx.update(1)
+
+                    # submit next
+                    sx, sy = next(it, (None, None))
+                    if sx is not None:
+                        in_flight[ex.submit(_run_one, sx, sy)] = (sx, sy)
+
+    finally:
+        if pbar_ctx is not None:
+            pbar_ctx.close()
+
+    # materialize output object
+    if out_is_dataarray:
+        assert out_da_name is not None and out_da_dims is not None and out_da_coords is not None and out_da_data is not None
+        out = xr.DataArray(
+            out_da_data,
+            dims=out_da_dims,
+            coords=out_da_coords,
+            name=out_da_name,
+            attrs=out_da_attrs,
+        )
+        return out
+    else:
+        assert out_ds_vars is not None
+        data_vars = {}
+        # choose dataset-level coords as union of per-var coords (they should agree)
+        ds_coords = {"x": template_x, "y": template_y}
+
+        for var_name, spec in out_ds_vars.items():
+            dims = spec["dims"]
+            coords = spec["coords"]
+            attrs = spec["attrs"]
+            data = spec["data"]
+
+            # attach any extra dim coords
+            for d, v in coords.items():
+                if d not in ("x", "y"):
+                    if d in ds_coords and not np.array_equal(ds_coords[d], v):
+                        raise ValueError(f"Internal error: inconsistent coord '{d}' across variables.")
+                    ds_coords[d] = v
+
+            data_vars[var_name] = xr.DataArray(data, dims=dims, coords={d: ds_coords[d] for d in dims}, attrs=attrs)
+
+        return xr.Dataset(data_vars=data_vars, coords=ds_coords)
 
 
 def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=None, overwrite=False, timeout=(10, 60)):
     """
     Download a file from a given URL.
 
-    Parameters:
-    url (str): The URL of the file to download.
-    filename (str, optional): The name to save the file as. If not provided, the file will be saved with its original
-    name.
-    proxy (str, optional): The URL and port of the proxy to use for the download.
-    proxy_user (str, optional): The username for the proxy.
-    proxy_pass (str, optional): The password for the proxy.
-    overwrite (bool, optional): Whether to overwrite the file if it already exists. Defaults to False.
-    timeout (tuple, optional): Timeout for the request as (connect_timeout, read_timeout) in seconds. Defaults to (10, 60).
-
-    Returns:
-    Bool -- True if the file was successfully downloaded
+    Contract:
+    - Atomic write: download to a temp file then rename on success.
+    - If overwrite=False and target exists: return True (status quo).
+    - On HTTP errors: return False and do not leave partial target file behind.
     """
-    # If filename wasn't provided
     if not save_to:
-        # Get the file name from the URL
         save_to = url.split("/")[-1]
-    # Check if the file already exists and if we should overwrite it
-    if Path(save_to).is_file() and not overwrite:
+
+    save_to = Path(save_to)
+
+    if save_to.is_file() and not overwrite:
         logging.info(f"File {save_to} already exists and overwrite is set to False.")
         return True
-    # Set up the proxies for the request
+
     proxies = {"http": proxy, "https": proxy} if proxy else None
     auth = HTTPProxyAuth(proxy_user, proxy_pass) if proxy_user and proxy_pass else None
-    # Set a custom User-Agent
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0"
-    }
-    # Send an HTTP request to the URL of the file
-    response = requests.get(url, stream=True, proxies=proxies, auth=auth, headers=headers, timeout=timeout)
-    # Check if the request was successful
-    if response.status_code == 200:
-        # Write the contents of the response to a file
-        with open(save_to, 'wb') as file:
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0"}
+
+    tmp_path = save_to.with_suffix(save_to.suffix + ".tmp")
+
+    try:
+        response = requests.get(url, stream=True, proxies=proxies, auth=auth, headers=headers, timeout=timeout)
+        response.raise_for_status()
+
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp_path, "wb") as file:
             for chunk in response.iter_content(chunk_size=1024):
                 if chunk:
                     file.write(chunk)
+
+        tmp_path.replace(save_to)
         return True
-    else:
-        logging.info(f"Failed to download file. HTTP response code: {response.status_code}")
+
+    except Exception as e:
+        logging.info(f"Failed to download file from {url}: {e}")
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
         return False

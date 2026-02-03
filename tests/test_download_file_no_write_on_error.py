@@ -4,15 +4,23 @@ from cleo.utils import download_file
 
 
 class MockResponse:
-    """Mock requests.Response for testing."""
-
-    def __init__(self, status_code, content_chunks):
+    def __init__(self, status_code=200, content_chunks=None):
         self.status_code = status_code
-        self._content_chunks = content_chunks
+        self._chunks = content_chunks or []
 
-    def iter_content(self, chunk_size=None):
-        for chunk in self._content_chunks:
-            yield chunk
+    def iter_content(self, chunk_size=1024):
+        yield from self._chunks
+
+    def raise_for_status(self):
+        if not (200 <= self.status_code < 300):
+            raise Exception(f"HTTP {self.status_code}")
+
+    # If production uses context manager
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 def test_download_file_http_403_no_file_written(tmp_path, monkeypatch):

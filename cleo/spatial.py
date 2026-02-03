@@ -12,48 +12,126 @@ from pathlib import Path
 # %% methods
 def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Dataset, gpd.GeoDataFrame):
     """
-    Clip the atlas data to the provided geopandas shapefile
-    :param self: an Atlas-subclass instance that is to be clipped.
-    :param clip_shape: a geopandas GeoDataFrame or a path-string pointing to a shapefile. Defines the area to clip to.
-    :type clip_shape: Union[str, gpd.GeoDataFrame]
-    :return: a xr.Dataset clipped to clip_shape and the gpd.GeoDataFrame used to clip the data.
+    Clip the atlas data to the provided geopandas shapefile / geometry.
+
+    Contract:
+    - If clip_shape is a path: it must be readable; otherwise raise immediately.
+    - Invalid geometries are auto-repaired (A2). If repair fails, raise.
+    - CRS discipline:
+        - self.data.rio.crs is the source of truth for raster clipping.
+        - Atlas invariant is enforced: self.parent.crs must equal self.data.rio.crs.
+        - clip geometry is reprojected to self.data.rio.crs before clipping.
     """
+    # Ensure data is loaded
+    if self.data is None:
+        raise ValueError(f"There is no data in {self}")
+
+    # Enforce Atlas CRS consistency invariant (per Sebastian)
+    if self.data.rio.crs is None:
+        raise ValueError("Atlas data has no CRS set (self.data.rio.crs is None).")
+    if self.parent is None or getattr(self.parent, "crs", None) is None:
+        raise ValueError("Atlas parent CRS is missing (self.parent.crs is None).")
+    if self.data.rio.crs.to_string() != str(self.parent.crs):
+        raise ValueError(
+            f"CRS inconsistency: data.rio.crs={self.data.rio.crs.to_string()} "
+            f"but parent.crs={self.parent.crs}. This must never happen."
+        )
+
     # Handle clip_shape argument type
     if isinstance(clip_shape, str):
         try:
             clip_shape = gpd.read_file(clip_shape)
         except Exception as e:
-            logging.error(f"Invalid geometry in the clipping shapefile: {e}")
+            raise ValueError(f"Cannot read clipping geometry from path: {clip_shape}") from e
     elif not isinstance(clip_shape, gpd.GeoDataFrame):
-        raise TypeError(f"clip shape must be a string path or a gpd.GeoDataFrame")
+        raise TypeError("clip_shape must be a string path or a geopandas.GeoDataFrame")
 
-    # Ensure the clip_shape geometry is valid
-    if not all(clip_shape.is_valid):
-        logging.error("Invalid geometry in clipping shape")
+    if clip_shape.empty:
+        raise ValueError("Clipping geometry is empty.")
 
-    # Ensure data is loaded
-    if self.data is None:
-        raise ValueError(f"There is no data in {self}")
+    if clip_shape.crs is None:
+        raise ValueError("Clipping geometry CRS is missing (clip_shape.crs is None).")
 
-    # Reproject clip_shape if CRS mismatch
-    if self.data.rio.crs != clip_shape.crs:
-        logging.info(f"Reprojecting clip_shape to {self.parent.crs}")
+    # A2: auto-repair invalid geometries (explicit and safe)
+    invalid_mask = ~clip_shape.is_valid
+    if invalid_mask.any():
+        n_invalid = int(invalid_mask.sum())
+        logging.warning(f"Clipping geometry has {n_invalid} invalid feature(s); attempting auto-repair.")
+
+        # Prefer make_valid if available (shapely>=2); fallback to buffer(0)
+        def _repair_geom(geom):
+            if geom is None:
+                return None
+            try:
+                from shapely.make_valid import make_valid  # shapely>=2
+                return make_valid(geom)
+            except Exception:
+                # buffer(0) is a common repair for self-intersections
+                try:
+                    return geom.buffer(0)
+                except Exception:
+                    return geom
+
+        clip_shape = clip_shape.copy()
+        clip_shape["geometry"] = clip_shape.geometry.apply(_repair_geom)
+
+        # Re-check validity and non-emptiness after repair
+        if clip_shape.empty or clip_shape.geometry.is_empty.all():
+            raise ValueError("Clipping geometry became empty after auto-repair.")
+        if not clip_shape.is_valid.all():
+            raise ValueError("Clipping geometry remains invalid after auto-repair; aborting.")
+
+    # Reproject clip_shape to raster CRS if needed
+    raster_crs = self.data.rio.crs
+    if clip_shape.crs != raster_crs:
+        logging.info(f"Reprojecting clip geometry from {clip_shape.crs} to {raster_crs.to_string()}")
         try:
-            clip_shape = clip_shape.to_crs(self.parent.crs)
+            clip_shape = clip_shape.to_crs(raster_crs)
         except Exception as e:
-            logging.error(f"Error reprojecting clip_shape: {e}")
+            raise ValueError(f"Error reprojecting clipping geometry to {raster_crs.to_string()}") from e
 
-    # Clip each DataArray in the DataSet using the clip_shape geometry
-    data_clipped = xr.Dataset()
-    data_clipped = data_clipped.rio.write_crs(self.data.rio.crs.to_string())
+    # Clip each DataArray in the Dataset using the clip_shape geometry
+    data_clipped = xr.Dataset().rio.write_crs(raster_crs.to_string())
+
+    # rioxarray expects an iterable of geometries
+    geoms = list(clip_shape.geometry)
+
+    # Import lazily so cleo can still import in minimal envs/tests if needed
+    try:
+        from rioxarray.exceptions import NoDataInBounds
+    except Exception:  # pragma: no cover
+        NoDataInBounds = ()  # fallback type, will never match
+
     for var_name, var in self.data.data_vars.items():
         try:
-            data_clipped[var_name] = var.rio.clip(clip_shape.geometry)
+            # Primary path: true crop to bounds
+            data_clipped[var_name] = var.rio.clip(
+                geoms,
+                all_touched=False,
+                drop=True,
+            )
+        except NoDataInBounds:
+            # Robust fallback for tiny / borderline polygons on coarse grids:
+            # keep full grid, but mask outside geometry. This prevents hard failures
+            # due to window-crop edge cases.
+            logging.warning(
+                f"clip_to_geometry: NoDataInBounds for '{var_name}' with drop=True; "
+                f"retrying with all_touched=True, drop=False."
+            )
+            try:
+                data_clipped[var_name] = var.rio.clip(
+                    geoms,
+                    all_touched=True,
+                    drop=False,
+                )
+            except NoDataInBounds as e:
+                raise ValueError(
+                    f"Clipping geometry does not overlap raster bounds for variable '{var_name}'."
+                ) from e
         except Exception as e:
-            logging.error(f"Error clipping data variable {var_name}: {e}")
-            continue
-    # clipped_data = self.data.rio.clip(clip_shape, all_touched=True)
-    logging.info(f"Data clipped")
+            raise ValueError(f"Error clipping data variable '{var_name}'") from e
+
+    logging.info("Data clipped")
     return data_clipped, clip_shape
 
 
@@ -111,64 +189,30 @@ def reproject(self, new_crs: str) -> None:
 # %%
 def save_to_geotiff(da: xr.DataArray, crs: str, save_path: Path, raster_name: str, nodata_value: int = -9999):
     """
-    Saves the xarray.DataArray as a GeoTIFF file, with handling for NaN values and coordinate reference system (CRS)
-    information.
+    Save a 2D (x,y) DataArray as GeoTIFF.
 
-    This function processes an `xarray.DataArray` to replace any NaN values with a specified 'no data' value,
-    sets this value in the GeoTIFF metadata, and assigns a coordinate reference system (CRS) before saving the result
-    as a GeoTIFF file. The function also ensures that the output file has a `.tif` or `.tiff` extension.
-
-    Parameters:
-    -----------
-    da : xr.DataArray
-        The input DataArray containing the raster data to be saved as a GeoTIFF. This array may contain NaN values
-        which will be replaced by the specified 'no data' value.
-
-    crs : str
-        The coordinate reference system (CRS) to assign to the GeoTIFF.
-
-    save_path : Path
-        The directory path where the GeoTIFF file will be saved.
-
-    raster_name : str
-        The name of the output GeoTIFF file. If this name does not already include a `.tif` or `.tiff` extension,
-        the function will automatically append `.tif`.
-
-    nodata_value : int, optional
-        The value to use for replacing NaNs in the DataArray and to be set as the 'no data' value
-        in the GeoTIFF metadata. The default is -9999.
-
-    Returns:
-    --------
-    None
-
-    Raises:
-    -------
-    ValueError:
-        If the input DataArray does not contain any NaN values but a 'no data' value is still expected to be set.
-
+    Contract:
+    - da must have exactly two dims which are {'x','y'} (order may be ('y','x') or ('x','y')).
+    - If NaNs exist: fill with nodata_value and write nodata metadata.
+    - If no NaNs: still write the raster (B1); do not raise.
     """
-    # Check if DataArray is two-dimensional
-    if not (len(set(da.dims)) == 2) & (set(da.dims) == {'x', 'y'}):
-        raise TypeError('Provided DataArray has more than two dimensions.')
+    # Strict 2D spatial check (fixes precedence bug)
+    dims = tuple(da.dims)
+    if not (len(dims) == 2 and set(dims) == {"x", "y"}):
+        raise TypeError(f"GeoTIFF export expects exactly dims ('x','y') in any order; got dims={dims}")
 
-    # Set up nodata value
-    if da.isnull().any():
+    # Ensure output dir exists
+    save_path.mkdir(parents=True, exist_ok=True)
 
-        # Replace NaNs with nodata value
+    # Handle NaNs -> nodata only when NaNs exist (B1)
+    if bool(da.isnull().any()):
         da = da.fillna(nodata_value)
-
-        # Write the default nodata value for the raster
         da.rio.write_nodata(nodata_value, inplace=True)
 
-    else:
-        raise ValueError('No NaN values found in DataArray. Nodata value is not set.')
-
-    # Write CRS for the raster
+    # Always write CRS
     da.rio.write_crs(crs, inplace=True)
 
-    if not raster_name.lower().endswith(('.tif', '.tiff')):
-        raster_name += '.tif'
+    if not raster_name.lower().endswith((".tif", ".tiff")):
+        raster_name += ".tif"
 
-    # Save raster as GeoTIFF
     da.rio.to_raster(save_path / raster_name)

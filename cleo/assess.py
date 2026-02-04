@@ -65,29 +65,32 @@ def requires(dep_var_mapping):
 def compute_air_density_correction(self, chunk_size=None):
     """
     Compute air density correction factor rho based on elevation data.
-    See https://wind-data.ch/tools/luftdichte.php for methodology details
+
+    Contract:
+    - Output is guaranteed to be on the same x/y grid as the Atlas template (if present),
+      otherwise on the reference GWA raster grid.
+    - CRS is enforced to self.parent.crs (Atlas CRS discipline).
+    - Final assignment to self.data is exact-grid safe (prevents NaN stripes from implicit alignment).
 
     :param self: an instance of the _WindAtlas class
     :param chunk_size: size of chunks in pixels for chunked computation. If None, computation is not chunked
     """
+    from cleo.loaders import load_elevation
+    from pathlib import Path
+    from rasterio.enums import Resampling
+    from rasterio.crs import CRS
 
     def rho_correction(elevation):
         """
-        Compute air density correction factor based on elevation
-        :param elevation: Elevation in m above sea level
-        :return: Air density correction factor rho
+        Compute air density correction factor based on elevation (meters a.s.l.)
         """
         rho_correction_factor = 1.247015 * np.exp(-0.000104 * elevation) / 1.225
-        rho_correction_factor = rho_correction_factor.squeeze().rename("air_density_correction_factor")
-        return rho_correction_factor
-
-    from cleo.loaders import load_elevation
-    from pathlib import Path
+        return rho_correction_factor.squeeze().rename("air_density_correction_factor")
 
     # Normalize path to Path object (handles str input)
     parent_path = Path(self.parent.path) if not isinstance(self.parent.path, Path) else self.parent.path
 
-    # Use A_100 raster as reference for grid alignment
+    # Use A_100 raster as reference for grid alignment (raw GWA raster)
     path_raw_country = parent_path / "data" / "raw" / f"{self.parent.country}"
     reference_file = path_raw_country / f"{self.parent.country}_combined-Weibull-A_100.tif"
 
@@ -99,75 +102,99 @@ def compute_air_density_correction(self, chunk_size=None):
 
     reference_da = rxr.open_rasterio(reference_file).squeeze()
 
-    # Load elevation with legacy-file preference, falling back to CopDEM
+    # Determine template grid to enforce exact alignment
+    if "template" in self.data.data_vars:
+        template = self.data["template"]
+        # Hard fail if template CRS contradicts Atlas CRS discipline
+        tpl_crs = template.rio.crs
+        if tpl_crs is None:
+            raise ValueError("template DataArray missing CRS (.rio.crs is None)")
+        if CRS.from_user_input(tpl_crs) != CRS.from_user_input(self.parent.crs):
+            raise ValueError(
+                f"template CRS ({tpl_crs}) does not match Atlas CRS ({self.parent.crs}). "
+                "Refuse to compute air_density_correction on inconsistent grids."
+            )
+    else:
+        # Fallback: enforce Atlas CRS on the reference grid for a consistent output CRS
+        ref_crs = reference_da.rio.crs
+        if ref_crs is None:
+            raise ValueError("reference GWA raster missing CRS (.rio.crs is None)")
+        if CRS.from_user_input(ref_crs) != CRS.from_user_input(self.parent.crs):
+            reference_da = reference_da.rio.reproject(self.parent.crs, nodata=np.nan).squeeze()
+        template = reference_da
+
+    # Load elevation (legacy preferred; CopDEM fallback). Contract: must be made to match template.
     elevation = load_elevation(self.parent.path, self.parent.country, reference_da)
 
-    # Robust CRS comparison using rasterio.crs.CRS
-    from rasterio.crs import CRS
     src_crs = elevation.rio.crs
     if src_crs is None:
         raise ValueError("elevation DataArray missing CRS (.rio.crs is None)")
-    dst_crs = CRS.from_user_input(self.parent.crs)
 
-    if src_crs != dst_crs:
-        elevation = elevation.rio.reproject(self.parent.crs, nodata=np.nan).squeeze()
-
+    # Optional clip, but ALWAYS reproject-match to template afterwards (exact grid contract)
     if self.parent.region is not None:
         clip_shape = self.parent.get_nuts_region(self.parent.region)
+        if clip_shape is None:
+            raise ValueError(f"region={self.parent.region!r} produced no geometry from get_nuts_region()")
         if clip_shape.crs != self.parent.crs:
             clip_shape = clip_shape.to_crs(self.parent.crs)
         elevation = elevation.rio.clip(clip_shape.geometry)
+
+    # Enforce exact template grid + Atlas CRS with bilinear resampling (continuous elevation)
+    elevation = elevation.rio.reproject_match(template, resampling=Resampling.bilinear, nodata=np.nan).squeeze()
 
     if chunk_size is None:
         rho = rho_correction(elevation)
     else:
         rho = compute_chunked(self, rho_correction, chunk_size, elevation=elevation)
 
-    self.data["air_density_correction"] = rho
-    logging.info(f'Air density correction for {self.parent.country} computed.')
+    # Final exact-grid enforcement before storing (prevents silent alignment/NaN stripes)
+    rho = rho.rio.reproject_match(template, resampling=Resampling.bilinear, nodata=np.nan).squeeze()
+
+    # Hard check: x/y coords identical
+    if not (np.array_equal(rho.coords["x"].values, template.coords["x"].values) and
+            np.array_equal(rho.coords["y"].values, template.coords["y"].values)):
+        raise ValueError("air_density_correction grid does not match template grid exactly (x/y coord mismatch)")
+
+    self.data["air_density_correction"] = rho.rename("air_density_correction")
+    logging.info(f"Air density correction for {self.parent.country} computed.")
 
 
 def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     """
-    Compute mean wind speed for a given height
+    Compute mean wind speed for a given height.
+
+    Contract:
+    - Idempotent: if height already exists, do nothing.
+    - Preserves dataset-level coords (never rebuild self.data from data_vars).
+    - If template exists, all height slices are exact-grid matched to template and concat uses join="exact".
+      Otherwise concat uses join="outer" (legacy/no-template mode).
 
     :param self: An instance of the Atlas-class
     :param height: Height for which to compute mean wind speed
     :type height: int
     :param chunk_size: number of chunks for chunked computation. If None, computation is not chunked.
     :type chunk_size: int
-    :param inplace: If True, add mean wind speed to Dataset
+    :param inplace: If True, add mean wind speed to Dataset (kept for backward compatibility; function always updates self.data)
     """
-
     # Early return if height already exists (idempotent)
     if "mean_wind_speed" in self.data and height in self.data["mean_wind_speed"].coords["height"].values:
         logging.info(f"Mean wind speed at height '{height} m' already exists, skipping computation")
         return
 
     def calculate_mean_wind_speed(weibull_a, weibull_k):
-        """
-        Compute mean wind speed from given weibull distribution of wind speeds
-
-        :param weibull_a: Weibull parameter A
-        :type weibull_a: xr.DataArray
-        :param weibull_k: Weibull parameter k
-        :type weibull_k: xr.DataArray
-        :return: mean wind speed
-        :rtype: xr.DataArray
-        """
         mean_wind_speed = weibull_a * gamma(1 / weibull_k + 1)
         return mean_wind_speed.rename("mean_wind_speed").assign_attrs(units="m/s").squeeze()
 
-    inputs = dict(zip(["weibull_a", "weibull_k"], self.load_weibull_parameters(height)))
-
+    weibull_a, weibull_k = self.load_weibull_parameters(height)
     mean_wind_speed_data = (
-        calculate_mean_wind_speed(**inputs)
+        calculate_mean_wind_speed(weibull_a=weibull_a, weibull_k=weibull_k)
         if chunk_size is None
-        else compute_chunked(self, calculate_mean_wind_speed, chunk_size, **inputs)
+        else compute_chunked(self, calculate_mean_wind_speed, chunk_size, weibull_a=weibull_a, weibull_k=weibull_k)
     )
 
-    # Align to template grid if available
-    if "template" in self.data.data_vars:
+    # Align new slice to template grid if available
+    has_template = "template" in self.data.data_vars
+    if has_template:
         template = self.data["template"]
         mean_wind_speed_data = _match_to_template(mean_wind_speed_data, template)
 
@@ -175,30 +202,35 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
 
     if "mean_wind_speed" not in self.data:
         self.data["mean_wind_speed"] = mean_wind_speed_data
-    else:
-        # Align existing mean_wind_speed to template if needed
-        if "template" in self.data.data_vars:
-            template = self.data["template"]
-            existing = self.data["mean_wind_speed"]
-            aligned_slices = []
-            for h in existing.coords["height"].values:
-                slice_2d = existing.sel(height=h).drop_vars("height")
-                aligned_slice = _match_to_template(slice_2d, template)
-                aligned_slices.append(aligned_slice.expand_dims(height=[h]))
-            existing_aligned = xr.concat(aligned_slices, dim="height")
-        else:
-            existing_aligned = self.data["mean_wind_speed"]
+        return
 
-        # Height doesn't exist yet (checked by early return), so concat
-        # Use join="exact" only when template exists (everything is aligned to it)
-        join_mode = "exact" if "template" in self.data.data_vars else "outer"
-        mean_wind_speed_concatenated = xr.concat(
-            [existing_aligned, mean_wind_speed_data], dim="height", join=join_mode
-        )
-        # Rebuild dataset without old mean_wind_speed to avoid height coord conflict
-        other_vars = {k: v for k, v in self.data.data_vars.items() if k != "mean_wind_speed"}
-        self.data = xr.Dataset(other_vars, attrs=self.data.attrs)
-        self.data["mean_wind_speed"] = mean_wind_speed_concatenated
+    existing = self.data["mean_wind_speed"]
+
+    # If template exists, align all existing slices to template before concatenation
+    if has_template:
+        template = self.data["template"]
+        aligned_slices = []
+        for h in existing.coords["height"].values:
+            slice_2d = existing.sel(height=h).drop_vars("height")
+            aligned_slice = _match_to_template(slice_2d, template)
+            aligned_slices.append(aligned_slice.expand_dims(height=[h]))
+        existing_aligned = xr.concat(aligned_slices, dim="height", join="exact")
+        join_mode = "exact"
+    else:
+        existing_aligned = existing
+        join_mode = "outer"
+
+    combined = xr.concat([existing_aligned, mean_wind_speed_data], dim="height", join=join_mode)
+
+    # Deterministic ordering and uniqueness
+    combined = combined.sortby("height")
+
+    # Update Dataset height coordinate safely:
+    # drop the old variable first (it carries the old height dimension size), then set coord and reattach.
+    ds = self.data.drop_vars("mean_wind_speed")
+    ds = ds.assign_coords(height=combined.coords["height"])
+    ds["mean_wind_speed"] = combined
+    self.data = ds
 
 
 def compute_wind_shear_coefficient(self, chunk_size=None):
@@ -228,8 +260,11 @@ def compute_wind_shear_coefficient(self, chunk_size=None):
             np.nan,
         )
 
-    # Log warning if invalid cells exist
-    invalid_count = int((~valid).sum())
+    # Log warning if invalid cells exist (dask-safe scalar reduction)
+    invalid_sum = (~valid).sum()
+    if hasattr(invalid_sum.data, "compute"):
+        invalid_sum = invalid_sum.compute()
+    invalid_count = int(invalid_sum.values.item())
     if invalid_count > 0:
         total_count = int(valid.size)
         logging.warning(
@@ -386,7 +421,8 @@ def compute_optimal_power_energy(self):
     least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
     energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
     energy = energy.assign_coords({'turbine': "min_lcoe"})
-    energy = energy * power * 8766 / 10 ** 6
+    # power is in kW; CF is dimensionless; 8766 h/year -> kWh/year; divide by 1e6 -> GWh/year
+    energy = (energy * power * 8766 / 10 ** 6).rename("optimal_energy").assign_attrs(units="GWh/a")
     self.data["optimal_energy"] = energy
 
 
@@ -404,25 +440,37 @@ def minimum_lcoe(self):
 # %% functions
 def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
     """
-    Calculates probability density at points in u_power_curve given Weibull parameters in k and A
-    :param u_power_curve: Power curve wind speeds
-    :param weibull_k: k-parameter of the Weibull distribution of wind speed
-    :param weibull_a: A-parameter of the Weibull distribution of wind speed
-    :return:
+    Calculate Weibull probability density at wind-speed grid u_power_curve.
+
+    Performance contract:
+    - Vectorized / broadcasted computation (dask-friendly).
+    - Produces dims ('wind_speed', 'y', 'x') (plus any extra non-spatial dims from inputs),
+      with wind_speed coordinate exactly equal to u_power_curve.
+
+    Mathematical definition (for u > 0):
+        f(u) = (k/a) * (u/a)^(k-1) * exp(-(u/a)^k)
+
+    At u = 0:
+        f(0) := 0 (continuous Weibull; avoids inf when k < 1)
+
+    :param u_power_curve: 1D array-like wind speed grid (exact labels contract)
+    :param weibull_k: raster k parameter
+    :param weibull_a: raster a parameter
+    :return: DataArray with wind_speed dimension
     """
-    uar = np.asarray(u_power_curve)
-    prb = []
-    for z in uar:
-        if z == 0:
-            # At u=0, pdf=0 for continuous Weibull (avoids inf when k<1)
-            prb.append(xr.zeros_like(weibull_a))
-        else:
-            p = (weibull_k / weibull_a * (z / weibull_a) ** (weibull_k - 1)) * np.exp(-(z / weibull_a) ** weibull_k)
-            prb.append(p)
-    pdf = xr.concat(prb, dim='wind_speed', join='exact')
-    pdf = pdf.assign_coords({'wind_speed': u_power_curve})
-    pdf = pdf.squeeze().rename("weibull_probability_density")
-    return pdf
+    u = np.asarray(u_power_curve)
+    u_da = xr.DataArray(u, dims=("wind_speed",), coords={"wind_speed": u})
+
+    # Broadcasting: u_da (wind_speed) over raster (y,x)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        z = u_da / weibull_a
+        pdf = (weibull_k / weibull_a) * (z ** (weibull_k - 1)) * np.exp(-(z ** weibull_k))
+
+    # Exact u=0 handling (avoids inf for k<1); keep dtype float
+    pdf = xr.where(u_da == 0, 0.0, pdf)
+
+    pdf = pdf.transpose("wind_speed", ...)  # stable dim order
+    return pdf.squeeze().rename("weibull_probability_density")
 
 
 def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_turbine, h_reference=100,
@@ -470,19 +518,21 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
     # Streaming trapezoidal integration over u_ref
     acc = np.zeros(spatial_shape, dtype=np.float64)
 
-    # Align weibull_pdf by wind_speed coordinate to match u_power_curve order
+    # Exact wind_speed grid contract (no tolerant float matching).
+    # Order may differ; alignment MUST be by label (prevents positional bugs).
     if "wind_speed" in weibull_pdf.dims:
-        # Check that all required wind speeds are present
-        pdf_wind_speeds = set(weibull_pdf.coords["wind_speed"].values)
-        required_wind_speeds = set(u)
-        missing = required_wind_speeds - pdf_wind_speeds
-        if missing:
+        ws = np.asarray(weibull_pdf.coords["wind_speed"].values)
+
+        # Require exact same labels (no tolerance), but allow different order.
+        if ws.shape != u.shape or not np.array_equal(np.sort(ws), np.sort(u)):
             raise ValueError(
-                f"weibull_pdf missing wind_speed labels: {sorted(missing)}"
+                "wind_speed grid mismatch: weibull_pdf.coords['wind_speed'] must contain exactly the same "
+                "labels as u_power_curve (order can differ). "
+                f"Got coords={ws!r} vs u_power_curve={u!r}."
             )
-        # Reindex to match u_power_curve order (label-based alignment)
+
+        # Reorder by label to match u_power_curve order (contract: label-based)
         weibull_pdf_aligned = weibull_pdf.sel(wind_speed=u)
-        # Move wind_speed to first axis for consistent indexing
         pdf_vals = weibull_pdf_aligned.transpose("wind_speed", ...).values
     else:
         pdf_vals = weibull_pdf.values
@@ -543,7 +593,7 @@ def levelized_cost(power, capacity_factors, overnight_cost, grid_cost, om_fixed,
     :type power: float
     :param capacity_factors: wind turbine capacity factor (share of year)
     :type capacity_factors: xarray.DataArray
-    :param overnight_cost: in EUR/MW
+    :param overnight_cost: absolute overnight cost in EUR (lump sum for this turbine at this location)
     :type overnight_cost: float
     :param grid_cost: cost for connecting to the electricity grid
     :type grid_cost: xarray.DataArray

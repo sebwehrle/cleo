@@ -38,7 +38,7 @@ def test_fetch_gwa_crs_handles_string_encoded_json(monkeypatch):
     # Outer response: response.json() returns the JSON as a STRING
     outer_string = json.dumps(inner_json)
 
-    def mock_get(url, headers=None):
+    def mock_get(url, headers=None, **kwargs):
         return MockResponse(outer_string)
 
     monkeypatch.setattr("cleo.loaders.requests.get", mock_get)
@@ -64,7 +64,7 @@ def test_fetch_gwa_crs_handles_dict_json(monkeypatch):
         }
     }
 
-    def mock_get(url, headers=None):
+    def mock_get(url, headers=None, **kwargs):
         return MockResponse(json_dict)
 
     monkeypatch.setattr("cleo.loaders.requests.get", mock_get)
@@ -79,7 +79,7 @@ def test_fetch_gwa_crs_raises_on_missing_crs_in_string(monkeypatch):
     inner_json = {"type": "FeatureCollection", "features": []}
     outer_string = json.dumps(inner_json)
 
-    def mock_get(url, headers=None):
+    def mock_get(url, headers=None, **kwargs):
         return MockResponse(outer_string)
 
     monkeypatch.setattr("cleo.loaders.requests.get", mock_get)

@@ -44,7 +44,7 @@ def test_download_copdem_tile_success(monkeypatch, tmp_path):
     call_count = {"count": 0}
     fake_content = b"FAKE_TIF_CONTENT"
 
-    def mock_get(url, stream=False, timeout=None):
+    def mock_get(url, stream=False, timeout=None, **kwargs):
         call_count["count"] += 1
         return MockResponse(status_code=200, content=fake_content)
 
@@ -70,7 +70,7 @@ def test_download_copdem_tile_cache_hit(monkeypatch, tmp_path):
     call_count = {"count": 0}
     fake_content = b"FAKE_TIF_CONTENT"
 
-    def mock_get(url, stream=False, timeout=None):
+    def mock_get(url, stream=False, timeout=None, **kwargs):
         call_count["count"] += 1
         return MockResponse(status_code=200, content=fake_content)
 
@@ -90,7 +90,7 @@ def test_download_copdem_tile_overwrite(monkeypatch, tmp_path):
     """Test that overwrite=True re-downloads the file."""
     call_count = {"count": 0}
 
-    def mock_get(url, stream=False, timeout=None):
+    def mock_get(url, stream=False, timeout=None, **kwargs):
         call_count["count"] += 1
         return MockResponse(status_code=200, content=f"CONTENT_{call_count['count']}".encode())
 
@@ -109,7 +109,7 @@ def test_download_copdem_tile_overwrite(monkeypatch, tmp_path):
 def test_download_copdem_tile_not_found(monkeypatch, tmp_path):
     """Test that HTTP 404 raises FileNotFoundError."""
 
-    def mock_get(url, stream=False, timeout=None):
+    def mock_get(url, stream=False, timeout=None, **kwargs):
         return MockResponse(status_code=404)
 
     monkeypatch.setattr("cleo.copdem.requests.get", mock_get)

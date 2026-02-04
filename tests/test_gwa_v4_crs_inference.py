@@ -29,7 +29,7 @@ def test_fetch_gwa_crs_parses_response(monkeypatch):
     """Test that fetch_gwa_crs correctly parses CRS from GeoJSON response."""
     mock_json = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}}}
 
-    def mock_get(url, headers=None):
+    def mock_get(url, headers=None, **kwargs):
         return MockResponse(mock_json)
 
     monkeypatch.setattr("cleo.loaders.requests.get", mock_get)
@@ -43,7 +43,7 @@ def test_ensure_crs_sets_crs_when_missing(monkeypatch, tmp_path):
     """Test that ensure_crs_from_gwa sets CRS when raster has no CRS."""
     mock_json = {"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}}}
 
-    def mock_get(url, headers=None):
+    def mock_get(url, headers=None, **kwargs):
         return MockResponse(mock_json)
 
     monkeypatch.setattr("cleo.loaders.requests.get", mock_get)
@@ -80,7 +80,7 @@ def test_ensure_crs_does_not_call_api_when_crs_present(monkeypatch, tmp_path):
     """Test that ensure_crs_from_gwa does not call API when raster already has CRS."""
     call_count = {"count": 0}
 
-    def mock_get(url, headers=None):
+    def mock_get(url, headers=None, **kwargs):
         call_count["count"] += 1
         return MockResponse({"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}}})
 
@@ -121,7 +121,7 @@ def test_fetch_gwa_crs_raises_on_missing_crs(monkeypatch):
     """Test that fetch_gwa_crs raises ValueError when CRS is missing from response."""
     mock_json = {"some": "data", "but": "no_crs"}
 
-    def mock_get(url, headers=None):
+    def mock_get(url, headers=None, **kwargs):
         return MockResponse(mock_json)
 
     monkeypatch.setattr("cleo.loaders.requests.get", mock_get)

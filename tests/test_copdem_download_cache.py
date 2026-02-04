@@ -16,9 +16,17 @@ class MockResponse:
     def __init__(self, status_code=200, content=b"FAKE_TIF"):
         self.status_code = status_code
         self._content = content
+        self.closed = False
 
     def iter_content(self, chunk_size=8192):
         yield self._content
+
+    def raise_for_status(self):
+        if self.status_code >= 400 and self.status_code != 404:
+            raise Exception(f"HTTP Error: {self.status_code}")
+
+    def close(self):
+        self.closed = True
 
 
 TILE_ID = "Copernicus_DSM_COG_10_N46_00_E009_00_DEM"
@@ -35,7 +43,7 @@ def test_copdem_tile_url():
 def test_copdem_tile_cache_path(tmp_path):
     """Test that copdem_tile_cache_path returns the correct path structure."""
     path = copdem_tile_cache_path(tmp_path, ISO3, TILE_ID)
-    expected = tmp_path / ISO3 / "copdem" / TILE_ID / f"{TILE_ID}.tif"
+    expected = tmp_path / "data" / "raw" / ISO3 / "copdem" / TILE_ID / f"{TILE_ID}.tif"
     assert path == expected
 
 
@@ -43,10 +51,13 @@ def test_download_copdem_tile_success(monkeypatch, tmp_path):
     """Test successful download of a Copernicus DEM tile."""
     call_count = {"count": 0}
     fake_content = b"FAKE_TIF_CONTENT"
+    last_response = {"obj": None}
 
     def mock_get(url, stream=False, timeout=None, **kwargs):
         call_count["count"] += 1
-        return MockResponse(status_code=200, content=fake_content)
+        resp = MockResponse(status_code=200, content=fake_content)
+        last_response["obj"] = resp
+        return resp
 
     monkeypatch.setattr("cleo.copdem.requests.get", mock_get)
 
@@ -54,7 +65,7 @@ def test_download_copdem_tile_success(monkeypatch, tmp_path):
     result_path = download_copdem_tile(tmp_path, ISO3, TILE_ID)
 
     # Assert path is correct
-    expected_path = tmp_path / ISO3 / "copdem" / TILE_ID / f"{TILE_ID}.tif"
+    expected_path = tmp_path / "data" / "raw" / ISO3 / "copdem" / TILE_ID / f"{TILE_ID}.tif"
     assert result_path == expected_path
 
     # Assert file exists with expected content
@@ -63,6 +74,9 @@ def test_download_copdem_tile_success(monkeypatch, tmp_path):
 
     # Assert requests.get was called once
     assert call_count["count"] == 1
+
+    # Assert response was closed
+    assert last_response["obj"].closed is True
 
 
 def test_download_copdem_tile_cache_hit(monkeypatch, tmp_path):

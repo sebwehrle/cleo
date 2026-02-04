@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from cleo.copdem import download_copdem_tiles_for_bbox, tiles_for_bbox
 
 
@@ -34,18 +36,14 @@ def test_download_copdem_tiles_for_bbox(monkeypatch, tmp_path):
             expected_tile_ids.append(oracle_tile_id(lat_deg, lon_deg))
     expected_tile_ids.sort()
 
-    # Track calls to download_copdem_tile
     calls = []
 
     def mock_download_copdem_tile(base_dir, iso3, tile_id, *, overwrite=False):
         calls.append((iso3, tile_id, overwrite))
-        # Return a deterministic fake path
-        fake_path = Path(base_dir) / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
-        return fake_path
+        return Path(base_dir) / "data" / "raw" / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
 
     monkeypatch.setattr("cleo.copdem.download_copdem_tile", mock_download_copdem_tile)
 
-    # Call the function under test
     result_paths = download_copdem_tiles_for_bbox(
         tmp_path,
         iso3,
@@ -56,23 +54,19 @@ def test_download_copdem_tiles_for_bbox(monkeypatch, tmp_path):
         overwrite=False,
     )
 
-    # Assert download_copdem_tile called exactly 3 times
     assert len(calls) == 3, f"Expected 3 calls, got {len(calls)}"
 
-    # Assert tile_ids match expected in lexicographic order
     actual_tile_ids = [call[1] for call in calls]
     assert actual_tile_ids == expected_tile_ids, (
         f"Tile IDs mismatch:\nExpected: {expected_tile_ids}\nGot: {actual_tile_ids}"
     )
 
-    # Assert iso3 and overwrite are correct in all calls
-    for iso3_arg, tile_id, overwrite_arg in calls:
+    for iso3_arg, _, overwrite_arg in calls:
         assert iso3_arg == iso3
         assert overwrite_arg is False
 
-    # Assert returned paths match expected
     expected_paths = [
-        tmp_path / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
+        tmp_path / "data" / "raw" / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
         for tile_id in expected_tile_ids
     ]
     assert result_paths == expected_paths
@@ -84,7 +78,7 @@ def test_download_copdem_tiles_for_bbox_overwrite(monkeypatch, tmp_path):
 
     def mock_download_copdem_tile(base_dir, iso3, tile_id, *, overwrite=False):
         calls.append((iso3, tile_id, overwrite))
-        return Path(base_dir) / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
+        return Path(base_dir) / "data" / "raw" / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
 
     monkeypatch.setattr("cleo.copdem.download_copdem_tile", mock_download_copdem_tile)
 
@@ -98,7 +92,6 @@ def test_download_copdem_tiles_for_bbox_overwrite(monkeypatch, tmp_path):
         overwrite=True,
     )
 
-    # Assert overwrite=True was passed to all calls
     for _, _, overwrite_arg in calls:
         assert overwrite_arg is True
 
@@ -111,7 +104,7 @@ def test_download_copdem_tiles_for_bbox_determinism(monkeypatch, tmp_path):
     def make_mock(calls_list):
         def mock_download_copdem_tile(base_dir, iso3, tile_id, *, overwrite=False):
             calls_list.append(tile_id)
-            return Path(base_dir) / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
+            return Path(base_dir) / "data" / "raw" / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
         return mock_download_copdem_tile
 
     monkeypatch.setattr("cleo.copdem.download_copdem_tile", make_mock(calls1))
@@ -126,3 +119,8 @@ def test_download_copdem_tiles_for_bbox_determinism(monkeypatch, tmp_path):
 
     assert calls1 == calls2, "Tile download order should be deterministic"
     assert result1 == result2, "Returned paths should be deterministic"
+
+
+def test_tiles_for_bbox_degenerate_raises():
+    with pytest.raises(ValueError, match="Degenerate bbox"):
+        tiles_for_bbox(10.0, 45.0, 10.0, 46.0)

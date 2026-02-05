@@ -7,7 +7,11 @@ import xarray as xr
 from cleo.assess import compute_wind_shear_coefficient
 
 
-def test_wind_shear_dask_safe_logging():
+def test_wind_shear_rejects_dask_arrays():
+    """
+    D3=B: Dask arrays are unsupported; compute_wind_shear_coefficient must
+    raise TypeError with a clear message when inputs are dask-backed.
+    """
     da = pytest.importorskip("dask.array")
 
     u50 = xr.DataArray(da.ones((2, 2), chunks=(2, 2)), dims=("y", "x"))
@@ -23,7 +27,5 @@ def test_wind_shear_dask_safe_logging():
     self.data = xr.Dataset({"mean_wind_speed": mean})
     self.parent = type("P", (), {"country": "AUT"})()
 
-    compute_wind_shear_coefficient(self, chunk_size=None)
-
-    assert "wind_shear" in self.data.data_vars
-    assert self.data["wind_shear"].shape == (2, 2)
+    with pytest.raises(TypeError, match="Dask arrays are not supported"):
+        compute_wind_shear_coefficient(self, chunk_size=None)

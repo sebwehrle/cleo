@@ -12,6 +12,50 @@ from cleo.chunk import compute_chunked
 logger = logging.getLogger(__name__)
 
 
+def _is_dask_backed(data):
+    """
+    Check if data is backed by a dask array.
+
+    :param data: xarray DataArray, Dataset, or numpy-like array
+    :return: True if dask-backed, False otherwise
+    """
+    # Handle xarray objects
+    if hasattr(data, "data"):
+        arr = data.data
+    else:
+        arr = data
+
+    # Check for dask array - look for compute method and dask module
+    if hasattr(arr, "compute") and hasattr(arr, "__module__"):
+        module = getattr(arr, "__module__", "") or ""
+        if module.startswith("dask"):
+            return True
+
+    # Alternative check using xarray's built-in if available
+    try:
+        from xarray.core.utils import is_duck_dask_array
+        if hasattr(data, "data"):
+            return is_duck_dask_array(data.data)
+    except ImportError:
+        pass
+
+    return False
+
+
+def _require_not_dask(*arrays):
+    """
+    Raise TypeError if any input is dask-backed.
+
+    :param arrays: Variable number of arrays to check
+    :raises TypeError: If any array is dask-backed
+    """
+    for arr in arrays:
+        if _is_dask_backed(arr):
+            raise TypeError(
+                "Dask arrays are not supported; call .compute() first."
+            )
+
+
 # %% decorator
 def accepts_parameter(func, parameter):
     """
@@ -250,6 +294,9 @@ def compute_wind_shear_coefficient(self, chunk_size=None):
 
     u_mean_50 = self.data.mean_wind_speed.sel(height=50)
     u_mean_100 = self.data.mean_wind_speed.sel(height=100)
+
+    # Dask arrays not supported - require eager computation
+    _require_not_dask(u_mean_50, u_mean_100)
 
     # Mask invalid cells to avoid log(<=0) which produces inf/NaN
     valid = (u_mean_50 > 0) & (u_mean_100 > 0) & np.isfinite(u_mean_50) & np.isfinite(u_mean_100)

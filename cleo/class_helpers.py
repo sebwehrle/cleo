@@ -5,6 +5,7 @@ import shutil
 import numpy as np
 import xarray as xr
 import rioxarray as rxr
+import rasterio.crs
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,9 @@ def build_netcdf(self, atlas_type):
             # Attach the detected existing CRS to raster vars so reproject can run
             self.data = _attach_crs_to_raster_vars(self.data, existing_crs)
 
-            if str(existing_crs) != str(self.parent.crs):
+            # Semantic CRS comparison (not string-based)
+            expected_crs = rasterio.crs.CRS.from_user_input(self.parent.crs)
+            if existing_crs != expected_crs:
                 self.data = self.data.rio.reproject(self.parent.crs, nodata=np.nan)
                 self.data = _attach_crs_to_raster_vars(self.data, self.parent.crs)
 
@@ -210,8 +213,11 @@ def set_attributes(self):
     self.data.attrs['region'] = self.parent.region
     if self.data.rio.crs is None:
         raise AttributeError(f"{self.data} does not have a coordinate reference system.")
-    if self.data.rio.crs != self.parent.crs:
-        raise ValueError(f"Coordinate reference system mismatch: {self.parent.crs} and {self.data.rio.crs}")
+    # Semantic CRS comparison (not string-based)
+    expected_crs = rasterio.crs.CRS.from_user_input(self.parent.crs)
+    actual_crs = self.data.rio.crs
+    if actual_crs != expected_crs:
+        raise ValueError(f"Coordinate reference system mismatch: expected={expected_crs} got={actual_crs}")
 
 
 def setup_logging(self, console_level="INFO", file_level="DEBUG"):

@@ -33,9 +33,12 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
         raise ValueError("Atlas data has no CRS set (self.data.rio.crs is None).")
     if self.parent is None or getattr(self.parent, "crs", None) is None:
         raise ValueError("Atlas parent CRS is missing (self.parent.crs is None).")
-    if self.data.rio.crs.to_string() != str(self.parent.crs):
+    # Semantic CRS comparison (not string-based)
+    expected_crs = rasterio.crs.CRS.from_user_input(self.parent.crs)
+    actual_crs = self.data.rio.crs
+    if actual_crs != expected_crs:
         raise ValueError(
-            f"CRS inconsistency: data.rio.crs={self.data.rio.crs.to_string()} "
+            f"CRS inconsistency: data.rio.crs={actual_crs} "
             f"but parent.crs={self.parent.crs}. This must never happen."
         )
 

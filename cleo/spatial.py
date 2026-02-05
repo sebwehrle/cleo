@@ -8,6 +8,8 @@ import xarray as xr
 from typing import Union
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 
 # %% methods
 def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Dataset, gpd.GeoDataFrame):
@@ -56,7 +58,7 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
     invalid_mask = ~clip_shape.is_valid
     if invalid_mask.any():
         n_invalid = int(invalid_mask.sum())
-        logging.warning(f"Clipping geometry has {n_invalid} invalid feature(s); attempting auto-repair.")
+        logger.warning(f"Clipping geometry has {n_invalid} invalid feature(s); attempting auto-repair.")
 
         # Prefer make_valid if available (shapely>=2); fallback to buffer(0)
         def _repair_geom(geom):
@@ -84,7 +86,7 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
     # Reproject clip_shape to raster CRS if needed
     raster_crs = self.data.rio.crs
     if clip_shape.crs != raster_crs:
-        logging.info(f"Reprojecting clip geometry from {clip_shape.crs} to {raster_crs.to_string()}")
+        logger.info(f"Reprojecting clip geometry from {clip_shape.crs} to {raster_crs.to_string()}")
         try:
             clip_shape = clip_shape.to_crs(raster_crs)
         except Exception as e:
@@ -114,7 +116,7 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
             # Robust fallback for tiny / borderline polygons on coarse grids:
             # keep full grid, but mask outside geometry. This prevents hard failures
             # due to window-crop edge cases.
-            logging.warning(
+            logger.warning(
                 f"clip_to_geometry: NoDataInBounds for '{var_name}' with drop=True; "
                 f"retrying with all_touched=True, drop=False."
             )
@@ -131,7 +133,7 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
         except Exception as e:
             raise ValueError(f"Error clipping data variable '{var_name}'") from e
 
-    logging.info("Data clipped")
+    logger.info("Data clipped")
     return data_clipped, clip_shape
 
 
@@ -174,16 +176,16 @@ def reproject(self, new_crs: str) -> None:
             nodata=np.nan
         )
     if self.crs == rasterio.crs.CRS.from_string(new_crs):
-        logging.info(f"Data already in projected in CRS '{new_crs}'")
+        logger.info(f"Data already in projected in CRS '{new_crs}'")
     else:
         try:
             # reproject each data variable in the dataset
             data_reproj = self.data.map(reproject_var, keep_attrs=True)
-            logging.info(f"Reprojection of data variables to crs {new_crs} completed")
+            logger.info(f"Reprojection of data variables to crs {new_crs} completed")
             self.data = data_reproj
             self.crs = rasterio.crs.CRS.from_string(new_crs)
         except Exception as e:
-            logging.error(f"Error during reprojecting atlas: {e}")
+            logger.error(f"Error during reprojecting atlas: {e}")
 
 
 # %%

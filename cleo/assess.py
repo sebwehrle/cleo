@@ -9,6 +9,8 @@ from scipy.special import gamma
 from cleo.utils import _match_to_template
 from cleo.chunk import compute_chunked
 
+logger = logging.getLogger(__name__)
+
 
 # %% decorator
 def accepts_parameter(func, parameter):
@@ -156,7 +158,7 @@ def compute_air_density_correction(self, chunk_size=None):
         raise ValueError("air_density_correction grid does not match template grid exactly (x/y coord mismatch)")
 
     self.data["air_density_correction"] = rho.rename("air_density_correction")
-    logging.info(f"Air density correction for {self.parent.country} computed.")
+    logger.info(f"Air density correction for {self.parent.country} computed.")
 
 
 def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
@@ -178,7 +180,7 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     """
     # Early return if height already exists (idempotent)
     if "mean_wind_speed" in self.data and height in self.data["mean_wind_speed"].coords["height"].values:
-        logging.info(f"Mean wind speed at height '{height} m' already exists, skipping computation")
+        logger.info(f"Mean wind speed at height '{height} m' already exists, skipping computation")
         return
 
     def calculate_mean_wind_speed(weibull_a, weibull_k):
@@ -267,12 +269,12 @@ def compute_wind_shear_coefficient(self, chunk_size=None):
     invalid_count = int(invalid_sum.values.item())
     if invalid_count > 0:
         total_count = int(valid.size)
-        logging.warning(
+        logger.warning(
             f"wind_shear: {invalid_count}/{total_count} cells masked (non-positive or non-finite wind speed)"
         )
 
     self.data['wind_shear'] = alpha.squeeze().rename("wind_shear")
-    logging.info(f'Wind shear coefficient for {self.parent.country} computed.')
+    logger.info(f'Wind shear coefficient for {self.parent.country} computed.')
 
 
 def compute_weibull_pdf(self, chunk_size=None):
@@ -309,7 +311,7 @@ def compute_weibull_pdf(self, chunk_size=None):
         p = _match_to_template(p, tpl)
 
     self.data["weibull_pdf"] = p
-    logging.info(f'Weibull probability density function of wind speeds in {self.data.attrs["country"]} computed.')
+    logger.info(f'Weibull probability density function of wind speeds in {self.data.attrs["country"]} computed.')
 
 
 # %% dependent methods
@@ -343,7 +345,7 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
 
         # cf = cf * self.data["air_density_correction"]
         cf = cf.expand_dims(turbine=[turbine_model])
-        logging.info(f"Capacity factors for {turbine_model} in {self.data.attrs['country']} computed.")
+        logger.info(f"Capacity factors for {turbine_model} in {self.data.attrs['country']} computed.")
         # cap_factor = xr.merge([cap_factor, cf.rename("capacity_factor")])
         cap_factor.append(cf)
 
@@ -393,7 +395,7 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
         lcoe_list.append(lcoe)
 
     self.data["lcoe"] = xr.concat(lcoe_list, dim='turbine').rename("lcoe").assign_attrs(units="EUR/MWh")
-    logging.info(f"Levelized Cost of Electricity in {self.data.attrs['country']} computed.")
+    logger.info(f"Levelized Cost of Electricity in {self.data.attrs['country']} computed.")
 
 
 @requires({'compute_lcoe': 'lcoe'})

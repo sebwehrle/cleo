@@ -15,6 +15,8 @@ from pathlib import Path
 from cleo.assess import turbine_overnight_cost
 from cleo.utils import download_file
 
+logger = logging.getLogger(__name__)
+
 
 def _load_yaml_file(path: Path, *, context: str) -> dict:
     """Load a YAML file with consistent UTF-8 handling and good error context."""
@@ -158,7 +160,7 @@ def load_elevation(base_dir, iso3, reference_da):
         if air_density_path.exists():
             reference_da = rxr.open_rasterio(air_density_path).squeeze(drop=True)
             reference_da = ensure_crs_from_gwa(reference_da, iso3)
-            logging.info(f"Using air-density raster as CRS reference: {air_density_path}")
+            logger.info(f"Using air-density raster as CRS reference: {air_density_path}")
         else:
             raise ValueError(
                 f"Reference DataArray has no CRS and air-density reference file not found: {air_density_path}"
@@ -191,13 +193,13 @@ def load_elevation(base_dir, iso3, reference_da):
                 if not np.array_equal(elevation[dim].values, reference_da[dim].values):
                     raise ValueError(f"Elevation coordinate mismatch on dim '{dim}' after reproject_match")
 
-            logging.info(f"Loaded legacy elevation from {legacy_path} and matched to reference grid.")
+            logger.info(f"Loaded legacy elevation from {legacy_path} and matched to reference grid.")
             return elevation
         except Exception as e:
-            logging.warning(f"Legacy elevation file exists but failed to open/match: {e}")
+            logger.warning(f"Legacy elevation file exists but failed to open/match: {e}")
 
     # Fall back to CopDEM
-    logging.info("Legacy elevation not available, building from Copernicus DEM")
+    logger.info("Legacy elevation not available, building from Copernicus DEM")
 
     bounds = reference_da.rio.bounds()
     src_crs = reference_da.rio.crs
@@ -222,7 +224,7 @@ def load_elevation(base_dir, iso3, reference_da):
     )
 
     elevation = build_copdem_elevation_like(reference_da, tile_paths)
-    logging.info(f"Built elevation from {len(tile_paths)} Copernicus DEM tiles")
+    logger.info(f"Built elevation from {len(tile_paths)} Copernicus DEM tiles")
 
     return elevation
 
@@ -277,7 +279,7 @@ def get_powercurves(self):
             raise ValueError(f"Invalid power curve YAML schema in {path}: {e}") from e
 
     self.power_curves = pd.concat(frames, axis=1)
-    logging.info(f"Power curves for {self.wind_turbines} loaded.")
+    logger.info(f"Power curves for {self.wind_turbines} loaded.")
 
 
 def get_turbine_attribute(self, turbine, attribute_name):
@@ -382,7 +384,7 @@ def load_gwa(self):
     path_raw = self.parent.path / "data" / "raw" / c
     path_raw.mkdir(parents=True, exist_ok=True)
 
-    logging.info("Initializing WindScape with Global Wind Atlas data")
+    logger.info("Initializing WindScape with Global Wind Atlas data")
 
     for ly in layers:
         for h in heights:
@@ -395,16 +397,16 @@ def load_gwa(self):
             try:
                 success = download_file(durl, fpath)
             except requests.RequestException as e:
-                logging.error(f"Error downloading {fname} from {durl}: {e}")
+                logger.error(f"Error downloading {fname} from {durl}: {e}")
                 continue
 
             if success:
-                logging.info(f"Download of {fname} from {durl} complete")
+                logger.info(f"Download of {fname} from {durl} complete")
             else:
-                logging.info(f"Download of {fname} from {durl} failed")
+                logger.info(f"Download of {fname} from {durl} failed")
 
-    logging.info("Skipping GWA elevation download; handled via legacy file or Copernicus DEM")
-    logging.info(f"Global Wind Atlas data for {c} initialized.")
+    logger.info("Skipping GWA elevation download; handled via legacy file or Copernicus DEM")
+    logger.info(f"Global Wind Atlas data for {c} initialized.")
 
 
 def load_nuts(self, resolution="03M", year=2021, crs=4326):
@@ -430,14 +432,14 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
 
     target_inner_zip = nuts_path / file_name
     if target_inner_zip.is_file():
-        logging.info("NUTS borders initialised.")
+        logger.info("NUTS borders initialised.")
         return
 
     # Download outer zip (collection) if needed
     outer_zip_path = nuts_path / file_collection
     if not outer_zip_path.is_file():
         download_file(url + file_collection, outer_zip_path)
-        logging.info(f"Downloaded {file_collection}")
+        logger.info(f"Downloaded {file_collection}")
 
     # Extract the requested inner zip safely (no trust in zip paths)
     with zipfile.ZipFile(str(outer_zip_path), "r") as zip_ref:
@@ -454,7 +456,7 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
     with zipfile.ZipFile(str(target_inner_zip), "r") as zip_inner:
         _safe_extractall(zip_inner, nuts_path)
 
-    logging.info(f"Extracted {file_name}")
+    logger.info(f"Extracted {file_name}")
 
 
 def get_clc_codes(self, reverse=False):
@@ -506,7 +508,7 @@ def add_corine_land_cover(self, clc_class=None):
             if len(classes_to_process) == 1:
                 cat_raster = cat_raster.rio.write_crs(self.parent.crs)
                 self.add(cat_raster, name=clc_codes[clc_code].lower())
-                logging.info(f"Corine Land Cover class {clc_codes[clc_code].lower()} added.")
+                logger.info(f"Corine Land Cover class {clc_codes[clc_code].lower()} added.")
             else:
                 cat_raster = cat_raster.expand_dims(dim="clc_class", axis=0)
                 cat_raster.coords["clc_class"] = [clc_codes[clc_code]]
@@ -516,4 +518,4 @@ def add_corine_land_cover(self, clc_class=None):
         clc_3d = xr.concat(clc_array, dim="clc_class")
         clc_3d = clc_3d.rio.write_crs(self.parent.crs)
         self.add(clc_3d, name="corine_land_cover")
-        logging.info(f"Corine Land Cover added.")
+        logger.info(f"Corine Land Cover added.")

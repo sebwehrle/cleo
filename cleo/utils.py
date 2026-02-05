@@ -12,6 +12,8 @@ _UREG = UnitRegistry()
 
 from cleo.spatial import bbox
 
+logger = logging.getLogger(__name__)
+
 
 # %% private helpers
 def _match_to_template(other: xr.DataArray, template: xr.DataArray) -> xr.DataArray:
@@ -106,7 +108,7 @@ def add(self, other, name=None) -> None:
         other.name = name
 
     self.data = xr.merge([self.data, other], join="exact", compat="no_conflicts")
-    logging.info(f"Merged '{other.name}' into '{self.data.attrs.get('country', 'atlas')}'-data.")
+    logger.info(f"Merged '{other.name}' into '{self.data.attrs.get('country', 'atlas')}'-data.")
 
 
 def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
@@ -219,7 +221,7 @@ def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=Non
     save_to = Path(save_to)
 
     if save_to.is_file() and not overwrite:
-        logging.info(f"File {save_to} already exists and overwrite is set to False.")
+        logger.info(f"File {save_to} already exists and overwrite is set to False.")
         return True
 
     proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -242,7 +244,7 @@ def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=Non
         return True
 
     except Exception as e:
-        logging.info(f"Failed to download file from {url}: {e}")
+        logger.info(f"Failed to download file from {url}: {e}")
         try:
             if tmp_path.exists():
                 tmp_path.unlink()

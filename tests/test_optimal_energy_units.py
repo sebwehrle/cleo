@@ -41,5 +41,5 @@ def test_optimal_energy_is_gwh_per_year_and_has_units_attr():
 
     # Least-cost turbine is T1 with power 1000 kW and CF 0.5
     expected = 0.5 * 1000.0 * 8766.0 / 1e6  # GWh/year
-    got = float(out.values)
+    got = float(out.values.item())
     assert abs(got - expected) < 1e-12

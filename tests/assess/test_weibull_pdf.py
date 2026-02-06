@@ -53,6 +53,10 @@ class _DummySelf:
     def load_weibull_parameters(self, height: int | float):  # noqa: ARG002
         return self._weibull_a, self._weibull_k
 
+    def _set_var(self, name, da):
+        """Simple mock for _set_var - just assigns directly."""
+        self.data[name] = da
+
 
 def test_weibull_pdf_integration_mass_matches_cdf_oracle() -> None:
     """

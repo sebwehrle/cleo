@@ -514,7 +514,7 @@ def add_corine_land_cover(self, clc_class=None):
                 clc_array.append(cat_raster)
 
     if len(classes_to_process) > 1:
-        clc_3d = xr.concat(clc_array, dim="clc_class")
+        clc_3d = xr.concat(clc_array, dim="clc_class", join="exact")
         clc_3d = clc_3d.rio.write_crs(self.parent.crs)
         self.add(clc_3d, name="corine_land_cover")
         logger.info(f"Corine Land Cover added.")

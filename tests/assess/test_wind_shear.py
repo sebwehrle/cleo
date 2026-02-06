@@ -32,6 +32,10 @@ class _Self:
     data: xr.Dataset
     parent: _Parent
 
+    def _set_var(self, name, da):
+        """Simple mock for _set_var - just assigns directly."""
+        self.data[name] = da
+
 
 def _mean_wind_speed(u50: np.ndarray, u100: np.ndarray) -> xr.DataArray:
     """

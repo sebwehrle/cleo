@@ -42,6 +42,12 @@ class AtlasSelf:
     parent: Parent
     data: xr.Dataset | None = None
 
+    def _set_var(self, name, da):
+        """Simple mock for _set_var - just assigns directly."""
+        if self.data is None:
+            raise RuntimeError("self.data is None")
+        self.data[name] = da
+
 
 def _write_minimal_geotiff_epsg4326(path: Path, *, width: int = 4, height: int = 4) -> None:
     """Create a minimal valid GeoTIFF with EPSG:4326 CRS and sane transform."""

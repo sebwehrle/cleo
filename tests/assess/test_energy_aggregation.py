@@ -40,6 +40,10 @@ def test_annual_energy_uses_8766_hours() -> None:
         def get_turbine_attribute(_turbine: str, attr: str) -> float | None:
             return rated_power_kw if attr == "capacity" else None
 
+        def _set_var(self, name, da):
+            """Simple mock for _set_var - just assigns directly."""
+            self.data[name] = da
+
     self = _Self()
 
     compute_optimal_power_energy(self)

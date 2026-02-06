@@ -102,6 +102,64 @@ def reproject_raster_if_needed(da: xr.DataArray, dst_crs, *, nodata=np.nan, resa
     return da.rio.reproject(dst_canonical, nodata=nodata)
 
 
+def coords_equal(da: xr.DataArray, template: xr.DataArray, *, dim: str) -> bool:
+    """
+    Check if a DataArray's coordinate matches template's coordinate exactly.
+
+    :param da: DataArray to check
+    :param template: Reference DataArray
+    :param dim: Coordinate dimension to compare ('x' or 'y')
+    :return: True if coords match exactly
+    """
+    if dim not in da.coords or dim not in template.coords:
+        return False
+    return np.array_equal(da.coords[dim].values, template.coords[dim].values)
+
+
+def enforce_exact_grid(da: xr.DataArray, template: xr.DataArray, *, var_name: str) -> xr.DataArray:
+    """
+    Enforce that a raster DataArray has exact x/y coords matching template.
+
+    Contract:
+    - If da has both x and y dims, they MUST match template exactly.
+    - No auto-reproject or reindex; raises ValueError on mismatch.
+    - Non-raster DataArrays (missing x or y dim) pass through unchanged.
+
+    :param da: DataArray to validate
+    :param template: Reference template DataArray with canonical x/y coords
+    :param var_name: Variable name for error messages
+    :return: da unchanged if valid
+    :raises ValueError: If x or y coords don't match template
+    """
+    # Only enforce for raster-like DataArrays (have both x and y dims)
+    if "x" not in da.dims or "y" not in da.dims:
+        return da
+
+    # Check x coords
+    if not coords_equal(da, template, dim="x"):
+        da_x = da.coords["x"].values
+        tpl_x = template.coords["x"].values
+        raise ValueError(
+            f"Grid mismatch for '{var_name}': x coords differ from template. "
+            f"Expected shape {tpl_x.shape}, got {da_x.shape}. "
+            f"Expected range [{tpl_x.min():.6f}, {tpl_x.max():.6f}], "
+            f"got [{da_x.min():.6f}, {da_x.max():.6f}]."
+        )
+
+    # Check y coords
+    if not coords_equal(da, template, dim="y"):
+        da_y = da.coords["y"].values
+        tpl_y = template.coords["y"].values
+        raise ValueError(
+            f"Grid mismatch for '{var_name}': y coords differ from template. "
+            f"Expected shape {tpl_y.shape}, got {da_y.shape}. "
+            f"Expected range [{tpl_y.min():.6f}, {tpl_y.max():.6f}], "
+            f"got [{da_y.min():.6f}, {da_y.max():.6f}]."
+        )
+
+    return da
+
+
 # %% methods
 def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Dataset, gpd.GeoDataFrame):
     """

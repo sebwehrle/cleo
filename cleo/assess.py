@@ -196,12 +196,8 @@ def compute_air_density_correction(self, chunk_size=None):
     # Final exact-grid enforcement before storing (prevents silent alignment/NaN stripes)
     rho = rho.rio.reproject_match(template, resampling=Resampling.bilinear, nodata=np.nan).squeeze()
 
-    # Hard check: x/y coords identical
-    if not (np.array_equal(rho.coords["x"].values, template.coords["x"].values) and
-            np.array_equal(rho.coords["y"].values, template.coords["y"].values)):
-        raise ValueError("air_density_correction grid does not match template grid exactly (x/y coord mismatch)")
-
-    self.data["air_density_correction"] = rho.rename("air_density_correction")
+    # Use _set_var for exact-grid enforcement
+    self._set_var("air_density_correction", rho.rename("air_density_correction"))
     logger.info(f"Air density correction for {self.parent.country} computed.")
 
 
@@ -247,7 +243,7 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     mean_wind_speed_data = mean_wind_speed_data.expand_dims(height=[height])
 
     if "mean_wind_speed" not in self.data:
-        self.data["mean_wind_speed"] = mean_wind_speed_data
+        self._set_var("mean_wind_speed", mean_wind_speed_data)
         return
 
     existing = self.data["mean_wind_speed"]
@@ -270,6 +266,11 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
 
     # Deterministic ordering and uniqueness
     combined = combined.sortby("height")
+
+    # Enforce exact-grid before storing (if template exists)
+    if has_template:
+        from cleo.spatial import enforce_exact_grid
+        combined = enforce_exact_grid(combined, self.data["template"], var_name="mean_wind_speed")
 
     # Update Dataset height coordinate safely:
     # drop the old variable first (it carries the old height dimension size), then set coord and reattach.
@@ -320,7 +321,7 @@ def compute_wind_shear_coefficient(self, chunk_size=None):
             f"wind_shear: {invalid_count}/{total_count} cells masked (non-positive or non-finite wind speed)"
         )
 
-    self.data['wind_shear'] = alpha.squeeze().rename("wind_shear")
+    self._set_var("wind_shear", alpha.squeeze().rename("wind_shear"))
     logger.info(f'Wind shear coefficient for {self.parent.country} computed.')
 
 
@@ -357,7 +358,7 @@ def compute_weibull_pdf(self, chunk_size=None):
         tpl = self.data["template"]
         p = _match_to_template(p, tpl)
 
-    self.data["weibull_pdf"] = p
+    self._set_var("weibull_pdf", p)
     logger.info(f'Weibull probability density function of wind speeds in {self.data.attrs["country"]} computed.')
 
 
@@ -401,9 +402,11 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     cap_factor = cap_factor.rename("capacity_factor")
 
     if "capacity_factors" not in self.data:
-        self.data["capacity_factors"] = cap_factor
+        self._set_var("capacity_factors", cap_factor)
     else:
-        self.data = self.data.combine_first(cap_factor)
+        # Combine with existing (preserves other turbines)
+        combined = self.data["capacity_factors"].combine_first(cap_factor)
+        self._set_var("capacity_factors", combined)
 
 
 @requires({'simulate_capacity_factors': 'capacity_factors'})
@@ -441,7 +444,8 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
         lcoe = lcoe.expand_dims(turbine=[turbine_model])
         lcoe_list.append(lcoe)
 
-    self.data["lcoe"] = xr.concat(lcoe_list, dim='turbine').rename("lcoe").assign_attrs(units="EUR/MWh")
+    lcoe_combined = xr.concat(lcoe_list, dim='turbine').rename("lcoe").assign_attrs(units="EUR/MWh")
+    self._set_var("lcoe", lcoe_combined)
     logger.info(f"Levelized Cost of Electricity in {self.data.attrs['country']} computed.")
 
 
@@ -465,14 +469,14 @@ def compute_optimal_power_energy(self):
 
     power = xr.apply_ufunc(get_capacity, least_cost_turbine, vectorize=True)
 
-    self.data["optimal_power"] = power
+    self._set_var("optimal_power", power)
     # compute optimal energy
     least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
     energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
     energy = energy.assign_coords({'turbine': "min_lcoe"})
     # power is in kW; CF is dimensionless; 8766 h/year -> kWh/year; divide by 1e6 -> GWh/year
     energy = (energy * power * 8766 / 10 ** 6).rename("optimal_energy").assign_attrs(units="GWh/a")
-    self.data["optimal_energy"] = energy
+    self._set_var("optimal_energy", energy)
 
 
 @requires({'compute_lcoe': 'lcoe'})
@@ -483,7 +487,7 @@ def minimum_lcoe(self):
     lcoe = self.data["lcoe"]
     lc_min = lcoe.min(dim='turbine', keep_attrs=True)
     lc_min = lc_min.assign_coords({'turbine': 'min_lcoe'})
-    self.data["min_lcoe"] = lc_min.rename("minimal_lcoe")
+    self._set_var("min_lcoe", lc_min.rename("minimal_lcoe"))
 
 
 # %% functions

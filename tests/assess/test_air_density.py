@@ -39,6 +39,10 @@ class DummySelf:
     parent: DummyParent
     data: xr.Dataset
 
+    def _set_var(self, name, da):
+        """Simple mock for _set_var - just assigns directly."""
+        self.data[name] = da
+
 
 def _make_self(*, base_dir: Path | str, country: str = "AUT", crs: str = "EPSG:4326") -> DummySelf:
     """Small, explicit test double for the 'self' expected by compute_air_density_correction."""

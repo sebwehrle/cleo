@@ -439,6 +439,10 @@ def test_capacity_factor_always_rated_power_curve_yields_cf_one_and_optimal_powe
                 return rated_power_kw
             return None
 
+        def _set_var(self, name, da):
+            """Simple mock for _set_var - just assigns directly."""
+            self.data[name] = da
+
     lcoe = xr.DataArray(
         [[[50.0]]],
         dims=("turbine", "y", "x"),

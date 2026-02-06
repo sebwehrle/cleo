@@ -56,7 +56,7 @@ def build_netcdf(self, atlas_type):
 
             # Create template for both WindAtlas and LandscapeAtlas
             nan_mask = np.isnan(weibull_a_100)
-            self.data["template"] = xr.where(nan_mask, np.nan, 0).rename("template")
+            self._set_var("template", xr.where(nan_mask, np.nan, 0).rename("template"))
 
             fname_netcdf.parent.mkdir(parents=True, exist_ok=True)
             self.data.to_netcdf(fname_netcdf)
@@ -152,7 +152,7 @@ def build_netcdf(self, atlas_type):
                     template = template.rio.write_transform(weibull_a_100.rio.transform())
                     # Align template to existing data coords (legacy migration)
                     template = template.rio.reproject_match(self.data, nodata=np.nan)
-                    self.data["template"] = template
+                    self._set_var("template", template)
                     logger.info("Reconstructed template from GWA weibull_a_100")
 
     # Ensure default wind_speed grid exists (0.0 to 40.0 step 0.5)

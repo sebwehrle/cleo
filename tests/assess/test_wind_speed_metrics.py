@@ -43,6 +43,10 @@ class _Atlas:
     def get_turbine_attribute(self, label: str, key: str) -> float:  # noqa: ARG002
         raise NotImplementedError
 
+    def _set_var(self, name, da):
+        """Simple mock for _set_var - just assigns directly."""
+        self.data[name] = da
+
 
 def _template_ds(*, x: np.ndarray, y: np.ndarray, wind_speed: np.ndarray = DEFAULT_WIND_SPEED) -> xr.Dataset:
     # NOTE: tests.helpers.factories.da_xy_with_crs() currently assumes square n×n coords.

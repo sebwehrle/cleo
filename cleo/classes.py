@@ -1,6 +1,7 @@
 # %% imports
 import os
 import re
+import json
 import yaml
 import pyproj
 import logging
@@ -13,12 +14,15 @@ import geopandas as gpd
 import pycountry as pct
 from pathlib import Path
 from xrspatial import proximity
+from rasterio.enums import MergeAlg
+from rasterio.features import rasterize as rio_rasterize
 
 from cleo.class_helpers import (
     build_netcdf,
     deploy_resources,
     set_attributes,
     setup_logging,
+    _sanitize_netcdf_attrs,
 )
 
 from cleo.utils import (
@@ -54,6 +58,71 @@ from cleo.assess import (
     simulate_capacity_factors,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _parse_index_line(line):
+    """
+    Parse a single index line into a 6-tuple:
+    (subclass, country, region, scenario, path, timestamp)
+
+    Supports three formats:
+    1. JSONL: line starts with '{'
+    2. Tab-separated: line contains '\t' (strict 6 fields)
+    3. Legacy colon-separated: parse from RIGHT to handle ':' in Windows paths
+    """
+    line = line.strip()
+    if not line:
+        raise ValueError("Empty index line")
+
+    # JSONL format
+    if line.startswith("{"):
+        try:
+            obj = json.loads(line)
+            return (
+                obj["subclass"],
+                obj["country"],
+                obj["region"],
+                obj["scenario"],
+                obj["path"],
+                obj["timestamp"],
+            )
+        except (json.JSONDecodeError, KeyError) as e:
+            raise ValueError(f"Malformed JSONL index entry: {line!r}") from e
+
+    # Tab-separated format (strict 6 fields)
+    if "\t" in line:
+        parts = line.split("\t")
+        if len(parts) != 6:
+            raise ValueError(f"Malformed tab-separated index entry (expected 6 fields): {line!r}")
+        return tuple(parts)
+
+    # Legacy colon-separated format: rsplit from right for timestamp, then split first 5
+    # This handles ":" inside Windows paths like "C:\path\to\file"
+    try:
+        prefix, timestamp = line.rsplit(":", 1)
+        parts = prefix.split(":", 4)
+        if len(parts) != 5:
+            raise ValueError(f"Expected 5 fields before timestamp, got {len(parts)}")
+        subclass, country, region, scenario, path = parts
+        return (subclass, country, region, scenario, path, timestamp)
+    except ValueError as e:
+        raise ValueError(f"Malformed index entry: {line!r}") from e
+
+
+def _timestamp_key(ts):
+    """
+    Convert timestamp string to a sortable key.
+    "legacy" is treated as older than any real timestamp.
+    Returns tuple (priority, datetime) where priority 0=legacy, 1=real timestamp.
+    """
+    if ts == "legacy":
+        return (0, datetime.datetime.min)
+    try:
+        return (1, datetime.datetime.strptime(ts, "%Y%m%dT%H%M%S"))
+    except ValueError as e:
+        raise ValueError(f"Invalid timestamp format: {ts!r}") from e
+
 
 # %% classes
 class Atlas:
@@ -66,10 +135,58 @@ class Atlas:
         self._setup_directories()
         self._setup_logging()
         self._deploy_resources()
-        self.index_file = self.path / "data" / "index.txt"
-        # automatically instantiate WindAtlas and LandscapeAtlas
-        self.wind = _WindAtlas(self)
-        self.landscape = _LandscapeAtlas(self)
+        self.index_file = self.path / "data" / "index.jsonl"
+        # Defer instantiation until materialize() is called
+        self._wind = None
+        self._landscape = None
+        self._materialized = False
+
+    def materialize(self):
+        """
+        Build/download data and instantiate WindAtlas and LandscapeAtlas.
+        Must be called before using wind/landscape data or calling save/load/clip.
+        """
+        if self._materialized:
+            return
+        self._wind = _WindAtlas(self)
+        self._landscape = _LandscapeAtlas(self)
+        self._materialized = True
+
+    def _require_materialized(self):
+        """Raise RuntimeError if atlas is not materialized."""
+        # Use getattr for defensive access (tests may bypass __init__)
+        wind = getattr(self, "_wind", None)
+        landscape = getattr(self, "_landscape", None)
+        if wind is None or landscape is None:
+            raise RuntimeError(
+                "Atlas not materialized. Call atlas.materialize() first."
+            )
+
+    @property
+    def wind(self):
+        """Access WindAtlas data (requires prior materialize() call)."""
+        if self._wind is None:
+            raise RuntimeError(
+                "Atlas not materialized. Call atlas.materialize() first."
+            )
+        return self._wind
+
+    @wind.setter
+    def wind(self, value):
+        self._wind = value
+
+    @property
+    def landscape(self):
+        """Access LandscapeAtlas data (requires prior materialize() call)."""
+        if self._landscape is None:
+            raise RuntimeError(
+                "Atlas not materialized. Call atlas.materialize() first."
+            )
+        return self._landscape
+
+    @landscape.setter
+    def landscape(self, value):
+        self._landscape = value
 
     @property
     def path(self):
@@ -94,10 +211,24 @@ class Atlas:
 
     @crs.setter
     def crs(self, value):
-        if pyproj.CRS(value):
-            self._crs = value
+        """
+        Set CRS as a validated string.
+
+        Contract:
+        - Invalid CRS raises ValueError with a clear message (no pyproj CRSError leak).
+        - Stored value is normalized when possible (EPSG codes become "epsg:<int>").
+        """
+        try:
+            crs_obj = pyproj.CRS(value)
+        except pyproj.exceptions.CRSError as e:
+            raise ValueError(f"Invalid CRS: {value!r}") from e
+
+        epsg = crs_obj.to_epsg()
+        if epsg is not None:
+            self._crs = f"epsg:{epsg}"
         else:
-            raise ValueError(f"{value} is not a valid coordinate reference system")
+            # Fallback: stable string representation
+            self._crs = crs_obj.to_string()
 
     @property
     def wind_turbines(self):
@@ -129,16 +260,17 @@ class Atlas:
                 path.mkdir(parents=True)
 
         # Create the index file in the data directory if it doesn't exist
-        index_file_path = self.path / "data" / "index.txt"
+        index_file_path = self.path / "data" / "index.jsonl"
         if not index_file_path.exists():
             index_file_path.touch()  # Create an empty file
-            logging.info(f"Created new index file: {index_file_path}")
+            logger.info(f"Created new index file: {index_file_path}")
 
     def load(self, user_string = None, *, region='None', scenario='default', timestamp='latest'):
         """
         Load the datasets for the specified country, region, and scenario. If no region is specified, the datasets for
         the entire country are loaded. If no scenario is specified, the default scenario is loaded.
         """
+        self._require_materialized()
         filename_pattern = re.compile(
             r"(?P<type>[A-Za-z]+Atlas)_(?P<country>[A-Z]+)_(?P<region>[^\d_]+)_(?P<scenario>[A-Za-z0-9]+)_(?P<timestamp>\d{8}T\d{6})\.nc"
         )
@@ -176,6 +308,25 @@ class Atlas:
                 ):
                     matching_files.append((file, file_metadata))
 
+        # Fallback to legacy filenames if no timestamped files found
+        if not matching_files:
+            # Try legacy pattern: {Type}_{Country}.nc or {Type}_{Country}_{Region}.nc
+            region_str = region if region != 'None' else None
+            for atlas_type in ["WindAtlas", "LandscapeAtlas"]:
+                if region_str:
+                    legacy_name = f"{atlas_type}_{self.country}_{region_str}.nc"
+                else:
+                    legacy_name = f"{atlas_type}_{self.country}.nc"
+                legacy_file = directory / legacy_name
+                if legacy_file.exists():
+                    matching_files.append((legacy_file, {
+                        "type": atlas_type,
+                        "country": self.country,
+                        "region": region,
+                        "scenario": scenario,
+                        "timestamp": "legacy",
+                    }))
+
         if not matching_files:
             raise FileNotFoundError(f"No matching files found in {directory}.")
 
@@ -187,21 +338,24 @@ class Atlas:
             if subclass == "WindAtlas":
                 wind_data = xr.open_dataset(file, engine="netcdf4")
                 self.wind.data = wind_data
-                self._wind_turbines = self.wind.data.coords['turbine'].values.tolist()
-                self._crs = f"epsg:{self.wind.data.rio.crs.to_epsg()}"
+                if 'turbine' in self.wind.data.coords:
+                    self._wind_turbines = self.wind.data.coords['turbine'].values.tolist()
+                if self.wind.data.rio.crs is not None:
+                    self._crs = f"epsg:{self.wind.data.rio.crs.to_epsg()}"
                 if region != 'None':
                     self._region = region
-                logging.info(f"Wind dataset loaded successfully: {file}")
+                logger.info(f"Wind dataset loaded successfully: {file}")
             elif subclass == "LandscapeAtlas":
                 landscape_data = xr.open_dataset(file, engine="netcdf4")
                 self.landscape.data = landscape_data
-                logging.info(f"Landscape dataset loaded successfully: {file}")
+                logger.info(f"Landscape dataset loaded successfully: {file}")
             else:
-                logging.warning(f"Unknown subclass: {subclass}")
+                logger.warning(f"Unknown subclass: {subclass}")
 
         return self
 
     def add_turbine(self, turbine_name):
+        self._require_materialized()
         # Check if the YAML file exists
         yaml_file = self.path / "resources" / f"{turbine_name}.yml"
         if not yaml_file.is_file():
@@ -212,18 +366,24 @@ class Atlas:
             # Add the turbine name to the list of wind turbines
             self._wind_turbines.append(turbine_name)
         else:
-            logging.warning(f"Turbine {turbine_name} already added.")
+            logger.warning(f"Turbine {turbine_name} already added.")
 
     def get_nuts_region(self, region, merged_name=None, to_atlascrs=True):
         nuts_dir = self.path / "data" / "nuts"
-        nuts_shape = next(nuts_dir.rglob('*.shp'))
+        shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
+        if not shp_files:
+            raise FileNotFoundError(
+                f"NUTS shapefile not found under {nuts_dir}. "
+                f"Run NUTS download/extract first (e.g. atlas.landscape._load_nuts() / cleo.loaders.load_nuts)."
+            )
+        nuts_shape = shp_files[0]
         nuts = gpd.read_file(nuts_shape)
 
         # Convert three-digit country code to two-digit country code
         alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
 
         # Filter regions by country code
-        feasible_regions = nuts[nuts['CNTR_CODE'] == alpha_2]
+        feasible_regions = nuts[nuts["CNTR_CODE"] == alpha_2]
 
         if isinstance(region, str):
             region_list = [region]
@@ -252,7 +412,13 @@ class Atlas:
 
     def get_nuts_country(self):
         nuts_dir = self.path / "data" / "nuts"
-        nuts_shape = list(nuts_dir.rglob('*.shp'))[0]
+        shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
+        if not shp_files:
+            raise FileNotFoundError(
+                f"NUTS shapefile not found under {nuts_dir}. "
+                f"Run NUTS download/extract first (e.g. atlas.landscape._load_nuts() / cleo.loaders.load_nuts)."
+            )
+        nuts_shape = shp_files[0]
         nuts = gpd.read_file(nuts_shape)
         alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
         clip_shape = nuts.loc[(nuts["CNTR_CODE"] == alpha_2) & (nuts["LEVL_CODE"] == 0), :]
@@ -266,6 +432,7 @@ class Atlas:
         :param inplace: boolean flag indicating whether clipped data should be updated inplace. Default is True
         :return:
         """
+        self._require_materialized()
         clip_shape = self.get_nuts_region(region, merged_name)
         # clip both Datasets to clip_shape
         wind_dataset, _ = clip_to_geometry(self.wind, clip_shape)
@@ -281,7 +448,7 @@ class Atlas:
             self.landscape.data.attrs['region'] = region
             # update region property in Atlas class
             self.region = region
-            logging.info(f"Atlas clipped to {region}")
+            logger.info(f"Atlas clipped to {region}")
         else:
             return wind_dataset, landscape_dataset
 
@@ -289,9 +456,10 @@ class Atlas:
         """
         Save NetCDF files for WindAtlas and LandscapeAtlas, adding a timestamp for versioning.
         """
-        # create directory if non-existent
-        if not (self.path / 'data' / 'processed').is_dir():
-            self.path.mkdir(parents=True, exist_ok=True)
+        self._require_materialized()
+        # Always ensure processed directory exists
+        processed_dir = self.path / "data" / "processed"
+        processed_dir.mkdir(parents=True, exist_ok=True)
         if scenario:
             savepath = self.path / 'data' / 'processed' / scenario
             savepath.mkdir(parents=True, exist_ok=True)
@@ -302,52 +470,90 @@ class Atlas:
         timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
 
         # Define file paths with scenario and timestamp
-        scenario_suffix = f"_{scenario}" if scenario else ""
-        wind_file = savepath / f"WindAtlas_{self.country}_{self.region or 'None'}{scenario_suffix}_{timestamp}.nc"
-        landscape_file = savepath / f"LandscapeAtlas_{self.country}_{self.region or 'None'}{scenario_suffix}_{timestamp}.nc"
+        scenario_name = scenario if scenario else "default"
+        wind_file = savepath / f"WindAtlas_{self.country}_{self.region or 'None'}_{scenario_name}_{timestamp}.nc"
+        landscape_file = savepath / f"LandscapeAtlas_{self.country}_{self.region or 'None'}_{scenario_name}_{timestamp}.nc"
 
-        # Save datasets
+        # Sanitize attrs to remove None values (NetCDF cannot serialize None)
+        _sanitize_netcdf_attrs(self.wind.data)
+        _sanitize_netcdf_attrs(self.landscape.data)
+
+        # Save datasets - only update index on success
         try:
             self.wind.data.to_netcdf(wind_file, format="NETCDF4", engine="netcdf4")
             self.landscape.data.to_netcdf(landscape_file, format="NETCDF4", engine="netcdf4")
-            logging.info(f"Datasets saved successfully: {wind_file}, {landscape_file}")
+            logger.info(f"Datasets saved successfully: {wind_file}, {landscape_file}")
         except Exception as e:
-            logging.error(f"Failed to save dataset: {e}")
+            logger.error(f"Failed to save dataset: {e}")
+            return  # Do not update index if save failed
 
-        # Log to index
+        # Log to index (JSONL format)
         index_entries = [
-            f"WindAtlas:{self.country}:{self.region or 'None'}:{scenario or 'default'}:{wind_file}:{timestamp}\n",
-            f"LandscapeAtlas:{self.country}:{self.region or 'None'}:{scenario or 'default'}:{landscape_file}:{timestamp}\n",
+            {"subclass": "WindAtlas", "country": self.country, "region": self.region or "None",
+             "scenario": scenario or "default", "path": str(wind_file), "timestamp": timestamp},
+            {"subclass": "LandscapeAtlas", "country": self.country, "region": self.region or "None",
+             "scenario": scenario or "default", "path": str(landscape_file), "timestamp": timestamp},
         ]
+        # Ensure index file parent directory exists
+        self.index_file.parent.mkdir(parents=True, exist_ok=True)
         # write to index file
         try:
             with open(self.index_file, "a") as f:
-                f.writelines(index_entries)
-            logging.info(f"index updated with entries: {index_entries}")
+                for entry in index_entries:
+                    f.write(json.dumps(entry) + "\n")
+            logger.info(f"index updated with entries: {index_entries}")
         except Exception as e:
-            logging.error(f"Failed to update index file: {e}")
+            logger.error(f"Failed to update index file: {e}")
             raise
 
     def _read_index(self):
-        """Read the index file into a list of tuples."""
+        """
+        Read the index file into a list of 6-tuples:
+        (subclass, country, region, scenario, path, timestamp)
+
+        Supports JSONL, tab-separated, and legacy colon-separated formats.
+        Malformed lines raise ValueError with context.
+        """
         if not isinstance(self.index_file, Path):
             self.index_file = Path(self.index_file)
 
+        # Also check for legacy index.txt if index.jsonl doesn't exist
         if not self.index_file.is_file():
-            logging.warning("index file not found.")
-            return []
+            legacy_index = self.index_file.parent / "index.txt"
+            if legacy_index.is_file():
+                self.index_file = legacy_index
+            else:
+                logger.warning("index file not found.")
+                return []
 
+        entries = []
         with open(self.index_file, "r") as f:
-            index_list = [line.strip().split(":") for line in f]
-            logging.info(f"index list: {index_list}")
-
-        return [tuple(entry) for entry in index_list]
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                entries.append(_parse_index_line(line))
+        return entries
 
     def _write_index(self, entries):
-        """Write updated entries to the index file."""
+        """Write entries to the index file in JSONL format."""
+        # Ensure we're writing to the jsonl file, not legacy txt
+        if self.index_file.suffix == ".txt":
+            self.index_file = self.index_file.parent / "index.jsonl"
         with open(self.index_file, "w") as f:
             for entry in entries:
-                f.write(":".join(entry) + "\n")
+                if len(entry) != 6:
+                    raise ValueError(f"Index entry must have 6 fields, got {entry!r}")
+                subclass, country, region, scenario, path, ts = entry
+                obj = {
+                    "subclass": subclass,
+                    "country": country,
+                    "region": region,
+                    "scenario": scenario,
+                    "path": str(path),
+                    "timestamp": ts,
+                }
+                f.write(json.dumps(obj) + "\n")
 
     def cleanup_datasets(self, scenario=None):
         """
@@ -366,7 +572,7 @@ class Atlas:
         latest_entries = {}
         for entry in filtered_entries:
             subclass = entry[0]
-            if subclass not in latest_entries or entry[5] > latest_entries[subclass][5]:
+            if (subclass not in latest_entries) or (_timestamp_key(entry[5]) > _timestamp_key(latest_entries[subclass][5])):
                 latest_entries[subclass] = entry
 
         # Delete older versions
@@ -382,7 +588,7 @@ class Atlas:
                             ] + list(latest_entries.values())
         self._write_index(remaining_entries)
 
-        logging.info(
+        logger.info(
             f"Cleanup complete for {self.country}, region {self.region or 'None'}, scenario {scenario or 'all'}.")
 
 
@@ -407,11 +613,15 @@ class _WindAtlas:
             turbine_data = yaml.safe_load(f)
         # extract wind turbine data
         turbine_name = f"{turbine_data['manufacturer']}.{turbine_data['model']}.{turbine_data['capacity']}"
-        wind_speed = list(map(float, turbine_data['V']))
-        power_output = list(map(float, turbine_data['cf']))
+        old_u = np.array(list(map(float, turbine_data['V'])))
+        old_p = np.array(list(map(float, turbine_data['cf'])))
 
-        # initialize wind turbine power curves
-        power_curve = xr.DataArray(data=power_output, coords={'wind_speed': wind_speed}, dims=['wind_speed'])
+        # Resample power curve to atlas wind_speed grid
+        u = self.data.coords["wind_speed"].values
+        new_p = np.interp(u, old_u, old_p, left=0.0, right=0.0)
+
+        # initialize wind turbine power curves on atlas grid
+        power_curve = xr.DataArray(data=new_p, coords={'wind_speed': u}, dims=['wind_speed'])
         power_curve = power_curve.assign_coords(turbine=turbine_name).expand_dims('turbine')
 
         if 'power_curve' in self.data:
@@ -461,94 +671,214 @@ class _LandscapeAtlas:
 
     @staticmethod
     def load_and_extract_from_dict(source_dict, proxy=None, proxy_user=None, proxy_pass=None):
+        """
+        Download files described by source_dict and extract archives safely.
+
+        source_dict format:
+            { filename: (directory, url), ... }
+
+        Security/UX:
+        - Never changes process CWD.
+        - Safe ZIP extraction (rejects absolute paths / '..' traversal).
+        """
+
+        def _safe_extract_zip(zip_ref, dest_dir: Path):
+            dest_dir = dest_dir.resolve()
+            for info in zip_ref.infolist():
+                name = info.filename
+                # Reject absolute paths and path traversal
+                target = (dest_dir / name).resolve()
+                try:
+                    target.relative_to(dest_dir)
+                except Exception:
+                    raise ValueError(f"Unsafe zip member path: {name!r}")
+                zip_ref.extract(info, path=dest_dir)
 
         for file, (directory, url) in source_dict.items():
             directory_path = Path(directory)
             directory_path.mkdir(parents=True, exist_ok=True)
 
-            os.chdir(directory_path)
-
             download_path = directory_path / file
-            dnld = download_file(url, download_path, proxy=proxy, proxy_user=proxy_user, proxy_pass=proxy_pass)
-            logging.info(f'Download of {file} complete')
+            dnld = download_file(
+                url,
+                download_path,
+                proxy=proxy,
+                proxy_user=proxy_user,
+                proxy_pass=proxy_pass,
+            )
+            logger.info(f"Download of {file} complete")
 
-            if dnld and file.endswith(('.zip', '.kmz')):
+            if dnld and file.endswith((".zip", ".kmz")):
                 with zipfile.ZipFile(download_path) as zip_ref:
                     zip_file_info = zip_ref.infolist()
                     zip_extensions = [info.filename[-3:] for info in zip_file_info]
 
-                    if 'shp' in zip_extensions:
+                    if "shp" in zip_extensions:
+                        # Preserve prior behavior (renaming members), but extract safely into directory_path
                         for info in zip_file_info:
-                            info.filename = f'{file[:-3]}{info.filename[-3:]}'
-                            zip_ref.extract(info)
+                            info.filename = f"{file[:-3]}{info.filename[-3:]}"
+                            # Validate renamed path before extraction
+                            dest_dir = directory_path.resolve()
+                            target = (dest_dir / info.filename).resolve()
+                            try:
+                                target.relative_to(dest_dir)
+                            except Exception:
+                                raise ValueError(f"Unsafe zip member path: {info.filename!r}")
+                            zip_ref.extract(info, path=directory_path)
                     else:
-                        zip_ref.extractall(directory_path)
+                        _safe_extract_zip(zip_ref, directory_path)
 
-                for index, nested_zip_path in enumerate(directory_path.glob('*.zip')):
+                # Handle nested zips (as before), but safely and without chdir
+                for index, nested_zip_path in enumerate(directory_path.glob("*.zip")):
                     with zipfile.ZipFile(nested_zip_path) as nested_zip:
                         nested_zip_info = nested_zip.infolist()
                         nested_extensions = [info.filename[-3:] for info in nested_zip_info]
 
-                        if 'shp' in nested_extensions:
+                        if "shp" in nested_extensions:
                             for info in nested_zip_info:
-                                info.filename = f'{info.filename[:-4]}_{index}.{info.filename[-3:]}'
-                                nested_zip.extract(info)
+                                info.filename = f"{info.filename[:-4]}_{index}.{info.filename[-3:]}"
+                                dest_dir = directory_path.resolve()
+                                target = (dest_dir / info.filename).resolve()
+                                try:
+                                    target.relative_to(dest_dir)
+                                except Exception:
+                                    raise ValueError(f"Unsafe zip member path: {info.filename!r}")
+                                nested_zip.extract(info, path=directory_path)
+                        else:
+                            _safe_extract_zip(nested_zip, directory_path)
 
-    def rasterize(self, shape, column=None, name=None, all_touched=False, inplace=True):
+    def rasterize(self, *args, column=None, name=None, all_touched=False, inplace=True):
         """
-        Transform geodata, for example polygons, to a xarray DataArray.
-        :param shape: string of geodatafile to read or GeoDataFrame to rasterize
-        :type shape: str or gpd.GeoDataFrame
-        :param column: column of GeoDataFrame to use for value-assignment in rasterization
-        :type column: str
-        :param name: name of the xarray DataArray
-        :type name: str
-        :param all_touched: if True, all pixels touched by polygon are assigned. If False, only pixels whose center
-        point is inside the polygon is assigned. Default is False.
-        :param inplace: adds raster to `self.data` if True. Default is True.
-        :type inplace: bool
-        :return: merges rasterized DataArray into `self.data`
+        Rasterize vector geometries onto a template grid.
+
+        Supported call styles (backward compatible):
+          A) rasterize(template_da, shape, column=None, all_touched=False)
+          B) rasterize(shape, column=None, name=None, all_touched=False)  # uses self.data["template"]
+
+        shape can be a GeoDataFrame or a path (str/Path) to a vector file.
+        If column is None, burns 1.0 inside geometries and leaves template values elsewhere.
+        If column is provided, burns that numeric value per-geometry (last wins on overlap) and leaves template elsewhere.
         """
-        # check whether column input is sensible
-        if column is not None:
-            if column not in shape.columns:
-                raise ValueError(f"column {column} is not in shape")
-        # load shapefile if shape is string
-        if isinstance(shape, str):
+        # Backward compatibility: older call sites pass inplace=False to return the raster
+        # without assigning it into self.data.
+        # New behavior: if name is provided and inplace=True -> assign to self.data[name_to_assign].
+        # If inplace=False -> return the raster and do not assign, regardless of name.
+        if not inplace:
+            name_to_assign = None
+        else:
+            name_to_assign = name
+
+        # Parse args to support both conventions
+        template = None
+        shape = None
+
+        if len(args) == 0:
+            # rasterize(shape=..., ...) not provided positionally; require shape via keyword? (we don't support)
+            raise TypeError("rasterize() missing required positional argument: 'shape'")
+
+        if len(args) == 1:
+            # New style: rasterize(shape, ...)
+            shape = args[0]
+            try:
+                template = self.data["template"]
+            except Exception as e:
+                raise RuntimeError(
+                    "No template available. Provide template as first argument or set self.data['template'].") from e
+
+        elif len(args) == 2:
+            # Old style: rasterize(template, shape, ...)
+            template = args[0]
+            shape = args[1]
+        else:
+            raise TypeError(f"rasterize() takes 2 positional arguments at most ({len(args)} given)")
+
+        # Validate template
+        if not isinstance(template, xr.DataArray):
+            raise TypeError("template must be an xarray.DataArray")
+
+        # Load shape
+        if isinstance(shape, (str, Path)):
             shape = gpd.read_file(shape)
-        elif not isinstance(shape, gpd.GeoDataFrame):
-            raise TypeError(f"shape must be a GeoDataFrame or a string")
-        # project shape to unique crs
-        if shape.crs != self.data.rio.crs:
-            shape = shape.to_crs(self.data.rio.crs)
-        # reproject template to single crs if required
-        if self.data["template"].rio.crs != self.data.rio.crs:
-            self.data["template"] = self.data["template"].rio.reproject(self.data.rio.crs, nodata=np.nan)
+        elif not hasattr(shape, "geometry"):
+            raise TypeError("shape must be a GeoDataFrame or a path to a vector file")
 
-        raster = self.data["template"].copy()
-        for _, row in shape.iterrows():
-            # mask is np.nan where not in shape and 0 where in shape
-            mask = self.data["template"].rio.clip([row.geometry], self.data.rio.crs, drop=False,
-                                                  all_touched=all_touched)
+        if shape.empty:
+            # Nothing to rasterize: return template unchanged
+            out = template.copy()
+            if name_to_assign is not None:
+                self.data[name_to_assign] = out
+            return out
 
-            if column is None:
-                raster = xr.where(mask == 0, 1, raster, keep_attrs=True)
-            else:
-                raster = xr.where(mask == 0, row[column], raster, keep_attrs=True)
+        # Ensure CRS: shapes must match template CRS
+        tmpl_crs = template.rio.crs
+        if tmpl_crs is None:
+            # fall back to parent.crs contract
+            tmpl_crs = getattr(self.parent, "crs", None)
+            if tmpl_crs is None:
+                raise ValueError("Template CRS missing and parent.crs is not set.")
+            template = template.rio.write_crs(tmpl_crs)
 
-        if name is not None:
-            raster.name = name
-        elif name is None and column is not None:
-            raster.name = column
+        if shape.crs is None:
+            raise ValueError("Input shape has no CRS; cannot rasterize safely.")
+        if str(shape.crs) != str(tmpl_crs):
+            shape = shape.to_crs(tmpl_crs)
+
+        # Raster grid spec
+        transform = template.rio.transform(recalc=True)
+        out_shape = (template.sizes["y"], template.sizes["x"])
+
+        # Prepare (geometry, value) tuples
+        if column is None:
+            shapes = [(geom, 1.0) for geom in shape.geometry]
+            burned = rio_rasterize(
+                shapes=shapes,
+                out_shape=out_shape,
+                transform=transform,
+                fill=0.0,
+                all_touched=all_touched,
+                merge_alg=MergeAlg.replace,
+                dtype="float32",
+            )
+            burned_da = xr.DataArray(
+                burned,
+                dims=("y", "x"),
+                coords={"y": template["y"].values, "x": template["x"].values},
+            ).rio.write_transform(transform).rio.write_crs(tmpl_crs)
+
+            out = xr.where(burned_da != 0.0, 1.0, template)
+
         else:
-            raise ValueError(f"'name' or 'column' must be specified.")
+            if column not in shape.columns:
+                available = [c for c in shape.columns if c != "geometry"]
+                raise ValueError(
+                    f"Column {column!r} not found in shape. Available columns: {available!r}"
+                )
+            # Require numeric (close to old behavior; avoids burning strings)
+            vals = shape[column].to_numpy()
+            if not np.issubdtype(vals.dtype, np.number):
+                raise TypeError(f"Column {column!r} must be numeric, got dtype={vals.dtype!r}.")
 
-        if inplace:
-            self.data[raster.name] = raster
-            logging.info(f"rasterized {name} and added to data for {self.data.attrs['country']}")
-        else:
-            logging.info(f"returning rasterized {name}")
-            return raster
+            shapes = [(geom, float(val)) for geom, val in zip(shape.geometry, vals, strict=True)]
+            burned = rio_rasterize(
+                shapes=shapes,
+                out_shape=out_shape,
+                transform=transform,
+                fill=np.nan,
+                all_touched=all_touched,
+                merge_alg=MergeAlg.replace,
+                dtype="float32",
+            )
+            burned_da = xr.DataArray(
+                burned,
+                dims=("y", "x"),
+                coords={"y": template["y"].values, "x": template["x"].values},
+            ).rio.write_transform(transform).rio.write_crs(tmpl_crs)
+
+            out = xr.where(~np.isnan(burned_da), burned_da, template)
+
+        if name_to_assign is not None:
+            self.data[name_to_assign] = out
+        return out
 
     def compute_distance(self, data_var, inplace=False):
         """
@@ -593,19 +923,23 @@ class _LandscapeAtlas:
                 distance = distance.rio.write_crs(self.data.rio.crs)
             elif len(xrraster.dims) == 3:
                 non_spatial_dim = [dim for dim in list(xrraster.dims) if dim not in ["x", "y"]]
-                distance = []
+                if len(non_spatial_dim) != 1:
+                    raise ValueError(f"Expected exactly one non-spatial dim, got {non_spatial_dim!r}")
+                dim = non_spatial_dim[0]
 
-                for coord in xrraster[non_spatial_dim[0]]:
-                    raster_slice = xrraster[xrraster[non_spatial_dim[0]] == coord].squeeze()
+                slices = []
+                for coord in xrraster[dim].values:
+                    raster_slice = xrraster.sel({dim: coord}).squeeze(drop=True)
                     distance_slice = proximity(xr.where(raster_slice > 0, 1, 0), x="x", y="y")
                     distance_slice = xr.where(self.data["template"].isnull(), np.nan, distance_slice)
                     distance_slice = distance_slice.rio.write_crs(self.data.rio.crs)
-                    distance.append(distance_slice)
+                    slices.append(distance_slice.expand_dims({dim: [coord]}))
 
-                distance = xr.concat(distance, dim=non_spatial_dim[0])
-
+                distance = xr.concat(slices, dim=dim, join="exact")
+                distance = distance.assign_coords({dim: xrraster[dim].values})
             else:
                 raise ValueError('More than 3 dimensions are not supported.')
+
             distance.name = f"distance_{xrraster.name}"
             distance.attrs["unit"] = distance.rio.crs.linear_units
 

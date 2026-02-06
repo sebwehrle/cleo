@@ -1,10 +1,27 @@
 # %% imports
 import logging
+import logging.config
 import shutil
 import numpy as np
 import xarray as xr
 import rioxarray as rxr
+import rasterio.crs
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+# %% helpers
+def _sanitize_netcdf_attrs(ds):
+    """
+    Remove None values from Dataset attrs to ensure NetCDF serialization succeeds.
+
+    :param ds: xarray Dataset with potentially None-valued attrs
+    :return: Dataset with None attrs removed
+    """
+    sanitized_attrs = {k: v for k, v in ds.attrs.items() if v is not None}
+    ds.attrs = sanitized_attrs
+    return ds
 
 
 # %% methods
@@ -21,45 +38,174 @@ def build_netcdf(self, atlas_type):
         fname_netcdf = path_netcdf / f"{atlas_type}_{self.parent.country}.nc"
 
     if not fname_netcdf.is_file():
-        logging.info(f"Building new {atlas_type} object at {str(path_netcdf)}")
+        logger.info(f"Building new {atlas_type} object at {str(path_netcdf)}")
         # get coords from GWA
-        with rxr.open_rasterio(path_raw / f"{self.parent.country}_combined-Weibull-A_100.tif",
-                               parse_coordinates=True).squeeze() as weibull_a_100:
+        with rxr.open_rasterio(
+            path_raw / f"{self.parent.country}_combined-Weibull-A_100.tif",
+            parse_coordinates=True,
+        ).squeeze() as weibull_a_100:
+            # Ensure CRS is set before using it
+            from cleo.loaders import ensure_crs_from_gwa
+
+            weibull_a_100 = ensure_crs_from_gwa(weibull_a_100, self.parent.country)
+
             self.data = xr.Dataset(coords=weibull_a_100.coords)
             self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
 
-            if atlas_type == "LandscapeAtlas":
-                nan_mask = np.isnan(weibull_a_100)
-                self.data["template"] = xr.where(nan_mask, np.nan, 0)
+            # Create template for both WindAtlas and LandscapeAtlas
+            nan_mask = np.isnan(weibull_a_100)
+            self.data["template"] = xr.where(nan_mask, np.nan, 0).rename("template")
 
-            self.data.to_netcdf(path_raw / fname_netcdf)
+            fname_netcdf.parent.mkdir(parents=True, exist_ok=True)
+            self.data.to_netcdf(fname_netcdf)
 
     else:
-        with xr.open_dataset(fname_netcdf) as dataset:
-            self.data = dataset
-        logging.info(f"Existing {atlas_type} at {str(path_netcdf)} opened.")
+        self.data = xr.open_dataset(fname_netcdf)
 
-    if self.data.rio.crs != self.parent.crs:
-        self.data = self.data.rio.reproject(self.parent.crs, nodata=np.nan)
+        # Ensure rioxarray knows which dims are spatial so CRS metadata can be read
+        if "x" in self.data.dims and "y" in self.data.dims:
+            try:
+                self.data = self.data.rio.set_spatial_dims(x_dim="x", y_dim="y")
+            except Exception:
+                # If this fails, we'll still try to proceed; CRS detection may be unavailable
+                pass
 
-    if self.data.rio.crs is None:
-        self.data = self.data.rio.write_crs(self.parent.crs)
-        logging.warning(f"Coordinate reference system of {self} set to {self.parent.crs}")
+        # --- CRS detection & enforcement for existing NetCDFs -----------------
+        existing_crs = self.data.rio.crs
+
+        # rioxarray may fail to infer CRS if CF grid-mapping is not attached to vars.
+        # Try to recover CRS from a CF-style spatial_ref variable.
+        if existing_crs is None:
+            try:
+                import pyproj
+
+                if "spatial_ref" in self.data.variables:
+                    attrs = self.data["spatial_ref"].attrs
+                    wkt = attrs.get("crs_wkt") or attrs.get("spatial_ref")
+                    if wkt:
+                        existing_crs = pyproj.CRS.from_wkt(wkt)
+                    else:
+                        epsg = attrs.get("epsg_code")
+                        if epsg is not None:
+                            existing_crs = pyproj.CRS.from_user_input(epsg)
+            except Exception:
+                existing_crs = None
+
+        def _attach_crs_to_raster_vars(ds: xr.Dataset, crs_value):
+            """
+            Ensure each raster-like data_var has CRS metadata so rio.reproject works.
+            Only touches vars that look like rasters (have x/y dims).
+            """
+            if crs_value is None:
+                return ds
+            out = ds
+            for name, da in ds.data_vars.items():
+                if "x" in da.dims and "y" in da.dims:
+                    try:
+                        out[name] = da.rio.write_crs(crs_value, inplace=False)
+                    except Exception:
+                        # If this fails, keep var as-is; reprojection will raise
+                        pass
+            # Also ensure dataset-level CRS is present
+            try:
+                out = out.rio.write_crs(crs_value)
+            except Exception:
+                pass
+            return out
+
+        if existing_crs is None:
+            logger.warning(
+                f"{fname_netcdf} has no CRS metadata; writing parent.crs={self.parent.crs!r}."
+            )
+            self.data = _attach_crs_to_raster_vars(self.data, self.parent.crs)
+        else:
+            # Attach the detected existing CRS to raster vars so reproject can run
+            self.data = _attach_crs_to_raster_vars(self.data, existing_crs)
+
+            # Semantic CRS comparison (not string-based)
+            expected_crs = rasterio.crs.CRS.from_user_input(self.parent.crs)
+            if existing_crs != expected_crs:
+                self.data = self.data.rio.reproject(self.parent.crs, nodata=np.nan)
+                self.data = _attach_crs_to_raster_vars(self.data, self.parent.crs)
+
+        logger.info(f"Existing {atlas_type} at {str(path_netcdf)} opened.")
+
+        # Reconstruct template if missing (for legacy NetCDFs)
+        if "template" not in self.data.data_vars:
+            weibull_a_path = path_raw / f"{self.parent.country}_combined-Weibull-A_100.tif"
+            if weibull_a_path.is_file():
+                with rxr.open_rasterio(weibull_a_path, parse_coordinates=True).squeeze() as weibull_a_100:
+                    from cleo.loaders import ensure_crs_from_gwa
+
+                    weibull_a_100 = ensure_crs_from_gwa(weibull_a_100, self.parent.country)
+                    nan_mask = np.isnan(weibull_a_100)
+                    template = xr.where(nan_mask, np.nan, 0).rename("template")
+                    # Write CRS and transform from source for reprojection
+                    template = template.rio.write_crs(weibull_a_100.rio.crs)
+                    template = template.rio.write_transform(weibull_a_100.rio.transform())
+                    # Align template to existing data coords (legacy migration)
+                    template = template.rio.reproject_match(self.data, nodata=np.nan)
+                    self.data["template"] = template
+                    logger.info("Reconstructed template from GWA weibull_a_100")
+
+    # Ensure default wind_speed grid exists (0.0 to 40.0 step 0.5)
+    if "wind_speed" not in self.data.coords:
+        u = np.arange(0.0, 40.0 + 0.5, 0.5)
+        self.data = self.data.assign_coords(wind_speed=u)
 
 
 def deploy_resources(self):
     """
-    Copy yaml-resource files to the destination directory
+    Ensure YAML resource files are present in the workdir at `<atlas.path>/resources/`.
+
+    Contract (A3, always-deploy, idempotent):
+    - Packaged defaults live under `cleo/resources/*.yml`.
+    - On every Atlas init, ensure workdir has a copy of each packaged YAML.
+    - Do NOT overwrite existing workdir YAMLs (workdir is the override surface).
+    - Fail loudly if packaged resources cannot be found (broken install).
     """
-    # Path to the directory containing YAML files within the package
-    source_dir = Path(__file__).parent.parent / 'resources'
-    # create destination directory
-    (self.path / "resources").mkdir(parents=True, exist_ok=True)
-    # Iterate over each YAML file in the source folder
-    for file_path in source_dir.glob('*.yml'):
-        # Copy the YAML file to the destination folder
-        shutil.copy(file_path, self.path / "resources")
-    logging.info(f"Resource files copied to {self.path / 'resources'}.")
+    import logging
+    import shutil
+    from pathlib import Path
+    from importlib import resources as importlib_resources
+
+    dest_dir = Path(self.path) / "resources"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    pkg_root = importlib_resources.files("cleo").joinpath("resources")
+    if not pkg_root.is_dir():
+        raise FileNotFoundError(
+            "Cleo packaged resources are missing (expected package dir `cleo/resources`). "
+            "This indicates a broken installation/build. "
+            "Reinstall from a proper wheel/sdist, or use the conda environment.yaml install."
+        )
+
+    packaged = [
+        p for p in pkg_root.iterdir()
+        if p.is_file() and p.name.lower().endswith(".yml")
+    ]
+    if not packaged:
+        raise FileNotFoundError(
+            "Cleo packaged resources directory exists but contains no *.yml files. "
+            "This indicates a broken installation/build."
+        )
+
+    copied = 0
+    skipped = 0
+    for p in packaged:
+        dest = dest_dir / p.name
+        if dest.exists():
+            skipped += 1
+            continue
+
+        # `as_file` materializes the resource to a real filesystem path (works for wheels too)
+        with importlib_resources.as_file(p) as src_path:
+            shutil.copy(src_path, dest)
+        copied += 1
+
+    logger.info(
+        f"Resource files ensured in {dest_dir} (copied={copied}, skipped_existing={skipped})."
+    )
 
 
 def set_attributes(self):
@@ -67,53 +213,40 @@ def set_attributes(self):
     self.data.attrs['region'] = self.parent.region
     if self.data.rio.crs is None:
         raise AttributeError(f"{self.data} does not have a coordinate reference system.")
-    if self.data.rio.crs != self.parent.crs:
-        raise ValueError(f"Coordinate reference system mismatch: {self.parent.crs} and {self.data.rio.crs}")
+    # Semantic CRS comparison (not string-based)
+    expected_crs = rasterio.crs.CRS.from_user_input(self.parent.crs)
+    actual_crs = self.data.rio.crs
+    if actual_crs != expected_crs:
+        raise ValueError(f"Coordinate reference system mismatch: expected={expected_crs} got={actual_crs}")
 
 
-def setup_logging(self):
+def setup_logging(self, console_level="INFO", file_level="DEBUG"):
     """
-    Setup logging in the logs directory
-    :param self: an instance of the Atlas class
+    Configure cleo logger namespace without touching the root logger.
+    All cleo modules should log via logging.getLogger(__name__) so messages
+    propagate to the 'cleo' logger.
     """
-    fname = self.path / "logs" / "logfile.log"
-    colors = {
-        'reset': '\33[m',
-        'green': '\33[32m',
-        'purple': '\33[35m',
-        'orange': '\33[33m',
-    }
+    log_dir = self.path / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"cleo_{self.country}.log"
 
-    logging_config = {
-        'version': 1,
-        'disable_existing_loggers': False,
-        'formatters': {
-            'default': {
-                'format': '[%(asctime)s] %(levelname)-4s - %(name)-4s - %(message)s'
-            },
-            'color': {
-                'format': f"{colors['green']}[%(asctime)s]{colors['reset']} {colors['purple']}%(levelname)-5s{colors['reset']} - {colors['orange']}%(name)-5s{colors['reset']}: %(message)s"
-            }
-        },
-        'handlers': {
-            'stream': {
-                'class': 'logging.StreamHandler',
-                'formatter': 'color',
-            }
-        },
-        'root': {
-            'handlers': ['stream'],
-            'level': logging.INFO,
-        },
-    }
+    cleo_logger = logging.getLogger("cleo")
+    cleo_logger.setLevel(logging.DEBUG)  # allow handlers to filter
+    cleo_logger.propagate = False
 
-    if fname:
-        logging_config['handlers']['file'] = {
-            'class': 'logging.FileHandler',
-            'formatter': 'default',
-            'level': logging.DEBUG,
-            'filename': fname,
-        }
-        logging_config['root']['handlers'].append('file')
+    # Avoid duplicate handlers on repeated Atlas creation
+    for h in list(cleo_logger.handlers):
+        cleo_logger.removeHandler(h)
 
-    logging.config.dictConfig(logging_config)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    ch = logging.StreamHandler()
+    ch.setLevel(getattr(logging, str(console_level).upper(), logger.info))
+    ch.setFormatter(fmt)
+
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setLevel(getattr(logging, str(file_level).upper(), logging.DEBUG))
+    fh.setFormatter(fmt)
+
+    cleo_logger.addHandler(ch)
+    cleo_logger.addHandler(fh)

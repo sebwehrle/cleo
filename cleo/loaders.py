@@ -1,8 +1,7 @@
 # helpers for the Atlas class
 # %% imports
-import zipfile
-
-import requests
+import re
+import json
 import yaml
 import zipfile
 import requests
@@ -12,22 +11,236 @@ import geopandas as gpd
 import xarray as xr
 import rioxarray as rxr
 import logging
+from pathlib import Path
 from cleo.assess import turbine_overnight_cost
 from cleo.utils import download_file
+
+logger = logging.getLogger(__name__)
+
+
+def _load_yaml_file(path: Path, *, context: str) -> dict:
+    """Load a YAML file with consistent UTF-8 handling and good error context."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Missing YAML resource for {context}: {path}. "
+            "If this is a packaged resource, run `atlas.deploy_resources()` to populate "
+            "`<atlas.path>/resources/` (workdir override surface)."
+        )
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML in {path} for {context}: {e}") from e
+    return data
+
+
+def _safe_extractall(zip_ref: zipfile.ZipFile, dest_dir: Path) -> None:
+    """Safely extract a ZipFile, rejecting path traversal (zip-slip)."""
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    root = dest_dir.resolve()
+
+    for member in zip_ref.infolist():
+        name = member.filename
+
+        # Reject absolute paths and Windows drive letters
+        if name.startswith("/") or name.startswith("\\") or re.match(r"^[A-Za-z]:", name):
+            raise ValueError(f"Unsafe zip member (absolute path): {name}")
+
+        target = (dest_dir / name).resolve()
+        if root not in target.parents and target != root:
+            raise ValueError(f"Unsafe zip member (path traversal): {name}")
+
+    zip_ref.extractall(dest_dir)
+
+
+
+# %% CRS inference from GWA
+def fetch_gwa_crs(iso3):
+    """
+    Fetch CRS from Global Wind Atlas GeoJSON API for a given country.
+
+    Network contract:
+    - Must not hang indefinitely: uses a bounded timeout.
+    - Must raise with actionable context (ISO3 + URL) on request failures.
+
+    :param iso3: ISO 3166-1 alpha-3 country code
+    :type iso3: str
+    :return: CRS string from the GeoJSON response
+    :rtype: str
+    :raises ValueError: If CRS is missing from the GeoJSON response
+    :raises RuntimeError: If the HTTP request fails (timeout, DNS, etc.)
+    """
+    url = f"https://globalwindatlas.info/api/gdal/country/geojson?areaId={iso3}"
+    headers = {
+        "Accept": "application/geo+json,application/json;q=0.9,*/*;q=0.8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://globalwindatlas.info",
+        "Referer": "https://globalwindatlas.info/en/download/gis-files",
+        "User-Agent": "Mozilla/5.0",
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=(10, 60))
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as e:
+        raise RuntimeError(f"Failed to fetch GWA CRS for {iso3} from {url}: {e}") from e
+
+    # Handle double-encoded JSON (response.json() returns a string containing JSON)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse GWA GeoJSON response for country {iso3}: {e}") from e
+
+    try:
+        crs = payload["crs"]["properties"]["name"]
+    except (KeyError, TypeError):
+        raise ValueError(f"CRS missing from GWA GeoJSON response for country {iso3}")
+
+    return crs
+
+
+def ensure_crs_from_gwa(ds, iso3):
+    """
+    Ensure a raster DataArray has a CRS set, fetching from GWA if needed.
+
+    If ds.rio.crs is already set, returns ds unchanged.
+    If ds.rio.crs is None, fetches CRS from GWA GeoJSON API and writes it.
+
+    :param ds: Raster DataArray or Dataset
+    :type ds: xarray.DataArray or xarray.Dataset
+    :param iso3: ISO 3166-1 alpha-3 country code
+    :type iso3: str
+    :return: DataArray/Dataset with CRS set
+    :rtype: xarray.DataArray or xarray.Dataset
+    :raises ValueError: If CRS is missing from the GeoJSON response
+    """
+    if ds.rio.crs is not None:
+        return ds
+
+    crs = fetch_gwa_crs(iso3)
+    return ds.rio.write_crs(crs)
+
+
+def load_elevation(base_dir, iso3, reference_da):
+    """
+    Load elevation data with legacy-file preference.
+
+    Contract:
+    - Returned elevation MUST match the reference grid exactly (dims/coords/transform/CRS),
+      to prevent silent misalignment and downstream NaN stripes.
+
+    If local elevation_w_bathymetry.tif exists and can be opened, use it (but still reproject_match).
+    Otherwise, build elevation from Copernicus DEM tiles.
+
+    :param base_dir: Base directory (Path) containing country data folders
+    :param iso3: ISO 3166-1 alpha-3 country code
+    :param reference_da: Reference DataArray for CRS/bounds/grid alignment
+    :return: Elevation DataArray aligned to reference grid
+    :rtype: xarray.DataArray
+    :raises FileNotFoundError: If neither legacy file nor CopDEM tiles available
+    """
+    from pathlib import Path
+    from rasterio.enums import Resampling
+    from rasterio.crs import CRS
+    from rasterio.warp import transform_bounds
+
+    from cleo.copdem import download_copdem_tiles_for_bbox, build_copdem_elevation_like
+
+    path_raw_country = Path(base_dir) / "data" / "raw" / iso3
+    legacy_path = path_raw_country / f"{iso3}_elevation_w_bathymetry.tif"
+
+    # Ensure reference_da has a CRS (needed for reproject_match and bounds transforms)
+    if reference_da.rio.crs is None:
+        air_density_path = path_raw_country / f"{iso3}_air-density_100.tif"
+        if air_density_path.exists():
+            reference_da = rxr.open_rasterio(air_density_path).squeeze(drop=True)
+            reference_da = ensure_crs_from_gwa(reference_da, iso3)
+            logger.info(f"Using air-density raster as CRS reference: {air_density_path}")
+        else:
+            raise ValueError(
+                f"Reference DataArray has no CRS and air-density reference file not found: {air_density_path}"
+            )
+
+        if reference_da.rio.crs is None:
+            raise ValueError(
+                f"Reference DataArray has no CRS and air-density file also lacks CRS: {air_density_path}"
+            )
+
+    # Try legacy file first (but always align to reference grid)
+    if legacy_path.exists():
+        try:
+            elevation = rxr.open_rasterio(legacy_path).rename("elevation").squeeze()
+            elevation = ensure_crs_from_gwa(elevation, iso3)
+
+            elevation = elevation.rio.reproject_match(
+                reference_da,
+                resampling=Resampling.bilinear,
+                nodata=np.nan,
+            )
+            elevation.name = "elevation"
+
+            # Hard alignment guardrail: coords must match exactly
+            if set(elevation.dims) != set(reference_da.dims):
+                raise ValueError(
+                    f"Elevation dims mismatch after reproject_match: {elevation.dims} vs {reference_da.dims}"
+                )
+            for dim in reference_da.dims:
+                if not np.array_equal(elevation[dim].values, reference_da[dim].values):
+                    raise ValueError(f"Elevation coordinate mismatch on dim '{dim}' after reproject_match")
+
+            logger.info(f"Loaded legacy elevation from {legacy_path} and matched to reference grid.")
+            return elevation
+        except Exception as e:
+            logger.warning(f"Legacy elevation file exists but failed to open/match: {e}")
+
+    # Fall back to CopDEM
+    logger.info("Legacy elevation not available, building from Copernicus DEM")
+
+    bounds = reference_da.rio.bounds()
+    src_crs = reference_da.rio.crs
+    if src_crs is None:
+        raise ValueError("reference_da has no CRS (.rio.crs is None)")
+
+    src = CRS.from_user_input(src_crs)
+    dst = CRS.from_epsg(4326)
+
+    if src != dst:
+        min_lon, min_lat, max_lon, max_lat = transform_bounds(src, dst, *bounds, densify_pts=21)
+    else:
+        min_lon, min_lat, max_lon, max_lat = bounds
+
+    tile_paths = download_copdem_tiles_for_bbox(
+        base_dir,
+        iso3,
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
+    )
+
+    elevation = build_copdem_elevation_like(reference_da, tile_paths)
+    logger.info(f"Built elevation from {len(tile_paths)} Copernicus DEM tiles")
+
+    return elevation
 
 
 # %% methods
 def get_cost_assumptions(self, attribute_name):
     """
-    Retrieve cost assumptions from a yaml-file in ./resources
+    Retrieve cost assumptions from YAML in `<atlas.path>/resources/`.
 
     :param self: an instance of the Atlas class
     :param attribute_name: Name of the cost assumption attribute to retrieve
     :type attribute_name: str
     :return: Value of the specific cost assumption
     """
-    with open(str(self.parent.path / "resources/cost_assumptions.yml")) as f:
-        data = yaml.safe_load(f)
+    path = Path(self.parent.path) / "resources" / "cost_assumptions.yml"
+    data = _load_yaml_file(path, context="cost assumptions")
     return data[attribute_name]
 
 
@@ -41,25 +254,37 @@ def get_overnight_cost(self, turbine_model):
 
 def get_powercurves(self):
     """
-    Load power curves from yaml-file in ./resources
-    Loads a power curve for each wind turbine in self.wind_turbine
+    Load power curves from YAML files in `<atlas.path>/resources/`.
+
+    Loads a power curve for each turbine listed in `self.wind_turbines`.
+
+    Contract:
+    - YAML files must be read via context managers (no leaked file handles).
+    - Errors must identify the turbine / path that failed.
     """
-    file_paths = [str(self.path / "resources" / turbine) + ".yml" for turbine in self.wind_turbines]
+    file_paths = [Path(self.path) / "resources" / f"{t}.yml" for t in self.wind_turbines]
 
-    power_curves = [
-        pd.DataFrame(
-            data=data["cf"],
-            index=data["V"],
-            columns=[f"{data['manufacturer']}.{data['model']}.{data['capacity']}"])
-        for data in (yaml.safe_load(open(path, "r")) for path in file_paths)]
+    frames = []
+    for path, turbine in zip(file_paths, self.wind_turbines):
+        data = _load_yaml_file(path, context=f"power curve turbine={turbine}")
+        try:
+            frames.append(
+                pd.DataFrame(
+                    data=data["cf"],
+                    index=data["V"],
+                    columns=[f"{data['manufacturer']}.{data['model']}.{data['capacity']}"],
+                )
+            )
+        except Exception as e:
+            raise ValueError(f"Invalid power curve YAML schema in {path}: {e}") from e
 
-    self.power_curves = pd.concat(power_curves, axis=1)
-    logging.info(f"Power curves for {self.wind_turbines} loaded.")
+    self.power_curves = pd.concat(frames, axis=1)
+    logger.info(f"Power curves for {self.wind_turbines} loaded.")
 
 
 def get_turbine_attribute(self, turbine, attribute_name):
     """
-    Retrieve turbine attribute from a yaml-file in ./resources
+    Retrieve turbine attribute from YAML in `<atlas.path>/resources/`.
 
     :param turbine: Name of the wind turbine in the format "Manufacturer.Type.Power_in_kW"
     :type turbine: str
@@ -67,31 +292,51 @@ def get_turbine_attribute(self, turbine, attribute_name):
     :type attribute_name: str
     :return: Value of the specific turbine attribute
     """
-    with open(str(self.parent.path / "resources" / turbine) + ".yml") as f:
-        data = yaml.safe_load(f)
+    path = Path(self.parent.path) / "resources" / f"{turbine}.yml"
+    data = _load_yaml_file(path, context=f"turbine metadata turbine={turbine}")
     return data[attribute_name]
 
 
 def load_weibull_parameters(self, height):
     """
-    Load weibull parameters for a specific height
-    :param self: an  instance of the Atlas class
-    :param height: Height for which to load Weibull parameters. Possible values are [50, 100, 150].
-    GWA also provides 10 and 200 m data, which, however, is not loaded by Atlas class currently.
+    Load Weibull parameters for a specific height.
+
+    Contract:
+    - Missing required rasters must raise immediately (no silent (None, None) fallback).
+    - Returned rasters are in `self.parent.crs` (Atlas CRS), unless already matching.
+
+    :param self: an instance of the Atlas class
+    :param height: Height for which to load Weibull parameters (e.g. 50, 100, 150, 200)
     :type height: int
     :return: Tuple containing Weibull parameter rasters (a, k)
-    :rtype: Tuple[xarray.DataArray, xarray.DataArray]
+    :rtype: tuple[xarray.DataArray, xarray.DataArray]
+    :raises FileNotFoundError: If required raster files are missing
+    :raises RuntimeError: If reprojection/clipping fails
     """
-    path_raw_country = self.parent.path / "data" / "raw" / f"{self.parent.country}"
+    from pathlib import Path
+
+    path_raw_country = Path(self.parent.path) / "data" / "raw" / f"{self.parent.country}"
+    a_path = path_raw_country / f"{self.parent.country}_combined-Weibull-A_{height}.tif"
+    k_path = path_raw_country / f"{self.parent.country}_combined-Weibull-k_{height}.tif"
+
+    missing = [str(p) for p in [a_path, k_path] if not p.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing Weibull parameter raster(s) for height={height}: {missing}"
+        )
+
     try:
-        a = rxr.open_rasterio(path_raw_country / f"{self.parent.country}_combined-Weibull-A_{height}.tif").chunk("auto")
-        k = rxr.open_rasterio(path_raw_country / f"{self.parent.country}_combined-Weibull-k_{height}.tif").chunk("auto")
+        a = rxr.open_rasterio(a_path).chunk("auto")
+        k = rxr.open_rasterio(k_path).chunk("auto")
         a.name = "weibull_a"
         k.name = "weibull_k"
 
+        # Ensure CRS is set before reprojection
+        a = ensure_crs_from_gwa(a, self.parent.country)
+        k = ensure_crs_from_gwa(k, self.parent.country)
+
         if a.rio.crs != self.parent.crs:
             a = a.rio.reproject(self.parent.crs, nodata=np.nan)
-
         if k.rio.crs != self.parent.crs:
             k = k.rio.reproject(self.parent.crs, nodata=np.nan)
 
@@ -104,8 +349,7 @@ def load_weibull_parameters(self, height):
 
         return a, k
     except Exception as e:
-        logging.error(f"Error loading weibull parameters for height {height}: {e}")
-        return None, None
+        raise RuntimeError(f"Failed to load Weibull parameters for height {height}: {e}") from e
 
 
 # %% methods
@@ -123,45 +367,46 @@ def load_weibull_parameters(self, height):
 
 def load_gwa(self):
     """
-    Download wind resource data for the specified country from GWA API
-    Downloads air density, combined Weibull parameters, and ground elevation data for multiple heights
+    Download wind resource data for the specified country from GWA API.
+
+    Downloads:
+    - air density
+    - combined Weibull parameters (A, k)
+    for multiple heights.
+
+    Note: elevation is NOT downloaded from GWA (handled via legacy file or Copernicus DEM).
     """
     url = "https://globalwindatlas.info/api/gis/country"
-    layers = ['air-density', 'combined-Weibull-A', 'combined-Weibull-k']
-    ground = ['elevation_w_bathymetry']
-    height = ['50', '100', '150', '200']
+    layers = ["air-density", "combined-Weibull-A", "combined-Weibull-k"]
+    heights = ["50", "100", "150", "200"]
 
     c = self.parent.country
-    path_raw = self.parent.path / "data" / "raw" / self.parent.country
-    logging.info(f"Initializing WindScape with Global Wind Atlas data")
+    path_raw = self.parent.path / "data" / "raw" / c
+    path_raw.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Initializing WindScape with Global Wind Atlas data")
 
     for ly in layers:
-        for h in height:
-            fname = f'{c}_{ly}_{h}.tif'
+        for h in heights:
+            fname = f"{c}_{ly}_{h}.tif"
             fpath = path_raw / fname
+            if fpath.is_file():
+                continue
 
-            if not fpath.is_file():
-                try:
-                    if not fpath.is_file():
-                        durl = f"{url}/{c}/{ly}/{h}"
-                        download_file(durl, fpath)
-                        logging.info(f'Download of {fname} from {durl} complete')
-                except requests.RequestException as e:
-                    logging.error(f'Error downloading {fname}: {e}')
-
-    for g in ground:
-        fname = f'{c}_{g}.tif'
-        fpath = path_raw / fname
-        if not fpath.is_file():
+            durl = f"{url}/{c}/{ly}/{h}"
             try:
-                if not fpath.is_file():
-                    durl = f'{url}/{c}/{g}'
-                    download_file(durl, fpath)
-                    logging.info(f'Download of {fname} from {durl} complete')
+                success = download_file(durl, fpath)
             except requests.RequestException as e:
-                logging.error(f'Error downloading {fname}: {e}')
+                logger.error(f"Error downloading {fname} from {durl}: {e}")
+                continue
 
-    logging.info(f'Global Wind Atlas data for {c} initialized.')
+            if success:
+                logger.info(f"Download of {fname} from {durl} complete")
+            else:
+                logger.info(f"Download of {fname} from {durl} failed")
+
+    logger.info("Skipping GWA elevation download; handled via legacy file or Copernicus DEM")
+    logger.info(f"Global Wind Atlas data for {c} initialized.")
 
 
 def load_nuts(self, resolution="03M", year=2021, crs=4326):
@@ -170,49 +415,61 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
     CRS = [3035, 4326, 3857]
 
     if resolution not in RESOLUTION:
-        raise ValueError(f'Invalid resolution: {resolution}')
+        raise ValueError(f"Invalid resolution: {resolution}")
 
     if year not in YEAR:
-        raise ValueError(f'Invalid year: {year}')
+        raise ValueError(f"Invalid year: {year}")
 
     if crs not in CRS:
-        raise ValueError(f'Invalid crs: {crs}')
+        raise ValueError(f"Invalid crs: {crs}")
 
-    nuts_path = self.parent.path / "data" / "nuts"
-
-    if not nuts_path.is_dir():
-        nuts_path.mkdir()
+    nuts_path = Path(self.parent.path) / "data" / "nuts"
+    nuts_path.mkdir(parents=True, exist_ok=True)
 
     url = "https://gisco-services.ec.europa.eu/distribution/v2/nuts/download/"
     file_collection = f"ref-nuts-{year}-{resolution}.shp.zip"
     file_name = f"NUTS_RG_{resolution}_{year}_{crs}.shp.zip"
 
-    if not (nuts_path / file_name).is_file():
-        download_file(url + file_collection, nuts_path / file_collection)
-        logging.info(f"Downloaded {file_collection}")
+    target_inner_zip = nuts_path / file_name
+    if target_inner_zip.is_file():
+        logger.info("NUTS borders initialised.")
+        return
 
-        with zipfile.ZipFile(str(nuts_path / file_collection), "r") as zip_ref:
-            if file_name in zip_ref.namelist():
-                zip_ref.extract(file_name, nuts_path)
+    # Download outer zip (collection) if needed
+    outer_zip_path = nuts_path / file_collection
+    if not outer_zip_path.is_file():
+        download_file(url + file_collection, outer_zip_path)
+        logger.info(f"Downloaded {file_collection}")
 
-                with zipfile.ZipFile(str(nuts_path / file_name), "r") as zip_inner:
-                    zip_inner.extractall(nuts_path)
+    # Extract the requested inner zip safely (no trust in zip paths)
+    with zipfile.ZipFile(str(outer_zip_path), "r") as zip_ref:
+        try:
+            info = zip_ref.getinfo(file_name)
+        except KeyError:
+            raise FileNotFoundError(f"File {file_name} not found inside {file_collection}")
 
-            else:
-                raise FileNotFoundError(f"File {file_name}")
+        # Write the inner zip to a known-safe location
+        with zip_ref.open(info, "r") as src, open(target_inner_zip, "wb") as dst:
+            dst.write(src.read())
 
-        logging.info(f"Extracted {file_name}")
-    else:
-        logging.info(f"NUTS borders initialised.")
+    # Safely extract inner zip (zip-slip protection)
+    with zipfile.ZipFile(str(target_inner_zip), "r") as zip_inner:
+        _safe_extractall(zip_inner, nuts_path)
+
+    logger.info(f"Extracted {file_name}")
 
 
 def get_clc_codes(self, reverse=False):
-    with open(str(self.parent.path / 'resources' / 'clc_codes.yml')) as f:
-        data = yaml.safe_load(f)
-        if not reverse:
-            return data['clc_codes']
-        else:
-            return data['clc_reverse']
+    path = Path(self.parent.path) / "resources" / "clc_codes.yml"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Missing resource file: {path}. "
+            "Run `atlas.deploy_resources()` to populate `<atlas.path>/resources/` "
+            "or ensure this YAML is present in your workdir resources override."
+        )
+
+    data = _load_yaml_file(path, context="CLC codes")
+    return data["clc_reverse" if reverse else "clc_codes"]
 
 
 def add_corine_land_cover(self, clc_class=None):
@@ -251,7 +508,7 @@ def add_corine_land_cover(self, clc_class=None):
             if len(classes_to_process) == 1:
                 cat_raster = cat_raster.rio.write_crs(self.parent.crs)
                 self.add(cat_raster, name=clc_codes[clc_code].lower())
-                logging.info(f"Corine Land Cover class {clc_codes[clc_code].lower()} added.")
+                logger.info(f"Corine Land Cover class {clc_codes[clc_code].lower()} added.")
             else:
                 cat_raster = cat_raster.expand_dims(dim="clc_class", axis=0)
                 cat_raster.coords["clc_class"] = [clc_codes[clc_code]]
@@ -261,4 +518,4 @@ def add_corine_land_cover(self, clc_class=None):
         clc_3d = xr.concat(clc_array, dim="clc_class")
         clc_3d = clc_3d.rio.write_crs(self.parent.crs)
         self.add(clc_3d, name="corine_land_cover")
-        logging.info(f"Corine Land Cover added.")
+        logger.info(f"Corine Land Cover added.")

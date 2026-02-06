@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 from cleo.assess import turbine_overnight_cost
 from cleo.utils import download_file
+from cleo.spatial import reproject_raster_if_needed, to_crs_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -335,15 +336,13 @@ def load_weibull_parameters(self, height):
         a = ensure_crs_from_gwa(a, self.parent.country)
         k = ensure_crs_from_gwa(k, self.parent.country)
 
-        if a.rio.crs != self.parent.crs:
-            a = a.rio.reproject(self.parent.crs, nodata=np.nan)
-        if k.rio.crs != self.parent.crs:
-            k = k.rio.reproject(self.parent.crs, nodata=np.nan)
+        # Reproject to Atlas CRS if needed (semantic comparison)
+        a = reproject_raster_if_needed(a, self.parent.crs, nodata=np.nan)
+        k = reproject_raster_if_needed(k, self.parent.crs, nodata=np.nan)
 
         if self.parent.region is not None:
             clip_shape = self.parent.get_nuts_region(self.parent.region)
-            if clip_shape.crs != self.parent.crs:
-                clip_shape = clip_shape.to_crs(self.parent.crs)
+            clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
             a = a.rio.clip(clip_shape.geometry)
             k = k.rio.clip(clip_shape.geometry)
 
@@ -486,7 +485,7 @@ def add_corine_land_cover(self, clc_class=None):
     # Corine Land Cover - pastures and crop area
     clc = gpd.read_file(self.parent.path / 'data' / 'site' / 'clc' / 'CLC_2018_AT.shp')
     clc['CODE_18'] = clc['CODE_18'].astype('int')
-    clc = clc.to_crs(self.parent.crs)
+    clc = to_crs_if_needed(clc, self.parent.crs)
 
     if self.parent.region is not None:
         clip_shape = self.parent.get_nuts_region(self.parent.region)

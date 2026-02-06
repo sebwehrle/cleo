@@ -8,6 +8,7 @@ import logging
 from scipy.special import gamma
 from cleo.utils import _match_to_template
 from cleo.chunk import compute_chunked
+from cleo.spatial import crs_equal, reproject_raster_if_needed, to_crs_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ def compute_air_density_correction(self, chunk_size=None):
         tpl_crs = template.rio.crs
         if tpl_crs is None:
             raise ValueError("template DataArray missing CRS (.rio.crs is None)")
-        if CRS.from_user_input(tpl_crs) != CRS.from_user_input(self.parent.crs):
+        if not crs_equal(tpl_crs, self.parent.crs):
             raise ValueError(
                 f"template CRS ({tpl_crs}) does not match Atlas CRS ({self.parent.crs}). "
                 "Refuse to compute air_density_correction on inconsistent grids."
@@ -165,8 +166,8 @@ def compute_air_density_correction(self, chunk_size=None):
         ref_crs = reference_da.rio.crs
         if ref_crs is None:
             raise ValueError("reference GWA raster missing CRS (.rio.crs is None)")
-        if CRS.from_user_input(ref_crs) != CRS.from_user_input(self.parent.crs):
-            reference_da = reference_da.rio.reproject(self.parent.crs, nodata=np.nan).squeeze()
+        # Reproject to Atlas CRS if needed (semantic comparison)
+        reference_da = reproject_raster_if_needed(reference_da, self.parent.crs, nodata=np.nan).squeeze()
         template = reference_da
 
     # Load elevation (legacy preferred; CopDEM fallback). Contract: must be made to match template.
@@ -181,8 +182,7 @@ def compute_air_density_correction(self, chunk_size=None):
         clip_shape = self.parent.get_nuts_region(self.parent.region)
         if clip_shape is None:
             raise ValueError(f"region={self.parent.region!r} produced no geometry from get_nuts_region()")
-        if clip_shape.crs != self.parent.crs:
-            clip_shape = clip_shape.to_crs(self.parent.crs)
+        clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
         elevation = elevation.rio.clip(clip_shape.geometry)
 
     # Enforce exact template grid + Atlas CRS with bilinear resampling (continuous elevation)

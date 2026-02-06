@@ -8,6 +8,8 @@ import rioxarray as rxr
 import rasterio.crs
 from pathlib import Path
 
+from cleo.spatial import crs_equal, reproject_raster_if_needed
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,10 +124,15 @@ def build_netcdf(self, atlas_type):
             # Attach the detected existing CRS to raster vars so reproject can run
             self.data = _attach_crs_to_raster_vars(self.data, existing_crs)
 
-            # Semantic CRS comparison (not string-based)
-            expected_crs = rasterio.crs.CRS.from_user_input(self.parent.crs)
-            if existing_crs != expected_crs:
-                self.data = self.data.rio.reproject(self.parent.crs, nodata=np.nan)
+            # Reproject if CRS differs (using centralized semantic comparison)
+            if not crs_equal(existing_crs, self.parent.crs):
+                from cleo.spatial import canonical_crs_str
+
+                dst_crs = canonical_crs_str(self.parent.crs)
+                logger.info(f"Reprojecting dataset from {existing_crs} to {dst_crs}")
+
+                # Reproject entire dataset (updates coordinates and all variables)
+                self.data = self.data.rio.reproject(dst_crs, nodata=np.nan)
                 self.data = _attach_crs_to_raster_vars(self.data, self.parent.crs)
 
         logger.info(f"Existing {atlas_type} at {str(path_netcdf)} opened.")
@@ -213,11 +220,9 @@ def set_attributes(self):
     self.data.attrs['region'] = self.parent.region
     if self.data.rio.crs is None:
         raise AttributeError(f"{self.data} does not have a coordinate reference system.")
-    # Semantic CRS comparison (not string-based)
-    expected_crs = rasterio.crs.CRS.from_user_input(self.parent.crs)
-    actual_crs = self.data.rio.crs
-    if actual_crs != expected_crs:
-        raise ValueError(f"Coordinate reference system mismatch: expected={expected_crs} got={actual_crs}")
+    # Semantic CRS comparison using centralized helper
+    if not crs_equal(self.data.rio.crs, self.parent.crs):
+        raise ValueError(f"Coordinate reference system mismatch: expected={self.parent.crs} got={self.data.rio.crs}")
 
 
 def setup_logging(self, console_level="INFO", file_level="DEBUG"):

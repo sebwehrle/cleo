@@ -1,6 +1,6 @@
 # CLEO
 
-CLEO is an [xarray](https://docs.xarray.dev)-based Python library that downloads and converts 
+CLEO is a [xarray](https://docs.xarray.dev)-based Python library that downloads and converts 
 [Global Wind Atlas](https://globalwindatlas.info) rasters into a structured, analysis-ready form for wind resource 
 assessment at the GWA's native resolution.
 
@@ -26,14 +26,12 @@ CLEO also provides common geospatial operations (CRS handling, reprojection, cli
 From the repository root:
 
 ```bash
-python -m pip install -U pip
 python -m pip install -e .
 ```
 
 ### Directly from GitHub
 
 ```bash
-python -m pip install -U pip
 python -m pip install "cleo @ git+https://github.com/sebwehrle/cleo.git"
 ```
 
@@ -45,6 +43,7 @@ If you use conda/mamba for scientific stacks, you may prefer creating an environ
 from cleo import Atlas
 
 atlas = Atlas("/path/to/cleo-workdir", "AUT", "EPSG:4326")
+atlas.materialize()
 
 # Compute wind resource metrics
 atlas.wind.compute_wind_shear_coefficient()
@@ -57,16 +56,16 @@ Notes:
 - `AUT` is a 3-letter ISO country code as used by the GWA API.
 - `EPSG:4326` is the target coordinate reference system for the atlas.
 
-On first use, CLEO downloads required GWA rasters for the selected country into the workdir and builds processed NetCDF 
-outputs under `data/processed`.
+On first use, run `.materialize()` to download required GWA rasters for the selected country into the workdir and build 
+processed NetCDF outputs under `data/processed`.
 The class wraps two `xarray.Dataset`s, one for wind resources and one for further spatial characteristics.
 The corresponding data is accessible through `atlas.wind.data` and `atlas.landscape.data`, respectively
 
-## GWA v4 CRS and elevation behavior
+## GWA4 CRS and elevation behavior
 
-- **GWA4 CRS metadata:** some GWA4 rasters may lack CRS metadata. CLEO infers CRS from the country GeoJSON metadata and 
+- **GWA4 CRS metadata:** GWA4 rasters lack CRS metadata. CLEO infers CRS from GWA4's country GeoJSON metadata and 
 enforces consistent CRS throughout the atlas pipeline.
-- **Elevation:** if a legacy elevation file (`elevation_w_bathymetry`) is available, it is used. Otherwise CLEO falls 
+- **Elevation:** if a legacy elevation file (`elevation_w_bathymetry`) is available, it is used. Otherwise, CLEO falls 
 back to Copernicus DEM.
 
 #### Properties

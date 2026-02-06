@@ -44,7 +44,7 @@ from cleo.loaders import (
 )
 
 from cleo.spatial import (
-    clip_to_geometry, reproject,
+    clip_to_geometry, reproject, to_crs_if_needed, crs_equal,
 )
 
 from cleo.assess import (
@@ -406,7 +406,7 @@ class Atlas:
         merged_shape = merged_shape.reset_index(drop=True)
 
         if to_atlascrs:
-            merged_shape = merged_shape.to_crs(self.crs)
+            merged_shape = to_crs_if_needed(merged_shape, self.crs)
 
         return merged_shape
 
@@ -820,8 +820,8 @@ class _LandscapeAtlas:
 
         if shape.crs is None:
             raise ValueError("Input shape has no CRS; cannot rasterize safely.")
-        if str(shape.crs) != str(tmpl_crs):
-            shape = shape.to_crs(tmpl_crs)
+        # Reproject to template CRS if needed (semantic comparison)
+        shape = to_crs_if_needed(shape, tmpl_crs)
 
         # Raster grid spec
         transform = template.rio.transform(recalc=True)

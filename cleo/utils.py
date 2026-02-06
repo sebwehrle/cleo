@@ -10,7 +10,7 @@ from pathlib import Path
 from pint import UnitRegistry
 _UREG = UnitRegistry()
 
-from cleo.spatial import bbox
+from cleo.spatial import bbox, reproject_raster_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +76,8 @@ def add(self, other, name=None) -> None:
     if self.data is None:
         raise ValueError("self.data is None")
 
-    # CRS discipline
-    if self.data.rio.crs != other.rio.crs:
-        other = other.rio.reproject(self.crs, nodata=np.nan)
+    # CRS discipline: reproject to Atlas CRS if needed (semantic comparison)
+    other = reproject_raster_if_needed(other, self.crs, nodata=np.nan)
 
     # Grid alignment (preferred over bbox checks; fixes tiny coord noise robustly)
     # Align to template if present, else align to first data var as grid template.

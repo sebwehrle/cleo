@@ -179,3 +179,51 @@ def test_open_dataset_data_accessible_after_build(tmp_path: Path, monkeypatch: p
 
         var = next(iter(atlas.data.data_vars))
         _ = atlas.data[var].values  # must not raise
+
+
+def _write_minimal_geotiff_with_band(path: Path, *, width: int = 4, height: int = 4) -> None:
+    """Create a minimal valid GeoTIFF with EPSG:4326 CRS that will have a 'band' coord when loaded."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    transform = from_bounds(9.5, 46.5, 17.0, 49.0, width, height)
+    data = np.ones((height, width), dtype=np.float32)
+
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=height,
+        width=width,
+        count=1,
+        dtype=data.dtype,
+        crs="EPSG:4326",
+        transform=transform,
+    ) as dst:
+        dst.write(data, 1)
+
+
+def test_build_netcdf_drops_band_coord(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    build_netcdf must drop any 'band' coord that leaks from rasterio single-band rasters.
+    Contract: After build_netcdf completes, 'band' must not be in coords or dims; template must be 2D (y,x).
+    """
+    import cleo.loaders
+
+    monkeypatch.setattr(cleo.loaders, "ensure_crs_from_gwa", lambda dset, iso3: dset)
+
+    with _chdir(tmp_path):
+        # Create a minimal raw input raster (rasterio single-band will produce 'band' coord)
+        tif_path = Path("data/raw/AUT/AUT_combined-Weibull-A_100.tif")
+        _write_minimal_geotiff_with_band(tif_path)
+
+        Path("data/processed").mkdir(parents=True, exist_ok=True)
+
+        parent = Parent(path=Path("."), country="AUT", region=None, crs=CRS.from_epsg(4326))
+        atlas = AtlasSelf(parent)
+
+        build_netcdf(atlas, "WindAtlas")
+
+        assert atlas.data is not None, "build_netcdf did not create a dataset"
+        assert "band" not in atlas.data.coords, "'band' coord leaked into Dataset coords"
+        assert "band" not in atlas.data.dims, "'band' dim leaked into Dataset dims"
+        assert "template" in atlas.data.data_vars, "template missing from dataset"
+        assert tuple(atlas.data["template"].dims) == ("y", "x"), f"template dims wrong: {atlas.data['template'].dims}"

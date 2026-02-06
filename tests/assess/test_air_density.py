@@ -141,3 +141,72 @@ def test_compute_air_density_correction_missing_file_error(tmp_path: Path) -> No
     msg = str(exc_info.value)
     assert "Raw GWA files missing" in msg
     assert "AUT" in msg
+
+
+def test_compute_air_density_correction_region_clip_after_match_no_nodatainbounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    Regression test: region clipping must happen AFTER reproject_match to avoid
+    NoDataInBounds when elevation CRS (EPSG:4326) differs from clip_shape CRS (epsg:31287).
+    """
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    country = "AUT"
+    atlas_crs = "EPSG:31287"  # Austrian CRS
+
+    # Reference file at the exact path the function expects
+    raw_dir = tmp_path / "data" / "raw" / country
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    reference_file = raw_dir / f"{country}_combined-Weibull-A_100.tif"
+
+    # Template raster in EPSG:31287 (Austrian projection, meter coords)
+    # Use coords near center of Austria (around Salzburg): ~400000 x, ~290000 y
+    tpl_transform = from_origin(400000, 290000, 1000, 1000)
+    write_geotiff(reference_file, np.ones((4, 4), dtype=np.float32), crs=atlas_crs, transform=tpl_transform)
+
+    # Also create template in dataset
+    tpl_path = tmp_path / "tpl.tif"
+    write_geotiff(tpl_path, np.zeros((4, 4), dtype=np.float32), crs=atlas_crs, transform=tpl_transform)
+    template = rxr.open_rasterio(tpl_path).squeeze(drop=True)
+
+    # Elevation raster in EPSG:4326 (geographic, degree coords) - different CRS!
+    # Cover a large area of Austria to ensure overlap after reproject_match
+    elev_transform = from_origin(9.0, 50.0, 0.1, 0.1)  # Large coverage over Austria
+    elev_path = tmp_path / "elev.tif"
+    write_geotiff(
+        elev_path,
+        np.ones((100, 100), dtype=np.float32) * 500.0,
+        crs="EPSG:4326",
+        transform=elev_transform,
+    )
+    elevation = rxr.open_rasterio(elev_path).squeeze(drop=True)
+
+    monkeypatch.setattr("cleo.loaders.load_elevation", lambda base_dir, iso3, reference_da: elevation)
+
+    # Clip shape in EPSG:31287 (same as atlas_crs) that overlaps template bounds
+    clip_geom = box(400000, 286000, 404000, 290000)
+    clip_gdf = gpd.GeoDataFrame(geometry=[clip_geom], crs=atlas_crs)
+
+    # Build self with region set
+    parent = DummyParent(
+        path=tmp_path,
+        country=country,
+        crs=atlas_crs,
+        region="TestRegion",
+        get_nuts_region=lambda _region: clip_gdf,
+    )
+    self = DummySelf(parent=parent, data=xr.Dataset({"template": template}))
+
+    # Act - this should NOT raise NoDataInBounds
+    assess.compute_air_density_correction(self, chunk_size=None)
+
+    # Assert
+    assert "air_density_correction" in self.data.data_vars, "air_density_correction should be computed"
+    out = self.data["air_density_correction"]
+    assert out.dims == ("y", "x"), f"output dims should be (y, x), got {out.dims}"
+    assert out.sizes["y"] == template.sizes["y"], "y size should match template"
+    assert out.sizes["x"] == template.sizes["x"], "x size should match template"
+    # At least some finite values should exist (clipped area)
+    assert np.any(np.isfinite(out.values)), "output should have finite values"

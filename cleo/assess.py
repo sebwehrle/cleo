@@ -8,7 +8,7 @@ import logging
 from scipy.special import gamma
 from cleo.utils import _match_to_template
 from cleo.chunk import compute_chunked
-from cleo.spatial import crs_equal, reproject_raster_if_needed, to_crs_if_needed
+from cleo.spatial import crs_equal, reproject_raster_if_needed, to_crs_if_needed, _rio_clip_robust
 
 logger = logging.getLogger(__name__)
 
@@ -177,16 +177,31 @@ def compute_air_density_correction(self, chunk_size=None):
     if src_crs is None:
         raise ValueError("elevation DataArray missing CRS (.rio.crs is None)")
 
-    # Optional clip, but ALWAYS reproject-match to template afterwards (exact grid contract)
+    # Enforce exact template grid + Atlas CRS with bilinear resampling (continuous elevation)
+    elevation = elevation.rio.reproject_match(template, resampling=Resampling.bilinear, nodata=np.nan).squeeze()
+
+    # Optional region clip AFTER reproject_match (avoids CRS mismatch NoDataInBounds)
+    # Use drop=False to preserve exact x/y grid invariants
     if self.parent.region is not None:
         clip_shape = self.parent.get_nuts_region(self.parent.region)
         if clip_shape is None:
             raise ValueError(f"region={self.parent.region!r} produced no geometry from get_nuts_region()")
-        clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
-        elevation = elevation.rio.clip(clip_shape.geometry)
+        clip_shape = to_crs_if_needed(clip_shape, elevation.rio.crs)
+        geoms = list(clip_shape.geometry)
 
-    # Enforce exact template grid + Atlas CRS with bilinear resampling (continuous elevation)
-    elevation = elevation.rio.reproject_match(template, resampling=Resampling.bilinear, nodata=np.nan).squeeze()
+        # Import lazily for minimal envs (needed for error wrapping)
+        try:
+            from rioxarray.exceptions import NoDataInBounds
+        except Exception:
+            NoDataInBounds = ()  # fallback type, will never match
+
+        try:
+            elevation = _rio_clip_robust(elevation, geoms, drop=False, all_touched_primary=False)
+        except NoDataInBounds as e:
+            raise ValueError(
+                f"Region clip failed: geometry does not overlap elevation bounds. "
+                f"elevation.rio.crs={elevation.rio.crs}, clip_shape.total_bounds={clip_shape.total_bounds}"
+            ) from e
 
     if chunk_size is None:
         rho = rho_correction(elevation)

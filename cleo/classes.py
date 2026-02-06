@@ -642,7 +642,67 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
         self.data = None
         self._load_gwa()
         self._build_netcdf("WindAtlas")
+        self._ensure_windatlas_schema()
         self._set_attributes()
+
+    def _ensure_windatlas_schema(self):
+        """
+        Validate and migrate WindAtlas dataset to canonical schema (windatlas_v2).
+
+        Ensures:
+        - No stray 'band' coord/var/dim
+        - 'template' data_var exists with dims ('y', 'x')
+        - 'wind_speed' coord exists with canonical grid 0..40 step 0.5
+
+        If migration occurs and _netcdf_path is set, persists changes to disk.
+        """
+        changed = False
+
+        # Drop stray band coord/var (observed in real file: coords include 'band' but dims do not)
+        if "band" in self.data.coords or "band" in self.data.variables:
+            self.data = self.data.drop_vars("band", errors="ignore")
+            changed = True
+        if "band" in self.data.dims:
+            if self.data.sizes["band"] == 1:
+                self.data = self.data.isel(band=0, drop=True)
+                changed = True
+            else:
+                raise ValueError("Unexpected multi-band WindAtlas dataset.")
+
+        # Template presence and dims
+        if "template" not in self.data.data_vars:
+            raise ValueError("WindAtlas invalid: missing template.")
+        if tuple(self.data["template"].dims) != ("y", "x"):
+            raise ValueError("WindAtlas invalid: template must be dims ('y', 'x').")
+
+        # wind_speed coord
+        u = np.arange(0.0, 40.0 + 0.5, 0.5)
+        if "wind_speed" not in self.data.coords:
+            self.data = self.data.assign_coords(wind_speed=u)
+            changed = True
+        else:
+            ws = np.asarray(self.data.coords["wind_speed"].values)
+            if ws.shape != u.shape or not np.all(ws == u):
+                raise ValueError("WindAtlas invalid: wind_speed grid mismatch vs canonical 0..40 step 0.5.")
+
+        # Schema marker
+        if self.data.attrs.get("cleo_schema_version") != "windatlas_v2":
+            self.data.attrs["cleo_schema_version"] = "windatlas_v2"
+            changed = True
+
+        # Persist migration
+        if changed and getattr(self, "_netcdf_path", None) is not None:
+            logger.info(f"Migrated WindAtlas schema; writing back to {self._netcdf_path}")
+            # Load all data into memory and close file handle before overwriting
+            self.data = self.data.load()
+            self.data.close()
+            # Write to temp file then rename (avoids file handle conflicts)
+            import tempfile
+            import shutil
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".nc", dir=self._netcdf_path.parent)
+            os.close(tmp_fd)
+            self.data.to_netcdf(tmp_path)
+            shutil.move(tmp_path, self._netcdf_path)
 
     def add_turbine_data(self, yaml_file):
         """
@@ -652,6 +712,14 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
         Returns:
         None
         """
+        # Strict preconditions (no self-heal - _ensure_windatlas_schema should have run)
+        if "wind_speed" not in self.data.coords:
+            raise ValueError("WindAtlas invalid: missing wind_speed coord.")
+        if "band" in self.data.coords or "band" in self.data.dims:
+            raise ValueError("WindAtlas invalid: unexpected band.")
+        if "template" not in self.data.data_vars:
+            raise ValueError("WindAtlas invalid: missing template.")
+
         # # Load the YAML file
         with yaml_file.open('r') as f:
             turbine_data = yaml.safe_load(f)

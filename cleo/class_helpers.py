@@ -31,38 +31,94 @@ def build_netcdf(self, atlas_type):
     """
     Build a NetCDF file from the downloaded data or open an existing one.
     The NetCDF file stores the wind resource data in a structured format.
+
+    Architecture principles upheld:
+    - Canonical grid is defined in the Atlas CRS (parent.crs), not the source CRS.
+    - CRS comparisons are semantic (cleo.spatial.crs_equal), and reprojection is explicit.
+    - Template is the single source of truth for exact-grid enforcement (_set_var).
     """
     path_raw = self.parent.path / "data" / "raw" / self.parent.country
     path_netcdf = self.parent.path / "data" / "processed"
+
     if self.parent.region is not None:
         fname_netcdf = path_netcdf / f"{atlas_type}_{self.parent.country}_{self.parent.region}.nc"
     else:
         fname_netcdf = path_netcdf / f"{atlas_type}_{self.parent.country}.nc"
 
+    # ------------------------------------------------------------------
+    # Create new NetCDF (first materialization)
+    # ------------------------------------------------------------------
     if not fname_netcdf.is_file():
         logger.info(f"Building new {atlas_type} object at {str(path_netcdf)}")
-        # get coords from GWA
-        with rxr.open_rasterio(
-            path_raw / f"{self.parent.country}_combined-Weibull-A_100.tif",
-            parse_coordinates=True,
-        ).squeeze() as weibull_a_100:
-            # Ensure CRS is set before using it
-            from cleo.loaders import ensure_crs_from_gwa
 
+        weibull_a_path = path_raw / f"{self.parent.country}_combined-Weibull-A_100.tif"
+        if not weibull_a_path.is_file():
+            raise FileNotFoundError(f"Missing reference raster for template grid: {weibull_a_path}")
+
+        with rxr.open_rasterio(weibull_a_path, parse_coordinates=True).squeeze() as weibull_a_100:
+            from cleo.loaders import ensure_crs_from_gwa
+            from cleo.spatial import reproject_raster_if_needed
+
+            # Guard against stray 'band' coord/dim from rasterio single-band rasters
+            if "band" in weibull_a_100.dims:
+                if weibull_a_100.sizes["band"] == 1:
+                    weibull_a_100 = weibull_a_100.isel(band=0, drop=True)
+                else:
+                    raise ValueError("Unexpected multi-band raster in build_netcdf; expected single-band.")
+            if "band" in weibull_a_100.coords:
+                weibull_a_100 = weibull_a_100.drop_vars("band")
+
+            # Ensure source CRS exists (GWA v4 rasters may lack CRS tags)
             weibull_a_100 = ensure_crs_from_gwa(weibull_a_100, self.parent.country)
 
-            self.data = xr.Dataset(coords=weibull_a_100.coords)
-            self.data = self.data.rio.write_crs(weibull_a_100.rio.crs)
+            # IMPORTANT: define the canonical grid in Atlas CRS (parent.crs)
+            weibull_a_100 = reproject_raster_if_needed(
+                weibull_a_100, self.parent.crs, nodata=np.nan
+            )
 
-            # Create template for both WindAtlas and LandscapeAtlas
+            # Build dataset coords from the reprojected reference raster
+            self.data = xr.Dataset(coords=weibull_a_100.coords)
+            self.data = self.data.rio.write_crs(self.parent.crs)
+
+            # Create template (same canonical grid & CRS)
             nan_mask = np.isnan(weibull_a_100)
-            self._set_var("template", xr.where(nan_mask, np.nan, 0).rename("template"))
+            template = xr.where(nan_mask, np.nan, 0).rename("template")
+            try:
+                template = template.rio.write_crs(self.parent.crs, inplace=False)
+                template = template.rio.write_transform(weibull_a_100.rio.transform(), inplace=False)
+            except Exception:
+                # If rio metadata attachment fails, grid enforcement still holds via coords.
+                pass
+
+            self._set_var("template", template)
+
+            # Validate template is 2D (y, x)
+            if tuple(self.data["template"].dims) != ("y", "x"):
+                raise ValueError(f"template must have dims ('y', 'x'), got {self.data['template'].dims}")
 
             fname_netcdf.parent.mkdir(parents=True, exist_ok=True)
             self.data.to_netcdf(fname_netcdf)
 
+        # Store netcdf path for later migration writes
+        self._netcdf_path = fname_netcdf
+
+    # ------------------------------------------------------------------
+    # Open existing NetCDF and enforce CRS invariants / migrate legacy files
+    # ------------------------------------------------------------------
     else:
         self.data = xr.open_dataset(fname_netcdf)
+
+        # Store netcdf path for later migration writes
+        self._netcdf_path = fname_netcdf
+
+        # Drop stray 'band' coord/var (observed in real files: coords include 'band' but dims do not)
+        if "band" in self.data.coords or "band" in self.data.variables:
+            self.data = self.data.drop_vars("band", errors="ignore")
+        if "band" in self.data.dims:
+            if self.data.sizes["band"] == 1:
+                self.data = self.data.isel(band=0, drop=True)
+            else:
+                raise ValueError("Unexpected multi-band WindAtlas dataset.")
 
         # Ensure rioxarray knows which dims are spatial so CRS metadata can be read
         if "x" in self.data.dims and "y" in self.data.dims:
@@ -145,20 +201,22 @@ def build_netcdf(self, atlas_type):
                     from cleo.loaders import ensure_crs_from_gwa
 
                     weibull_a_100 = ensure_crs_from_gwa(weibull_a_100, self.parent.country)
+
+                    # Build template from source mask, then align it to the existing dataset grid.
                     nan_mask = np.isnan(weibull_a_100)
                     template = xr.where(nan_mask, np.nan, 0).rename("template")
-                    # Write CRS and transform from source for reprojection
-                    template = template.rio.write_crs(weibull_a_100.rio.crs)
-                    template = template.rio.write_transform(weibull_a_100.rio.transform())
-                    # Align template to existing data coords (legacy migration)
+
+                    # Write CRS and transform from source for reprojection/match
+                    try:
+                        template = template.rio.write_crs(weibull_a_100.rio.crs, inplace=False)
+                        template = template.rio.write_transform(weibull_a_100.rio.transform(), inplace=False)
+                    except Exception:
+                        pass
+
+                    # Align to existing data coords (legacy migration)
                     template = template.rio.reproject_match(self.data, nodata=np.nan)
                     self._set_var("template", template)
                     logger.info("Reconstructed template from GWA weibull_a_100")
-
-    # Ensure default wind_speed grid exists (0.0 to 40.0 step 0.5)
-    if "wind_speed" not in self.data.coords:
-        u = np.arange(0.0, 40.0 + 0.5, 0.5)
-        self.data = self.data.assign_coords(wind_speed=u)
 
 
 def deploy_resources(self):

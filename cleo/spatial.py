@@ -160,6 +160,40 @@ def enforce_exact_grid(da: xr.DataArray, template: xr.DataArray, *, var_name: st
     return da
 
 
+def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False):
+    """
+    Robust wrapper around rioxarray clip with NoDataInBounds fallback.
+
+    Strategy:
+    - Primary: all_touched=all_touched_primary, drop=drop
+    - On NoDataInBounds: retry with all_touched=True, drop=drop
+    - If still NoDataInBounds: re-raise
+
+    :param da: xarray DataArray with rioxarray accessor
+    :param geoms: iterable of geometries for clipping
+    :param drop: whether to drop pixels outside clip bounds
+    :param all_touched_primary: all_touched setting for primary attempt
+    :return: clipped DataArray
+    :raises: NoDataInBounds if geometry does not overlap raster bounds
+    """
+    # Import lazily so cleo can still import in minimal envs/tests if needed
+    try:
+        from rioxarray.exceptions import NoDataInBounds
+    except Exception:  # pragma: no cover
+        NoDataInBounds = ()  # fallback type, will never match
+
+    try:
+        return da.rio.clip(geoms, all_touched=all_touched_primary, drop=drop)
+    except NoDataInBounds:
+        # Robust fallback for tiny / borderline polygons on coarse grids
+        logger.warning(
+            f"_rio_clip_robust: NoDataInBounds with all_touched={all_touched_primary}; "
+            f"retrying with all_touched=True."
+        )
+        # Re-raise if still fails (let caller handle)
+        return da.rio.clip(geoms, all_touched=True, drop=drop)
+
+
 # %% methods
 def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Dataset, gpd.GeoDataFrame):
     """
@@ -243,6 +277,17 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
     # Clip each DataArray in the Dataset using the clip_shape geometry
     data_clipped = xr.Dataset().rio.write_crs(raster_crs.to_string())
 
+    # Preserve non-spatial coords (e.g. WindAtlas wind_speed) which are not in data_vars
+    for name, c in self.data.coords.items():
+        if name in ("x", "y", "spatial_ref"):
+            continue
+        if ("x" in c.dims) or ("y" in c.dims):
+            continue
+        data_clipped = data_clipped.assign_coords({name: c})
+
+    # Copy attrs from source dataset
+    data_clipped.attrs = dict(self.data.attrs)
+
     # rioxarray expects an iterable of geometries
     geoms = list(clip_shape.geometry)
 
@@ -254,30 +299,11 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
 
     for var_name, var in self.data.data_vars.items():
         try:
-            # Primary path: true crop to bounds
-            data_clipped[var_name] = var.rio.clip(
-                geoms,
-                all_touched=False,
-                drop=True,
-            )
-        except NoDataInBounds:
-            # Robust fallback for tiny / borderline polygons on coarse grids:
-            # keep full grid, but mask outside geometry. This prevents hard failures
-            # due to window-crop edge cases.
-            logger.warning(
-                f"clip_to_geometry: NoDataInBounds for '{var_name}' with drop=True; "
-                f"retrying with all_touched=True, drop=False."
-            )
-            try:
-                data_clipped[var_name] = var.rio.clip(
-                    geoms,
-                    all_touched=True,
-                    drop=False,
-                )
-            except NoDataInBounds as e:
-                raise ValueError(
-                    f"Clipping geometry does not overlap raster bounds for variable '{var_name}'."
-                ) from e
+            data_clipped[var_name] = _rio_clip_robust(var, geoms, drop=True, all_touched_primary=False)
+        except NoDataInBounds as e:
+            raise ValueError(
+                f"Clipping geometry does not overlap raster bounds for variable '{var_name}'."
+            ) from e
         except Exception as e:
             raise ValueError(f"Error clipping data variable '{var_name}'") from e
 

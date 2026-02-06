@@ -2,6 +2,7 @@
 import logging
 import numpy as np
 import geopandas as gpd
+import pyproj
 import rasterio.crs
 import xarray as xr
 
@@ -9,6 +10,154 @@ from typing import Union
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CRS Utilities (single chokepoint for all CRS operations)
+# =============================================================================
+
+def canonical_crs_str(crs_input) -> str:
+    """
+    Convert any CRS representation to a canonical string form.
+
+    If the CRS has an EPSG code, returns "epsg:{code}" (lowercase).
+    Otherwise, returns the CRS.to_string() fallback.
+
+    :param crs_input: CRS in any form (str, int, pyproj.CRS, rasterio.crs.CRS, etc.)
+    :return: Canonical CRS string
+    :raises ValueError: If the input cannot be parsed as a CRS
+    """
+    try:
+        crs = pyproj.CRS.from_user_input(crs_input)
+    except Exception as e:
+        raise ValueError(f"Cannot parse CRS from input: {crs_input!r}") from e
+
+    epsg = crs.to_epsg()
+    if epsg is not None:
+        return f"epsg:{epsg}"
+    return crs.to_string()
+
+
+def crs_equal(a, b) -> bool:
+    """
+    Check if two CRS representations are semantically equal.
+
+    Handles different representations (EPSG codes, WKT, rasterio/pyproj objects, etc.)
+    by parsing both through pyproj.CRS and comparing.
+
+    :param a: First CRS (any form)
+    :param b: Second CRS (any form)
+    :return: True if semantically equal, False otherwise
+    """
+    try:
+        crs_a = pyproj.CRS.from_user_input(a)
+        crs_b = pyproj.CRS.from_user_input(b)
+        return crs_a == crs_b
+    except Exception:
+        return False
+
+
+def to_crs_if_needed(gdf: gpd.GeoDataFrame, dst_crs) -> gpd.GeoDataFrame:
+    """
+    Reproject a GeoDataFrame to dst_crs only if needed.
+
+    :param gdf: Input GeoDataFrame
+    :param dst_crs: Destination CRS (any form)
+    :return: GeoDataFrame in dst_crs (may be same object if no reprojection needed)
+    :raises ValueError: If gdf has no CRS set
+    """
+    if gdf.crs is None:
+        raise ValueError("GeoDataFrame has no CRS set; cannot reproject.")
+
+    if crs_equal(gdf.crs, dst_crs):
+        return gdf
+
+    dst_canonical = canonical_crs_str(dst_crs)
+    logger.debug(f"Reprojecting GeoDataFrame from {gdf.crs} to {dst_canonical}")
+    return gdf.to_crs(dst_canonical)
+
+
+def reproject_raster_if_needed(da: xr.DataArray, dst_crs, *, nodata=np.nan, resampling=None) -> xr.DataArray:
+    """
+    Reproject a raster DataArray to dst_crs only if needed.
+
+    :param da: Input DataArray with rioxarray extension
+    :param dst_crs: Destination CRS (any form)
+    :param nodata: Nodata value for reprojection (default: np.nan)
+    :param resampling: Resampling method (if None, uses rioxarray default)
+    :return: DataArray in dst_crs (may be same object if no reprojection needed)
+    :raises ValueError: If da has no CRS set
+    """
+    if da.rio.crs is None:
+        raise ValueError("Raster DataArray has no CRS set; cannot reproject.")
+
+    if crs_equal(da.rio.crs, dst_crs):
+        return da
+
+    dst_canonical = canonical_crs_str(dst_crs)
+    logger.debug(f"Reprojecting raster from {da.rio.crs} to {dst_canonical}")
+
+    if resampling is not None:
+        return da.rio.reproject(dst_canonical, nodata=nodata, resampling=resampling)
+    return da.rio.reproject(dst_canonical, nodata=nodata)
+
+
+def coords_equal(da: xr.DataArray, template: xr.DataArray, *, dim: str) -> bool:
+    """
+    Check if a DataArray's coordinate matches template's coordinate exactly.
+
+    :param da: DataArray to check
+    :param template: Reference DataArray
+    :param dim: Coordinate dimension to compare ('x' or 'y')
+    :return: True if coords match exactly
+    """
+    if dim not in da.coords or dim not in template.coords:
+        return False
+    return np.array_equal(da.coords[dim].values, template.coords[dim].values)
+
+
+def enforce_exact_grid(da: xr.DataArray, template: xr.DataArray, *, var_name: str) -> xr.DataArray:
+    """
+    Enforce that a raster DataArray has exact x/y coords matching template.
+
+    Contract:
+    - If da has both x and y dims, they MUST match template exactly.
+    - No auto-reproject or reindex; raises ValueError on mismatch.
+    - Non-raster DataArrays (missing x or y dim) pass through unchanged.
+
+    :param da: DataArray to validate
+    :param template: Reference template DataArray with canonical x/y coords
+    :param var_name: Variable name for error messages
+    :return: da unchanged if valid
+    :raises ValueError: If x or y coords don't match template
+    """
+    # Only enforce for raster-like DataArrays (have both x and y dims)
+    if "x" not in da.dims or "y" not in da.dims:
+        return da
+
+    # Check x coords
+    if not coords_equal(da, template, dim="x"):
+        da_x = da.coords["x"].values
+        tpl_x = template.coords["x"].values
+        raise ValueError(
+            f"Grid mismatch for '{var_name}': x coords differ from template. "
+            f"Expected shape {tpl_x.shape}, got {da_x.shape}. "
+            f"Expected range [{tpl_x.min():.6f}, {tpl_x.max():.6f}], "
+            f"got [{da_x.min():.6f}, {da_x.max():.6f}]."
+        )
+
+    # Check y coords
+    if not coords_equal(da, template, dim="y"):
+        da_y = da.coords["y"].values
+        tpl_y = template.coords["y"].values
+        raise ValueError(
+            f"Grid mismatch for '{var_name}': y coords differ from template. "
+            f"Expected shape {tpl_y.shape}, got {da_y.shape}. "
+            f"Expected range [{tpl_y.min():.6f}, {tpl_y.max():.6f}], "
+            f"got [{da_y.min():.6f}, {da_y.max():.6f}]."
+        )
+
+    return da
 
 
 # %% methods
@@ -33,12 +182,10 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
         raise ValueError("Atlas data has no CRS set (self.data.rio.crs is None).")
     if self.parent is None or getattr(self.parent, "crs", None) is None:
         raise ValueError("Atlas parent CRS is missing (self.parent.crs is None).")
-    # Semantic CRS comparison (not string-based)
-    expected_crs = rasterio.crs.CRS.from_user_input(self.parent.crs)
-    actual_crs = self.data.rio.crs
-    if actual_crs != expected_crs:
+    # Semantic CRS comparison using centralized helper
+    if not crs_equal(self.data.rio.crs, self.parent.crs):
         raise ValueError(
-            f"CRS inconsistency: data.rio.crs={actual_crs} "
+            f"CRS inconsistency: data.rio.crs={self.data.rio.crs} "
             f"but parent.crs={self.parent.crs}. This must never happen."
         )
 
@@ -86,14 +233,12 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
         if not clip_shape.is_valid.all():
             raise ValueError("Clipping geometry remains invalid after auto-repair; aborting.")
 
-    # Reproject clip_shape to raster CRS if needed
+    # Reproject clip_shape to raster CRS if needed (using centralized helper)
     raster_crs = self.data.rio.crs
-    if clip_shape.crs != raster_crs:
-        logger.info(f"Reprojecting clip geometry from {clip_shape.crs} to {raster_crs.to_string()}")
-        try:
-            clip_shape = clip_shape.to_crs(raster_crs)
-        except Exception as e:
-            raise ValueError(f"Error reprojecting clipping geometry to {raster_crs.to_string()}") from e
+    try:
+        clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
+    except Exception as e:
+        raise ValueError(f"Error reprojecting clipping geometry to {self.parent.crs}") from e
 
     # Clip each DataArray in the Dataset using the clip_shape geometry
     data_clipped = xr.Dataset().rio.write_crs(raster_crs.to_string())
@@ -172,23 +317,30 @@ def reproject(self, new_crs: str) -> None:
     :param new_crs:  The new coordinate reference system to use
     :type new_crs:  str
     """
+    # Canonicalize destination CRS
+    dst_crs = canonical_crs_str(new_crs)
 
-    def reproject_var(var):  # xr.DataArray):
-        return var.rio.reproject(
-            dst_crs=new_crs,
-            nodata=np.nan
-        )
-    if self.crs == rasterio.crs.CRS.from_string(new_crs):
-        logger.info(f"Data already in projected in CRS '{new_crs}'")
-    else:
-        try:
-            # reproject each data variable in the dataset
-            data_reproj = self.data.map(reproject_var, keep_attrs=True)
-            logger.info(f"Reprojection of data variables to crs {new_crs} completed")
-            self.data = data_reproj
-            self.crs = rasterio.crs.CRS.from_string(new_crs)
-        except Exception as e:
-            logger.error(f"Error during reprojecting atlas: {e}")
+    # Check if reprojection is needed (semantic comparison)
+    if self.data.rio.crs is not None and crs_equal(self.data.rio.crs, dst_crs):
+        logger.info(f"Data already projected in CRS '{dst_crs}'")
+        return
+
+    def reproject_var(var):
+        return var.rio.reproject(dst_crs=dst_crs, nodata=np.nan)
+
+    try:
+        # reproject each data variable in the dataset
+        data_reproj = self.data.map(reproject_var, keep_attrs=True)
+        logger.info(f"Reprojection of data variables to crs {dst_crs} completed")
+        self.data = data_reproj
+        # Update the parent's CRS attribute as canonical string (not rasterio object)
+        if hasattr(self, 'parent') and self.parent is not None:
+            self.parent.crs = dst_crs
+        # Also update self.crs if it exists (for backwards compatibility)
+        if hasattr(self, 'crs'):
+            self.crs = dst_crs
+    except Exception as e:
+        logger.error(f"Error during reprojecting atlas: {e}")
 
 
 # %%

@@ -44,7 +44,7 @@ from cleo.loaders import (
 )
 
 from cleo.spatial import (
-    clip_to_geometry, reproject,
+    clip_to_geometry, reproject, to_crs_if_needed, crs_equal,
 )
 
 from cleo.assess import (
@@ -406,7 +406,7 @@ class Atlas:
         merged_shape = merged_shape.reset_index(drop=True)
 
         if to_atlascrs:
-            merged_shape = merged_shape.to_crs(self.crs)
+            merged_shape = to_crs_if_needed(merged_shape, self.crs)
 
         return merged_shape
 
@@ -592,7 +592,51 @@ class Atlas:
             f"Cleanup complete for {self.country}, region {self.region or 'None'}, scenario {scenario or 'all'}.")
 
 
-class _WindAtlas:
+class _AtlasDataVarSetterMixin:
+    """
+    Mixin providing exact-grid enforcement for raster data variable assignments.
+
+    Contract:
+    - Template is stored as self.data["template"] with x/y dims.
+    - Any DataArray with both x and y dims must match template coords exactly.
+    - Non-raster DataArrays (without x/y dims) pass through unchanged.
+    """
+
+    def _set_var(self, name: str, da) -> None:
+        """
+        Set a data variable with exact-grid enforcement for rasters.
+
+        :param name: Variable name to set
+        :param da: DataArray to assign
+        :raises RuntimeError: If self.data is None
+        :raises ValueError: If template missing (except when setting template itself)
+        :raises ValueError: If raster x/y coords don't match template
+        """
+        if self.data is None:
+            raise RuntimeError(f"Cannot set '{name}': self.data is None")
+
+        # Special case: setting template itself
+        if name == "template":
+            if "x" not in da.dims or "y" not in da.dims:
+                raise ValueError("template must have both x and y dims")
+            self.data["template"] = da
+            return
+
+        # For all other vars, require template to exist
+        if "template" not in self.data.data_vars:
+            raise ValueError(
+                f"Cannot set '{name}': template not in self.data.data_vars. "
+                "Set template first via _set_var('template', ...)."
+            )
+
+        # Enforce exact grid for raster-like DataArrays
+        from cleo.spatial import enforce_exact_grid
+
+        da = enforce_exact_grid(da, self.data["template"], var_name=name)
+        self.data[name] = da
+
+
+class _WindAtlas(_AtlasDataVarSetterMixin):
     def __init__(self, parent):
         self.parent = parent
         self.data = None
@@ -627,9 +671,9 @@ class _WindAtlas:
         if 'power_curve' in self.data:
             power_curve = xr.concat([self.data['power_curve'], power_curve], dim='turbine')
 
-        # merge into xarray dataset
+        # Direct assignment (power_curve is non-raster: dims are wind_speed/turbine, not x/y)
         power_curve.name = 'power_curve'
-        self.data = xr.merge([self.data, power_curve])
+        self.data["power_curve"] = power_curve
 
     _load_gwa = load_gwa
     _build_netcdf = build_netcdf
@@ -652,7 +696,7 @@ class _WindAtlas:
     minimum_lcoe = minimum_lcoe
 
 
-class _LandscapeAtlas:
+class _LandscapeAtlas(_AtlasDataVarSetterMixin):
     def __init__(self, parent):
         self.parent = parent
         self.data = None
@@ -806,7 +850,7 @@ class _LandscapeAtlas:
             # Nothing to rasterize: return template unchanged
             out = template.copy()
             if name_to_assign is not None:
-                self.data[name_to_assign] = out
+                self._set_var(name_to_assign, out)
             return out
 
         # Ensure CRS: shapes must match template CRS
@@ -820,8 +864,8 @@ class _LandscapeAtlas:
 
         if shape.crs is None:
             raise ValueError("Input shape has no CRS; cannot rasterize safely.")
-        if str(shape.crs) != str(tmpl_crs):
-            shape = shape.to_crs(tmpl_crs)
+        # Reproject to template CRS if needed (semantic comparison)
+        shape = to_crs_if_needed(shape, tmpl_crs)
 
         # Raster grid spec
         transform = template.rio.transform(recalc=True)
@@ -877,7 +921,7 @@ class _LandscapeAtlas:
             out = xr.where(~np.isnan(burned_da), burned_da, template)
 
         if name_to_assign is not None:
-            self.data[name_to_assign] = out
+            self._set_var(name_to_assign, out)
         return out
 
     def compute_distance(self, data_var, inplace=False):

@@ -108,7 +108,7 @@ def test_load_falls_back_to_legacy_files(tmp_path: Path) -> None:
     a._wind = _DummySub()
     a._landscape = _DummySub()
 
-    a.load(region="None", scenario="default", timestamp="latest")
+    a.load(region=None, scenario="default", timestamp="latest")
 
     assert a.wind.data is not None
     assert a.landscape.data is not None

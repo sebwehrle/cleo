@@ -13,7 +13,8 @@ from cleo.classes import Atlas
 
 class _DummySubAtlas:
     def __init__(self):
-        self.data = xr.Dataset(attrs={"country": "AUT", "region": "None"})
+        # Note: region=None is sanitized out by _sanitize_netcdf_attrs before NetCDF write
+        self.data = xr.Dataset(attrs={"country": "AUT"})
 
 
 def test_save_creates_processed_dir(tmp_path, monkeypatch):

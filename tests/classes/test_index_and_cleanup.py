@@ -56,8 +56,8 @@ def test_cleanup_datasets_legacy_is_oldest(tmp_path: Path) -> None:
     _touch(new_file, b"y")
 
     atlas.index_file.write_text(
-        f"WindAtlas:AUT:None:default:{legacy_file}:legacy\n"
-        f"WindAtlas:AUT:None:default:{new_file}:20260101T000000\n",
+        f"WindAtlas:AUT:__all__:default:{legacy_file}:legacy\n"
+        f"WindAtlas:AUT:__all__:default:{new_file}:20260101T000000\n",
         encoding="utf-8",
     )
 
@@ -89,11 +89,12 @@ def test_index_roundtrip_and_cleanup_keeps_latest(tmp_path: Path) -> None:
         atlas.index_file = data_dir / "index.jsonl"
 
         # write JSONL lines directly (includes legacy + 2 timestamps)
+        # region=null in JSON represents "no region" (whole country)
         lines = [
             {
                 "subclass": "WindAtlas",
                 "country": "AUT",
-                "region": "None",
+                "region": None,
                 "scenario": "default",
                 "path": str(f_old),
                 "timestamp": "20200101T000000",
@@ -101,7 +102,7 @@ def test_index_roundtrip_and_cleanup_keeps_latest(tmp_path: Path) -> None:
             {
                 "subclass": "WindAtlas",
                 "country": "AUT",
-                "region": "None",
+                "region": None,
                 "scenario": "default",
                 "path": str(f_new),
                 "timestamp": "20210101T000000",
@@ -109,7 +110,7 @@ def test_index_roundtrip_and_cleanup_keeps_latest(tmp_path: Path) -> None:
             {
                 "subclass": "LandscapeAtlas",
                 "country": "AUT",
-                "region": "None",
+                "region": None,
                 "scenario": "default",
                 "path": str(f_leg),
                 "timestamp": "legacy",
@@ -135,19 +136,23 @@ def test_index_roundtrip_and_cleanup_keeps_latest(tmp_path: Path) -> None:
 
 
 def test_parse_index_jsonl_roundtrip() -> None:
+    # region=null in JSON represents "no region" (whole country)
     line = (
-        '{"subclass":"WindAtlas","country":"AUT","region":"None","scenario":"default",'
+        '{"subclass":"WindAtlas","country":"AUT","region":null,"scenario":"default",'
         '"path":"C:\\\\data\\\\x.nc","timestamp":"20260101T000000"}'
     )
     e = C._parse_index_line(line)
+    assert e[2] is None  # region should be Python None
     assert e[4].startswith("C:\\")
     assert e[5] == "20260101T000000"
 
 
 def test_parse_legacy_colon_with_windows_path() -> None:
-    legacy = "WindAtlas:AUT:None:default:C:\\data\\WindAtlas_AUT.nc:20260101T000000"
+    # __all__ token represents "no region" (whole country)
+    legacy = "WindAtlas:AUT:__all__:default:C:\\data\\WindAtlas_AUT.nc:20260101T000000"
     e = C._parse_index_line(legacy)
     assert e[0] == "WindAtlas"
+    assert e[2] is None  # __all__ normalizes to Python None
     assert e[4] == "C:\\data\\WindAtlas_AUT.nc"
     assert e[5] == "20260101T000000"
 
@@ -162,14 +167,47 @@ def test_index_parsing_allows_windows_drive_colon(tmp_path: Path) -> None:
     atlas = _mk_unmaterialized_atlas(tmp_path)
     atlas.index_file = Path(tmp_path) / "index.txt"
 
+    # __all__ token represents "no region" (whole country)
     line = (
-        "WindAtlas:AUT:None:default:"
-        "C:\\data\\WindAtlas_AUT_None_default_20260101T000000.nc:20260101T000000\n"
+        "WindAtlas:AUT:__all__:default:"
+        "C:\\data\\WindAtlas_AUT___all___default_20260101T000000.nc:20260101T000000\n"
     )
     atlas.index_file.write_text(line, encoding="utf-8")
 
     entries = atlas._read_index()
     assert len(entries) == 1
     assert entries[0][0] == "WindAtlas"
+    assert entries[0][2] is None  # __all__ normalizes to Python None
     assert entries[0][4].startswith("C:\\data\\WindAtlas_")
     assert entries[0][5] == "20260101T000000"
+
+
+def test_region_none_produces_filename_token_and_json_null(tmp_path: Path) -> None:
+    """
+    Verify region=None invariants:
+    - Filenames use __all__ token
+    - JSON index uses null (Python None)
+    """
+    # Test _region_for_filename
+    assert C._region_for_filename(None) == C.REGION_NONE_TOKEN
+    assert C._region_for_filename("Vienna") == "Vienna"
+
+    # Test _region_from_index
+    assert C._region_from_index(None) is None
+    assert C._region_from_index(C.REGION_NONE_TOKEN) is None
+    assert C._region_from_index("Vienna") == "Vienna"
+
+    # Test roundtrip via JSON
+    entry = {"region": None}
+    json_str = json.dumps(entry)
+    assert '"region": null' in json_str or '"region":null' in json_str
+
+    # Test _parse_index_line with JSON null
+    line = '{"subclass":"WindAtlas","country":"AUT","region":null,"scenario":"default","path":"x.nc","timestamp":"20260101T000000"}'
+    parsed = C._parse_index_line(line)
+    assert parsed[2] is None
+
+    # Test _parse_index_line with __all__ token (legacy colon format)
+    legacy = "WindAtlas:AUT:__all__:default:x.nc:20260101T000000"
+    parsed = C._parse_index_line(legacy)
+    assert parsed[2] is None

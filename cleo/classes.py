@@ -60,6 +60,21 @@ from cleo.assess import (
 
 logger = logging.getLogger(__name__)
 
+# %% region handling constants
+REGION_NONE_TOKEN = "__all__"
+
+
+def _region_for_filename(region: str | None) -> str:
+    """Convert internal region (None or str) to filename-safe token."""
+    return region if region is not None else REGION_NONE_TOKEN
+
+
+def _region_from_index(region_str: str | None) -> str | None:
+    """Convert index/filename region token to internal value (None means no region)."""
+    if region_str is None or region_str == REGION_NONE_TOKEN:
+        return None
+    return region_str
+
 
 # %% repr helpers (side-effect-free, never raise)
 def _safe_basename(path) -> str:
@@ -104,6 +119,8 @@ def _parse_index_line(line):
     1. JSONL: line starts with '{'
     2. Tab-separated: line contains '\t' (strict 6 fields)
     3. Legacy colon-separated: parse from RIGHT to handle ':' in Windows paths
+
+    Region is normalized: REGION_NONE_TOKEN and JSON null become Python None.
     """
     line = line.strip()
     if not line:
@@ -116,7 +133,7 @@ def _parse_index_line(line):
             return (
                 obj["subclass"],
                 obj["country"],
-                obj["region"],
+                _region_from_index(obj["region"]),
                 obj["scenario"],
                 obj["path"],
                 obj["timestamp"],
@@ -129,7 +146,8 @@ def _parse_index_line(line):
         parts = line.split("\t")
         if len(parts) != 6:
             raise ValueError(f"Malformed tab-separated index entry (expected 6 fields): {line!r}")
-        return tuple(parts)
+        subclass, country, region, scenario, path, timestamp = parts
+        return (subclass, country, _region_from_index(region), scenario, path, timestamp)
 
     # Legacy colon-separated format: rsplit from right for timestamp, then split first 5
     # This handles ":" inside Windows paths like "C:\path\to\file"
@@ -139,7 +157,7 @@ def _parse_index_line(line):
         if len(parts) != 5:
             raise ValueError(f"Expected 5 fields before timestamp, got {len(parts)}")
         subclass, country, region, scenario, path = parts
-        return (subclass, country, region, scenario, path, timestamp)
+        return (subclass, country, _region_from_index(region), scenario, path, timestamp)
     except ValueError as e:
         raise ValueError(f"Malformed index entry: {line!r}") from e
 
@@ -331,14 +349,26 @@ class Atlas:
             index_file_path.touch()  # Create an empty file
             logger.info(f"Created new index file: {index_file_path}")
 
-    def load(self, user_string = None, *, region='None', scenario='default', timestamp='latest'):
+    def load(self, user_string=None, *, region: str | None = None, scenario='default', timestamp='latest'):
         """
         Load the datasets for the specified country, region, and scenario. If no region is specified, the datasets for
         the entire country are loaded. If no scenario is specified, the default scenario is loaded.
+
+        :param region: Region name (None for whole country). Rejects "", "None", and "__all__" as invalid.
         """
         self._require_materialized()
+
+        # Validate region: reject sentinel-like values
+        if region is not None:
+            region = region.strip()
+            if region == "" or region in {"None", REGION_NONE_TOKEN}:
+                raise ValueError(
+                    f"Invalid region value: {region!r}. Use region=None for whole country, "
+                    f"or provide a valid region name."
+                )
+
         filename_pattern = re.compile(
-            r"(?P<type>[A-Za-z]+Atlas)_(?P<country>[A-Z]+)_(?P<region>[^\d_]+)_(?P<scenario>[A-Za-z0-9]+)_(?P<timestamp>\d{8}T\d{6})\.nc"
+            r"(?P<type>[A-Za-z]+Atlas)_(?P<country>[A-Z]+)_(?P<region>__all__|[^\d_]+)_(?P<scenario>[A-Za-z0-9]+)_(?P<timestamp>\d{8}T\d{6})\.nc"
         )
         # Parse the user string
         if user_string:
@@ -346,7 +376,8 @@ class Atlas:
             if not match:
                 raise ValueError(f"{user_string} does not match the expected format.")
             metadata = match.groupdict()
-            region = metadata["region"]
+            # Convert filename token back to internal representation
+            region = _region_from_index(metadata["region"])
             scenario = metadata["scenario"]
             timestamp = metadata["timestamp"]
             if metadata["country"] != self.country:
@@ -360,7 +391,8 @@ class Atlas:
         else:
             directory = self.path / "data" / "processed"
 
-        # find matching files
+        # find matching files (compare with filename token, not internal value)
+        region_token = _region_for_filename(region)
         matching_files = []
         for file in directory.glob(f"*.nc"):
             match = filename_pattern.match(file.name)
@@ -368,7 +400,7 @@ class Atlas:
                 file_metadata = match.groupdict()
                 if (
                         file_metadata["country"] == self.country
-                        and file_metadata["region"] == region
+                        and file_metadata["region"] == region_token
                         and file_metadata["scenario"] == scenario
                         and (timestamp == 'latest' or file_metadata["timestamp"] == timestamp)
                 ):
@@ -377,10 +409,9 @@ class Atlas:
         # Fallback to legacy filenames if no timestamped files found
         if not matching_files:
             # Try legacy pattern: {Type}_{Country}.nc or {Type}_{Country}_{Region}.nc
-            region_str = region if region != 'None' else None
             for atlas_type in ["WindAtlas", "LandscapeAtlas"]:
-                if region_str:
-                    legacy_name = f"{atlas_type}_{self.country}_{region_str}.nc"
+                if region is not None:
+                    legacy_name = f"{atlas_type}_{self.country}_{region}.nc"
                 else:
                     legacy_name = f"{atlas_type}_{self.country}.nc"
                 legacy_file = directory / legacy_name
@@ -408,7 +439,7 @@ class Atlas:
                     self._wind_turbines = self.wind.data.coords['turbine'].values.tolist()
                 if self.wind.data.rio.crs is not None:
                     self._crs = f"epsg:{self.wind.data.rio.crs.to_epsg()}"
-                if region != 'None':
+                if region is not None:
                     self._region = region
                 logger.info(f"Wind dataset loaded successfully: {file}")
             elif subclass == "LandscapeAtlas":
@@ -540,8 +571,9 @@ class Atlas:
 
         # Define file paths with scenario and timestamp
         scenario_name = scenario if scenario else "default"
-        wind_file = savepath / f"WindAtlas_{self.country}_{self.region or 'None'}_{scenario_name}_{timestamp}.nc"
-        landscape_file = savepath / f"LandscapeAtlas_{self.country}_{self.region or 'None'}_{scenario_name}_{timestamp}.nc"
+        region_token = _region_for_filename(self.region)
+        wind_file = savepath / f"WindAtlas_{self.country}_{region_token}_{scenario_name}_{timestamp}.nc"
+        landscape_file = savepath / f"LandscapeAtlas_{self.country}_{region_token}_{scenario_name}_{timestamp}.nc"
 
         # Sanitize attrs to remove None values (NetCDF cannot serialize None)
         _sanitize_netcdf_attrs(self.wind.data)
@@ -556,11 +588,11 @@ class Atlas:
             logger.error(f"Failed to save dataset: {e}")
             return  # Do not update index if save failed
 
-        # Log to index (JSONL format)
+        # Log to index (JSONL format) - region=None serializes to JSON null
         index_entries = [
-            {"subclass": "WindAtlas", "country": self.country, "region": self.region or "None",
+            {"subclass": "WindAtlas", "country": self.country, "region": self.region,
              "scenario": scenario or "default", "path": str(wind_file), "timestamp": timestamp},
-            {"subclass": "LandscapeAtlas", "country": self.country, "region": self.region or "None",
+            {"subclass": "LandscapeAtlas", "country": self.country, "region": self.region,
              "scenario": scenario or "default", "path": str(landscape_file), "timestamp": timestamp},
         ]
         # Ensure index file parent directory exists
@@ -631,9 +663,10 @@ class Atlas:
         entries = self._read_index()
 
         # Filter entries for the current country, region, and scenario
+        # Note: entry[2] is already normalized to None via _parse_index_line
         filtered_entries = [
             entry for entry in entries
-            if entry[1] == self.country and entry[2] == (self.region or "None") and
+            if entry[1] == self.country and entry[2] == self.region and
                (scenario is None or entry[3] == scenario)
         ]
 
@@ -657,8 +690,9 @@ class Atlas:
                             ] + list(latest_entries.values())
         self._write_index(remaining_entries)
 
+        region_desc = self.region if self.region is not None else "(whole country)"
         logger.info(
-            f"Cleanup complete for {self.country}, region {self.region or 'None'}, scenario {scenario or 'all'}.")
+            f"Cleanup complete for {self.country}, region {region_desc}, scenario {scenario or 'all'}.")
 
 
 class _AtlasDataVarSetterMixin:

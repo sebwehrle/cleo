@@ -61,6 +61,40 @@ from cleo.assess import (
 logger = logging.getLogger(__name__)
 
 
+# %% repr helpers (side-effect-free, never raise)
+def _safe_basename(path) -> str:
+    """Return basename of path, or '?' on any error."""
+    try:
+        return Path(path).name if path else "?"
+    except Exception:
+        return "?"
+
+
+def _fmt_grid(data) -> str:
+    """Return 'YxX' grid size, or '?' on any error."""
+    try:
+        if data is None:
+            return "?"
+        return f"{data.sizes.get('y', '?')}x{data.sizes.get('x', '?')}"
+    except Exception:
+        return "?"
+
+
+def _cap_list(items, max_items: int = 5, max_len: int = 60) -> str:
+    """Format list as '[a,b,c,...]' with bounded length."""
+    try:
+        if not items:
+            return "[]"
+        items = list(items)[:max_items]
+        suffix = ",..." if len(items) == max_items else ""
+        s = "[" + ",".join(str(i) for i in items) + suffix + "]"
+        if len(s) > max_len:
+            return s[: max_len - 3] + "..."
+        return s
+    except Exception:
+        return "[?]"
+
+
 def _parse_index_line(line):
     """
     Parse a single index line into a 6-tuple:
@@ -140,6 +174,38 @@ class Atlas:
         self._wind = None
         self._landscape = None
         self._materialized = False
+
+    def __repr__(self) -> str:
+        """Audit-safe repr: no IO, no mutation, bounded length."""
+        try:
+            country = getattr(self, "country", "?")
+            region = getattr(self, "_region", None) or ""
+            crs = getattr(self, "_crs", "?")
+            path = _safe_basename(getattr(self, "_path", None))
+
+            wind = getattr(self, "_wind", None)
+            land = getattr(self, "_landscape", None)
+
+            if wind is not None and getattr(wind, "data", None) is not None:
+                w_grid = _fmt_grid(wind.data)
+                h_count = wind.data.sizes.get("height", 0)
+                t_count = wind.data.sizes.get("turbine", 0)
+                wind_str = f"wind={w_grid} h={h_count} t={t_count}"
+            else:
+                wind_str = "wind=None"
+
+            if land is not None and getattr(land, "data", None) is not None:
+                l_grid = _fmt_grid(land.data)
+                land_str = f"land={l_grid}"
+            else:
+                land_str = "land=None"
+
+            region_part = f", region={region!r}" if region else ""
+            return f"Atlas(country={country!r}{region_part}, crs={crs!r}, path={path!r}, {wind_str}, {land_str})"
+        except Exception:
+            return "Atlas(?)"
+
+    __str__ = __repr__
 
     def materialize(self):
         """
@@ -659,6 +725,26 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
         self._ensure_windatlas_schema()
         self._set_attributes()
 
+    def __repr__(self) -> str:
+        """Audit-safe repr: no IO, no mutation, bounded length."""
+        try:
+            data = getattr(self, "data", None)
+            if data is None:
+                return "WindAtlas(data=None)"
+
+            schema = data.attrs.get("cleo_schema_version", "?")
+            grid = _fmt_grid(data)
+            h = data.sizes.get("height", 0)
+            u = data.sizes.get("wind_speed", 0)
+            t = data.sizes.get("turbine", 0)
+            vars_list = _cap_list(data.data_vars.keys(), max_items=5, max_len=40)
+
+            return f"WindAtlas(schema={schema}, grid={grid}, h={h}, u={u}, t={t}, vars={vars_list})"
+        except Exception:
+            return "WindAtlas(?)"
+
+    __str__ = __repr__
+
     def _ensure_windatlas_schema(self):
         """
         Validate and migrate WindAtlas dataset to canonical schema (windatlas_v2).
@@ -794,6 +880,22 @@ class _LandscapeAtlas(_AtlasDataVarSetterMixin):
         self._load_nuts()
         self._build_netcdf("LandscapeAtlas")
         self._set_attributes()
+
+    def __repr__(self) -> str:
+        """Audit-safe repr: no IO, no mutation, bounded length."""
+        try:
+            data = getattr(self, "data", None)
+            if data is None:
+                return "LandscapeAtlas(data=None)"
+
+            grid = _fmt_grid(data)
+            layers = _cap_list(data.data_vars.keys(), max_items=5, max_len=40)
+
+            return f"LandscapeAtlas(grid={grid}, layers={layers})"
+        except Exception:
+            return "LandscapeAtlas(?)"
+
+    __str__ = __repr__
 
     _load_nuts = load_nuts
     _build_netcdf = build_netcdf

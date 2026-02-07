@@ -602,6 +602,17 @@ class _AtlasDataVarSetterMixin:
     - Non-raster DataArrays (without x/y dims) pass through unchanged.
     """
 
+    @property
+    def crs(self) -> str:
+        """
+        Backward-compatible alias for Atlas CRS.
+
+        Canonical CRS is owned by parent Atlas (self.parent.crs). Sub-objects delegate.
+        """
+        if self.parent is None or getattr(self.parent, "crs", None) is None:
+            raise ValueError("Atlas parent CRS is missing (self.parent.crs is None).")
+        return self.parent.crs
+
     def _set_var(self, name: str, da) -> None:
         """
         Set a data variable with exact-grid enforcement for rasters.
@@ -821,43 +832,89 @@ class _LandscapeAtlas(_AtlasDataVarSetterMixin):
             logger.info(f"Download of {file} complete")
 
             if dnld and file.endswith((".zip", ".kmz")):
-                with zipfile.ZipFile(download_path) as zip_ref:
-                    zip_file_info = zip_ref.infolist()
-                    zip_extensions = [info.filename[-3:] for info in zip_file_info]
+                # Validate archive before opening
+                if not zipfile.is_zipfile(download_path):
+                    size = download_path.stat().st_size
+                    head = download_path.read_bytes()[:200].decode("utf-8", "replace")
+                    raise ValueError(
+                        f"Invalid ZIP archive: {file!r}\n"
+                        f"  download_path: {download_path}\n"
+                        f"  url: {url}\n"
+                        f"  size: {size} bytes\n"
+                        f"  head: {head!r}"
+                    )
 
-                    if "shp" in zip_extensions:
-                        # Preserve prior behavior (renaming members), but extract safely into directory_path
-                        for info in zip_file_info:
-                            info.filename = f"{file[:-3]}{info.filename[-3:]}"
-                            # Validate renamed path before extraction
-                            dest_dir = directory_path.resolve()
-                            target = (dest_dir / info.filename).resolve()
-                            try:
-                                target.relative_to(dest_dir)
-                            except Exception:
-                                raise ValueError(f"Unsafe zip member path: {info.filename!r}")
-                            zip_ref.extract(info, path=directory_path)
-                    else:
-                        _safe_extract_zip(zip_ref, directory_path)
+                try:
+                    with zipfile.ZipFile(download_path) as zip_ref:
+                        zip_file_info = zip_ref.infolist()
+                        zip_extensions = [info.filename[-3:] for info in zip_file_info]
 
-                # Handle nested zips (as before), but safely and without chdir
-                for index, nested_zip_path in enumerate(directory_path.glob("*.zip")):
-                    with zipfile.ZipFile(nested_zip_path) as nested_zip:
-                        nested_zip_info = nested_zip.infolist()
-                        nested_extensions = [info.filename[-3:] for info in nested_zip_info]
-
-                        if "shp" in nested_extensions:
-                            for info in nested_zip_info:
-                                info.filename = f"{info.filename[:-4]}_{index}.{info.filename[-3:]}"
+                        if "shp" in zip_extensions:
+                            # Preserve prior behavior (renaming members), but extract safely into directory_path
+                            for info in zip_file_info:
+                                info.filename = f"{file[:-3]}{info.filename[-3:]}"
+                                # Validate renamed path before extraction
                                 dest_dir = directory_path.resolve()
                                 target = (dest_dir / info.filename).resolve()
                                 try:
                                     target.relative_to(dest_dir)
                                 except Exception:
                                     raise ValueError(f"Unsafe zip member path: {info.filename!r}")
-                                nested_zip.extract(info, path=directory_path)
+                                zip_ref.extract(info, path=directory_path)
                         else:
-                            _safe_extract_zip(nested_zip, directory_path)
+                            _safe_extract_zip(zip_ref, directory_path)
+                except zipfile.BadZipFile as e:
+                    size = download_path.stat().st_size
+                    head = download_path.read_bytes()[:200].decode("utf-8", "replace")
+                    raise ValueError(
+                        f"Corrupt ZIP archive: {file!r}\n"
+                        f"  download_path: {download_path}\n"
+                        f"  url: {url}\n"
+                        f"  size: {size} bytes\n"
+                        f"  head: {head!r}"
+                    ) from e
+
+                # Handle nested zips (as before), but safely and without chdir
+                for index, nested_zip_path in enumerate(directory_path.glob("*.zip")):
+                    # Validate nested archive before opening
+                    if not zipfile.is_zipfile(nested_zip_path):
+                        size = nested_zip_path.stat().st_size
+                        head = nested_zip_path.read_bytes()[:200].decode("utf-8", "replace")
+                        raise ValueError(
+                            f"Invalid nested ZIP archive: {nested_zip_path.name!r}\n"
+                            f"  nested_path: {nested_zip_path}\n"
+                            f"  parent_archive: {file!r}\n"
+                            f"  size: {size} bytes\n"
+                            f"  head: {head!r}"
+                        )
+
+                    try:
+                        with zipfile.ZipFile(nested_zip_path) as nested_zip:
+                            nested_zip_info = nested_zip.infolist()
+                            nested_extensions = [info.filename[-3:] for info in nested_zip_info]
+
+                            if "shp" in nested_extensions:
+                                for info in nested_zip_info:
+                                    info.filename = f"{info.filename[:-4]}_{index}.{info.filename[-3:]}"
+                                    dest_dir = directory_path.resolve()
+                                    target = (dest_dir / info.filename).resolve()
+                                    try:
+                                        target.relative_to(dest_dir)
+                                    except Exception:
+                                        raise ValueError(f"Unsafe zip member path: {info.filename!r}")
+                                    nested_zip.extract(info, path=directory_path)
+                            else:
+                                _safe_extract_zip(nested_zip, directory_path)
+                    except zipfile.BadZipFile as e:
+                        size = nested_zip_path.stat().st_size
+                        head = nested_zip_path.read_bytes()[:200].decode("utf-8", "replace")
+                        raise ValueError(
+                            f"Corrupt nested ZIP archive: {nested_zip_path.name!r}\n"
+                            f"  nested_path: {nested_zip_path}\n"
+                            f"  parent_archive: {file!r}\n"
+                            f"  size: {size} bytes\n"
+                            f"  head: {head!r}"
+                        ) from e
 
     def rasterize(self, *args, column=None, name=None, all_touched=False, inplace=True):
         """

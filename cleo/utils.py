@@ -10,7 +10,7 @@ from pathlib import Path
 from pint import UnitRegistry
 _UREG = UnitRegistry()
 
-from cleo.spatial import bbox, reproject_raster_if_needed
+from cleo.spatial import bbox, reproject_raster_if_needed, to_crs_if_needed, _rio_clip_robust
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +96,20 @@ def add(self, other, name=None) -> None:
     tol = 1e-9  # in coordinate units; tiny enough for degree grids; prevents 1e-12 triggering
     if not all(np.isclose(bs, bo, rtol=0.0, atol=tol) for bs, bo in zip(b_self, b_other)):
         if self.parent.region is not None:
-            other = other.rio.clip(self.parent.get_nuts_region(self.parent.region).geometry)
+            gdf = self.parent.get_nuts_region(self.parent.region)
         else:
-            other = other.rio.clip(self.parent.get_nuts_country().geometry)
+            gdf = self.parent.get_nuts_country()
+
+        if gdf is None or gdf.empty:
+            raise ValueError("Clipping geometry is empty or None.")
+
+        # Geometry must be in raster CRS (other is already in self.crs due to reproject_raster_if_needed above)
+        gdf = to_crs_if_needed(gdf, other.rio.crs)
+
+        geoms = list(gdf.geometry)
+        # Mask to geometry but keep exact grid invariant: drop=False
+        other = _rio_clip_robust(other, geoms, drop=False, all_touched_primary=False)
+
         # After clipping, re-align again to template grid
         other = _match_to_template(other, template)
 

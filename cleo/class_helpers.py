@@ -304,7 +304,7 @@ def setup_logging(self, console_level="INFO", file_level="DEBUG"):
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     ch = logging.StreamHandler()
-    ch.setLevel(getattr(logging, str(console_level).upper(), logger.info))
+    ch.setLevel(getattr(logging, str(console_level).upper(), logging.INFO))
     ch.setFormatter(fmt)
 
     fh = logging.FileHandler(log_path, encoding="utf-8")

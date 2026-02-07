@@ -170,14 +170,28 @@ def test_power_curve_resampling_contract_matches_numpy_interp() -> None:
 
 def test_compute_mean_wind_speed_idempotent_no_recompute(monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    If mean_wind_speed already contains a given height, compute_mean_wind_speed(height)
-    must not call load_weibull_parameters again (idempotent contract).
+    If mean_wind_speed already contains a given height with valid signature,
+    compute_mean_wind_speed(height) must not call load_weibull_parameters again (idempotent contract).
+
+    Note: Semantic cache requires valid cleo:sigs attr; data without signatures WILL be recomputed.
     """
+    from cleo.assess import _sig, _canon
+
+    # Compute the expected signature for this height (no parent -> country=None, crs=None)
+    params = {"country": None, "crs": None, "height": 100}
+    expected_sig = _sig("compute_mean_wind_speed", "1", params)
+    sigs_json = _canon({"100": expected_sig})
+
     existing = xr.DataArray(
         np.ones((1, 4, 4), dtype=np.float32) * 7.5,
         dims=("height", "y", "x"),
         coords={"height": [100.0], "y": range(4), "x": range(4)},
         name="mean_wind_speed",
+        attrs={
+            "cleo:algo": "compute_mean_wind_speed",
+            "cleo:algo_version": "1",
+            "cleo:sigs": sigs_json,
+        },
     )
 
     class Self(_Atlas):

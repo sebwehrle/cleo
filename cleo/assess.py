@@ -1,5 +1,6 @@
 # resource assessment methods of the Atlas class
-import inspect
+import hashlib
+import json
 import numpy as np
 import xarray as xr
 import rioxarray as rxr
@@ -11,6 +12,135 @@ from cleo.chunk import compute_chunked
 from cleo.spatial import crs_equal, reproject_raster_if_needed, to_crs_if_needed, _rio_clip_robust
 
 logger = logging.getLogger(__name__)
+
+
+# %% semantic cache helpers
+def _canon(obj) -> str:
+    """Canonical JSON encoding for signature computation."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sig(algo: str, ver: str, params: dict) -> str:
+    """Compute SHA-256 hex signature for algo/version/params."""
+    payload = {"algo": algo, "algo_version": ver, "params": params}
+    return hashlib.sha256(_canon(payload).encode()).hexdigest()
+
+
+def _set_prov(da: xr.DataArray, algo: str, ver: str, params: dict) -> xr.DataArray:
+    """Set provenance attrs on DataArray, dropping any existing cleo:* attrs."""
+    # Remove existing cleo:* attrs
+    new_attrs = {k: v for k, v in da.attrs.items() if not k.startswith("cleo:")}
+    new_attrs["cleo:algo"] = algo
+    new_attrs["cleo:algo_version"] = ver
+    new_attrs["cleo:params"] = _canon(params)
+    new_attrs["cleo:sig"] = _sig(algo, ver, params)
+    da = da.copy()
+    da.attrs = new_attrs
+    return da
+
+
+def _validate_sig(sig) -> str | None:
+    """Validate signature format (64 hex chars), return sig if valid else None."""
+    if sig is None or not isinstance(sig, str) or len(sig) != 64:
+        return None
+    try:
+        int(sig, 16)  # validate hex
+        return sig
+    except ValueError:
+        return None
+
+
+def _get_sig(da, height=None) -> str | None:
+    """Return cleo:sig if valid (64 hex chars), else None.
+
+    For multi-height DataArrays, looks up per-height sig from cleo:sigs dict.
+    If height is None, tries to extract it from the da's height coord (for slices).
+    """
+    if da is None or not hasattr(da, "attrs"):
+        return None
+
+    # First try simple cleo:sig attr (single-value or non-height-indexed)
+    sig = da.attrs.get("cleo:sig")
+    if sig is not None:
+        return _validate_sig(sig)
+
+    # Try per-height lookup from cleo:sigs
+    sigs_json = da.attrs.get("cleo:sigs")
+    if sigs_json is None:
+        return None
+
+    # Parse sigs dict
+    try:
+        sigs = json.loads(sigs_json) if isinstance(sigs_json, str) else sigs_json
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    # Determine height to look up
+    if height is None:
+        # Try to extract height from da's coords (for slices)
+        if hasattr(da, "coords") and "height" in da.coords:
+            h_coord = da.coords["height"]
+            # Scalar coord from .sel(height=X)
+            if h_coord.ndim == 0:
+                height = float(h_coord.values)
+            elif h_coord.size == 1:
+                height = float(h_coord.values[0])
+
+    if height is None:
+        return None
+
+    # Look up sig for this height (keys are strings in JSON)
+    height_key = str(int(height)) if float(height) == int(height) else str(height)
+    sig = sigs.get(height_key)
+    return _validate_sig(sig)
+
+
+def _matches(ds: xr.Dataset, var: str, expected_sig: str) -> bool:
+    """Check if var exists in ds with matching signature."""
+    if var not in ds.data_vars:
+        return False
+    return _get_sig(ds[var]) == expected_sig
+
+
+def _set_height_prov(da: xr.DataArray, height, algo: str, ver: str, params: dict) -> xr.DataArray:
+    """Set per-height provenance in DataArray attrs.
+
+    Stores algo/version once and accumulates per-height sigs in cleo:sigs dict.
+    """
+    da = da.copy()
+    new_attrs = dict(da.attrs)
+
+    # Set algo metadata (shared across heights)
+    new_attrs["cleo:algo"] = algo
+    new_attrs["cleo:algo_version"] = ver
+
+    # Get or create sigs dict
+    sigs_json = new_attrs.get("cleo:sigs")
+    try:
+        sigs = json.loads(sigs_json) if isinstance(sigs_json, str) else {}
+    except (json.JSONDecodeError, TypeError):
+        sigs = {}
+
+    # Add sig for this height
+    height_key = str(int(height)) if float(height) == int(height) else str(height)
+    sigs[height_key] = _sig(algo, ver, params)
+    new_attrs["cleo:sigs"] = _canon(sigs)
+
+    # Remove simple cleo:sig if present (we use per-height sigs now)
+    new_attrs.pop("cleo:sig", None)
+    new_attrs.pop("cleo:params", None)
+
+    da.attrs = new_attrs
+    return da
+
+
+def _base_params(self) -> dict:
+    """Extract base params from self for signature computation (defensive)."""
+    parent = getattr(self, "parent", None)
+    return {
+        "country": getattr(parent, "country", None) if parent else None,
+        "crs": str(getattr(parent, "crs", None)) if parent and hasattr(parent, "crs") else None,
+    }
 
 
 def _is_dask_backed(data):
@@ -57,59 +187,8 @@ def _require_not_dask(*arrays):
             )
 
 
-# %% decorator
-def accepts_parameter(func, parameter):
-    """
-    Check if a function accepts a specific parameter.
-
-    :param func: Function to check.
-    :type func: callable
-    :param parameter: Parameter name to check for.
-    :type parameter: str
-    :return: True if the function accepts the parameter, False otherwise.
-    :rtype: bool
-    """
-    signature = inspect.signature(func)
-    return parameter in signature.parameters
-
-
-def requires(dep_var_mapping):
-    """
-    Decorator to ensure dependencies are processed before executing the main function.
-
-    :param dep_var_mapping: Dictionary mapping dependency method names to data variable names.
-    :type dep_var_mapping: dict
-    :return: Decorated function.
-    :rtype: callable
-    """
-    def decorator(func):
-        def wrapper(self, *args, **kwargs):
-            """
-            Wrapper function to check and process dependencies.
-
-            :param self: Instance of the class.
-            :type self: object
-            :param args: Positional arguments for the main function.
-            :param kwargs: Keyword arguments for the main function.
-            :return: Result of the main function.
-            """
-            # Get the arguments passed to the main function
-            func_signature = inspect.signature(func)
-            provided_args = {k: v for k, v in kwargs.items() if k in func_signature.parameters}
-
-            for dependency, data_var in dep_var_mapping.items():
-                if data_var not in self.data.data_vars:
-                    dep_func = getattr(self, dependency)
-                    # Filter args to pass only those that the dependency accepts
-                    dep_args = {k: v for k, v in provided_args.items() if accepts_parameter(dep_func, k)}
-                    dep_func(**dep_args)
-            return func(self, *args, **kwargs)
-        return wrapper
-    return decorator
-
-
-# %% independent methods
-def compute_air_density_correction(self, chunk_size=None):
+# %% compute methods
+def compute_air_density_correction(self, chunk_size=None, force: bool = False):
     """
     Compute air density correction factor rho based on elevation data.
 
@@ -118,14 +197,27 @@ def compute_air_density_correction(self, chunk_size=None):
       otherwise on the reference GWA raster grid.
     - CRS is enforced to self.parent.crs (Atlas CRS discipline).
     - Final assignment to self.data is exact-grid safe (prevents NaN stripes from implicit alignment).
+    - Semantic caching: skips if existing result has matching signature.
 
     :param self: an instance of the _WindAtlas class
     :param chunk_size: size of chunks in pixels for chunked computation. If None, computation is not chunked
+    :param force: if True, always recompute even if cached result exists
     """
     from cleo.loaders import load_elevation
     from pathlib import Path
     from rasterio.enums import Resampling
     from rasterio.crs import CRS
+
+    # Semantic cache check
+    algo = "compute_air_density_correction"
+    ver = "1"
+    params = _base_params(self)
+    params["region"] = getattr(self.parent, "region", None) if self.parent else None
+    expected_sig = _sig(algo, ver, params)
+
+    if not force and _matches(self.data, "air_density_correction", expected_sig):
+        logger.info(f"Air density correction for {self.parent.country} already computed (sig match), skipping.")
+        return
 
     def rho_correction(elevation):
         """
@@ -211,17 +303,18 @@ def compute_air_density_correction(self, chunk_size=None):
     # Final exact-grid enforcement before storing (prevents silent alignment/NaN stripes)
     rho = rho.rio.reproject_match(template, resampling=Resampling.bilinear, nodata=np.nan).squeeze()
 
-    # Use _set_var for exact-grid enforcement
-    self._set_var("air_density_correction", rho.rename("air_density_correction"))
+    # Set provenance and store
+    rho = _set_prov(rho.rename("air_density_correction"), algo, ver, params)
+    self._set_var("air_density_correction", rho)
     logger.info(f"Air density correction for {self.parent.country} computed.")
 
 
-def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
+def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True, force: bool = False):
     """
     Compute mean wind speed for a given height.
 
     Contract:
-    - Idempotent: if height already exists, do nothing.
+    - Semantic caching: skips if height slice already has matching signature.
     - Preserves dataset-level coords (never rebuild self.data from data_vars).
     - If template exists, all height slices are exact-grid matched to template and concat uses join="exact".
       Otherwise concat uses join="outer" (legacy/no-template mode).
@@ -232,11 +325,24 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     :param chunk_size: number of chunks for chunked computation. If None, computation is not chunked.
     :type chunk_size: int
     :param inplace: If True, add mean wind speed to Dataset (kept for backward compatibility; function always updates self.data)
+    :param force: if True, always recompute even if cached result exists
     """
-    # Early return if height already exists (idempotent)
-    if "mean_wind_speed" in self.data and height in self.data["mean_wind_speed"].coords["height"].values:
-        logger.info(f"Mean wind speed at height '{height} m' already exists, skipping computation")
-        return
+    # Semantic cache check (per-height signature)
+    algo = "compute_mean_wind_speed"
+    ver = "1"
+    params = _base_params(self)
+    # Normalize height to int if whole number for consistent signatures (100.0 -> 100)
+    params["height"] = int(height) if float(height) == int(height) else height
+    expected_sig = _sig(algo, ver, params)
+
+    # Check if this specific height slice already has matching signature
+    if not force and "mean_wind_speed" in self.data:
+        existing = self.data["mean_wind_speed"]
+        if height in existing.coords["height"].values:
+            slice_da = existing.sel(height=height)
+            if _get_sig(slice_da) == expected_sig:
+                logger.info(f"Mean wind speed at height '{height} m' already computed (sig match), skipping.")
+                return
 
     def calculate_mean_wind_speed(weibull_a, weibull_k):
         mean_wind_speed = weibull_a * gamma(1 / weibull_k + 1)
@@ -255,13 +361,27 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
         template = self.data["template"]
         mean_wind_speed_data = _match_to_template(mean_wind_speed_data, template)
 
+    # Expand to 3D (no per-slice prov yet, will set per-height sig on combined array)
     mean_wind_speed_data = mean_wind_speed_data.expand_dims(height=[height])
 
     if "mean_wind_speed" not in self.data:
-        self._set_var("mean_wind_speed", mean_wind_speed_data)
+        # First height: create new array and set per-height provenance
+        result = _set_height_prov(mean_wind_speed_data, height, algo, ver, params)
+        self._set_var("mean_wind_speed", result)
         return
 
     existing = self.data["mean_wind_speed"]
+    # Preserve existing sigs dict for later merge
+    existing_sigs_json = existing.attrs.get("cleo:sigs")
+
+    # If this height already exists, drop it first (we're replacing)
+    if height in existing.coords["height"].values:
+        existing = existing.sel(height=[h for h in existing.coords["height"].values if h != height])
+        if existing.sizes["height"] == 0:
+            # All heights were removed, just set the new one
+            result = _set_height_prov(mean_wind_speed_data, height, algo, ver, params)
+            self._set_var("mean_wind_speed", result)
+            return
 
     # If template exists, align all existing slices to template before concatenation
     if has_template:
@@ -287,6 +407,11 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
         from cleo.spatial import enforce_exact_grid
         combined = enforce_exact_grid(combined, self.data["template"], var_name="mean_wind_speed")
 
+    # Restore existing sigs and add the new height's sig
+    if existing_sigs_json:
+        combined.attrs["cleo:sigs"] = existing_sigs_json
+    combined = _set_height_prov(combined, height, algo, ver, params)
+
     # Update Dataset height coordinate safely:
     # drop the old variable first (it carries the old height dimension size), then set coord and reattach.
     ds = self.data.drop_vars("mean_wind_speed")
@@ -295,18 +420,31 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True):
     self.data = ds
 
 
-def compute_wind_shear_coefficient(self, chunk_size=None):
+def compute_wind_shear_coefficient(self, chunk_size=None, force: bool = False):
     """
     Compute wind shear coefficient
 
     :param self: An instance of the Atlas-class
     :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
     :type chunk_size: int
+    :param force: if True, always recompute even if cached result exists
     """
-    if "mean_wind_speed" not in self.data.data_vars or 50 not in self.data["mean_wind_speed"].coords["height"]:
-        self.compute_mean_wind_speed(50, chunk_size)
-    if 100 not in self.data["mean_wind_speed"].coords["height"]:
-        self.compute_mean_wind_speed(100, chunk_size)
+    # Semantic cache check
+    algo = "compute_wind_shear_coefficient"
+    ver = "1"
+    params = _base_params(self)
+    expected_sig = _sig(algo, ver, params)
+
+    if not force and _matches(self.data, "wind_shear", expected_sig):
+        logger.info(f"Wind shear coefficient already computed (sig match), skipping.")
+        return
+
+    # Ensure dependencies are computed (only call if method exists and data missing/invalid)
+    if hasattr(self, "compute_mean_wind_speed"):
+        if "mean_wind_speed" not in self.data.data_vars or 50 not in self.data["mean_wind_speed"].coords.get("height", []):
+            self.compute_mean_wind_speed(50, chunk_size, force=force)
+        if "mean_wind_speed" not in self.data.data_vars or 100 not in self.data["mean_wind_speed"].coords.get("height", []):
+            self.compute_mean_wind_speed(100, chunk_size, force=force)
 
     u_mean_50 = self.data.mean_wind_speed.sel(height=50)
     u_mean_100 = self.data.mean_wind_speed.sel(height=100)
@@ -336,20 +474,34 @@ def compute_wind_shear_coefficient(self, chunk_size=None):
             f"wind_shear: {invalid_count}/{total_count} cells masked (non-positive or non-finite wind speed)"
         )
 
-    self._set_var("wind_shear", alpha.squeeze().rename("wind_shear"))
+    # Set provenance and store
+    alpha = _set_prov(alpha.squeeze().rename("wind_shear"), algo, ver, params)
+    self._set_var("wind_shear", alpha)
     logger.info(f'Wind shear coefficient for {self.parent.country} computed.')
 
 
-def compute_weibull_pdf(self, chunk_size=None):
+def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
     """
     Compute weibull probability density function for reference wind speeds
 
     :param self: an instance of the _WindAtlas class
     :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
     :type chunk_size: int
+    :param force: if True, always recompute even if cached result exists
     """
-    a100, k100 = self.load_weibull_parameters(100)
+    # Semantic cache check
+    algo = "compute_weibull_pdf"
+    ver = "1"
     u = self.data.coords["wind_speed"].values
+    params = _base_params(self)
+    params["wind_speed_grid"] = list(float(v) for v in u)
+    expected_sig = _sig(algo, ver, params)
+
+    if not force and _matches(self.data, "weibull_pdf", expected_sig):
+        logger.info(f"Weibull PDF already computed (sig match), skipping.")
+        return
+
+    a100, k100 = self.load_weibull_parameters(100)
 
     # Align to template grid if available
     if "template" in self.data.data_vars:
@@ -373,13 +525,14 @@ def compute_weibull_pdf(self, chunk_size=None):
         tpl = self.data["template"]
         p = _match_to_template(p, tpl)
 
+    # Set provenance and store
+    p = _set_prov(p, algo, ver, params)
     self._set_var("weibull_pdf", p)
     logger.info(f'Weibull probability density function of wind speeds in {self.data.attrs["country"]} computed.')
 
 
 # %% dependent methods
-@requires({'compute_wind_shear_coefficient': 'wind_shear', 'compute_weibull_pdf': 'weibull_pdf'})
-def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
+def simulate_capacity_factors(self, chunk_size=None, bias_correction=1, force: bool = False):
     """
     Simulate capacity factors for specified wind turbine models
 
@@ -388,7 +541,27 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     :type chunk_size: int
     :param bias_correction: Bias correction factor for simulated capacity factors.
     :type bias_correction: float
+    :param force: if True, always recompute even if cached result exists
     """
+    # Semantic cache check
+    algo = "simulate_capacity_factors"
+    ver = "1"
+    turbines = sorted(str(t) for t in self.data.coords["turbine"].values)
+    params = _base_params(self)
+    params["bias_correction"] = bias_correction
+    params["turbines"] = turbines
+    expected_sig = _sig(algo, ver, params)
+
+    if not force and _matches(self.data, "capacity_factors", expected_sig):
+        logger.info(f"Capacity factors already computed (sig match), skipping.")
+        return
+
+    # Ensure dependencies are computed (only call if method exists and data missing)
+    if hasattr(self, "compute_wind_shear_coefficient") and "wind_shear" not in self.data.data_vars:
+        self.compute_wind_shear_coefficient(chunk_size, force=force)
+    if hasattr(self, "compute_weibull_pdf") and "weibull_pdf" not in self.data.data_vars:
+        self.compute_weibull_pdf(chunk_size, force=force)
+
     cap_factor = []
 
     for turbine_model in self.data.coords["turbine"].values:
@@ -416,16 +589,12 @@ def simulate_capacity_factors(self, chunk_size=None, bias_correction=1):
     # cap_factor = cap_factor.assign_coords(turbine=self.wind_turbines)
     cap_factor = cap_factor.rename("capacity_factor")
 
-    if "capacity_factors" not in self.data:
-        self._set_var("capacity_factors", cap_factor)
-    else:
-        # Combine with existing (preserves other turbines)
-        combined = self.data["capacity_factors"].combine_first(cap_factor)
-        self._set_var("capacity_factors", combined)
+    # Set provenance and store (overwrite existing)
+    cap_factor = _set_prov(cap_factor, algo, ver, params)
+    self._set_var("capacity_factors", cap_factor)
 
 
-@requires({'simulate_capacity_factors': 'capacity_factors'})
-def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
+def compute_lcoe(self, chunk_size=None, turbine_cost_share=1, force: bool = False):
     """
     Compute levelized cost of electricity (LCOE) for specified wind turbine models
 
@@ -435,7 +604,25 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
     :param turbine_cost_share: Share of location-independent investment cost to compute pseudo-LCOE (see
     Wehrle et al. 2023, Inferring Local Social Cost of Wind Power. Evidence from Lower Austria)
     :type turbine_cost_share: float
+    :param force: if True, always recompute even if cached result exists
     """
+    # Semantic cache check
+    algo = "compute_lcoe"
+    ver = "1"
+    turbines = sorted(str(t) for t in self.data.coords["turbine"].values)
+    params = _base_params(self)
+    params["turbine_cost_share"] = turbine_cost_share
+    params["turbines"] = turbines
+    expected_sig = _sig(algo, ver, params)
+
+    if not force and _matches(self.data, "lcoe", expected_sig):
+        logger.info(f"LCOE already computed (sig match), skipping.")
+        return
+
+    # Ensure dependencies are computed (only call if method exists and data missing)
+    if hasattr(self, "simulate_capacity_factors") and "capacity_factors" not in self.data.data_vars:
+        self.simulate_capacity_factors(chunk_size, force=force)
+
     lcoe_list = []
     for turbine_model in self.data.coords["turbine"].values:
 
@@ -460,12 +647,35 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1):
         lcoe_list.append(lcoe)
 
     lcoe_combined = xr.concat(lcoe_list, dim='turbine').rename("lcoe").assign_attrs(units="EUR/MWh")
+
+    # Set provenance and store
+    lcoe_combined = _set_prov(lcoe_combined, algo, ver, params)
     self._set_var("lcoe", lcoe_combined)
     logger.info(f"Levelized Cost of Electricity in {self.data.attrs['country']} computed.")
 
 
-@requires({'compute_lcoe': 'lcoe'})
-def compute_optimal_power_energy(self):
+def compute_optimal_power_energy(self, force: bool = False):
+    """
+    Compute optimal power and energy using least-cost turbine.
+
+    :param force: if True, always recompute even if cached result exists
+    """
+    # Semantic cache check
+    algo = "compute_optimal_power_energy"
+    ver = "1"
+    turbines = sorted(str(t) for t in self.data.coords["turbine"].values)
+    params = _base_params(self)
+    params["turbines"] = turbines
+    expected_sig = _sig(algo, ver, params)
+
+    if not force and _matches(self.data, "optimal_power", expected_sig):
+        logger.info(f"Optimal power/energy already computed (sig match), skipping.")
+        return
+
+    # Ensure dependencies are computed (only call if method exists and data missing)
+    if hasattr(self, "compute_lcoe") and "lcoe" not in self.data.data_vars:
+        self.compute_lcoe(force=force)
+
     # Compute optimal power using turbine metadata (not string parsing)
     least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine').compute()
 
@@ -484,25 +694,49 @@ def compute_optimal_power_energy(self):
 
     power = xr.apply_ufunc(get_capacity, least_cost_turbine, vectorize=True)
 
+    # Set provenance and store
+    power = _set_prov(power, algo, ver, params)
     self._set_var("optimal_power", power)
+
     # compute optimal energy
     least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
     energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
     energy = energy.assign_coords({'turbine': "min_lcoe"})
     # power is in kW; CF is dimensionless; 8766 h/year -> kWh/year; divide by 1e6 -> GWh/year
     energy = (energy * power * 8766 / 10 ** 6).rename("optimal_energy").assign_attrs(units="GWh/a")
+    energy = _set_prov(energy, algo, ver, params)
     self._set_var("optimal_energy", energy)
 
 
-@requires({'compute_lcoe': 'lcoe'})
-def minimum_lcoe(self):
+def minimum_lcoe(self, force: bool = False):
     """
     Calculate the minimum lcoe for each location among all turbines
+
+    :param force: if True, always recompute even if cached result exists
     """
+    # Semantic cache check
+    algo = "minimum_lcoe"
+    ver = "1"
+    turbines = sorted(str(t) for t in self.data.coords["turbine"].values)
+    params = _base_params(self)
+    params["turbines"] = turbines
+    expected_sig = _sig(algo, ver, params)
+
+    if not force and _matches(self.data, "min_lcoe", expected_sig):
+        logger.info(f"Minimum LCOE already computed (sig match), skipping.")
+        return
+
+    # Ensure dependencies are computed (only call if method exists and data missing)
+    if hasattr(self, "compute_lcoe") and "lcoe" not in self.data.data_vars:
+        self.compute_lcoe(force=force)
+
     lcoe = self.data["lcoe"]
     lc_min = lcoe.min(dim='turbine', keep_attrs=True)
     lc_min = lc_min.assign_coords({'turbine': 'min_lcoe'})
-    self._set_var("min_lcoe", lc_min.rename("minimal_lcoe"))
+
+    # Set provenance and store
+    lc_min = _set_prov(lc_min.rename("minimal_lcoe"), algo, ver, params)
+    self._set_var("min_lcoe", lc_min)
 
 
 # %% functions

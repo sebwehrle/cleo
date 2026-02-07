@@ -363,8 +363,11 @@ class Atlas:
         if turbine_name not in self._wind_turbines:
             # Add the turbine data to the wind atlas
             self.wind.add_turbine_data(yaml_file)
-            # Add the turbine name to the list of wind turbines
-            self._wind_turbines.append(turbine_name)
+            # Derive from dataset as source of truth (prevents list/dataset divergence)
+            ds_turbs = self.wind.data.coords["turbine"].values.tolist()
+            if turbine_name not in ds_turbs:
+                raise RuntimeError(f"Failed to add turbine {turbine_name!r} to dataset; dataset turbines={ds_turbs}")
+            self._wind_turbines = ds_turbs
         else:
             logger.warning(f"Turbine {turbine_name} already added.")
 
@@ -747,12 +750,21 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
         power_curve = xr.DataArray(data=new_p, coords={'wind_speed': u}, dims=['wind_speed'])
         power_curve = power_curve.assign_coords(turbine=turbine_name).expand_dims('turbine')
 
-        if 'power_curve' in self.data:
-            power_curve = xr.concat([self.data['power_curve'], power_curve], dim='turbine')
-
         # Direct assignment (power_curve is non-raster: dims are wind_speed/turbine, not x/y)
-        power_curve.name = 'power_curve'
-        self.data["power_curve"] = power_curve
+        power_curve.name = "power_curve"
+
+        if "power_curve" not in self.data.data_vars:
+            # First turbine: establish Dataset coord turbine=[turbine_name], then assign
+            self.data = self.data.assign_coords(turbine=[turbine_name])
+            self.data["power_curve"] = power_curve
+            return
+
+        # Append: concat, then replace entire power_curve in dataset
+        # Must drop old power_curve first to avoid xarray dimension conflict during coord update
+        combined = xr.concat([self.data["power_curve"], power_curve], dim="turbine")
+        self.data = self.data.drop_vars("power_curve")
+        self.data = self.data.assign_coords(turbine=combined.coords["turbine"].values)
+        self.data["power_curve"] = combined
 
     _load_gwa = load_gwa
     _build_netcdf = build_netcdf

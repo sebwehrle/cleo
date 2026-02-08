@@ -343,25 +343,29 @@ def test_density_correction_identity_at_reference():
 # Test 4: Air density height interpolation uses shared helper
 # ============================================================================
 
-def test_air_density_interpolation_uses_shared_helper():
+def test_air_density_interpolation_uses_linear_in_height():
     r"""
-    Verify compute_air_density_at_height uses the same log-height-linear
-    interpolation as Weibull parameters.
+    Verify compute_air_density_at_height uses LINEAR interpolation in height
+    (NOT log-height-linear like Weibull parameters).
 
-    Build air_density(height) exactly log-linear: rho(h) = p0 + p1 * ln(h)
-    Assert interpolated value matches oracle.
+    Build air_density(height) exactly linear: rho(h) = p0 + p1 * h
+    Assert interpolated value matches oracle with tight tolerance.
     """
     heights = np.array([50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(3)
+    wind_speed = np.arange(0.0, 40.0 + 0.5, 0.5)
 
-    # Define log-linear model: rho(h) = p0 + p1 * ln(h)
-    p0 = 1.0
-    p1 = 0.05
+    # Define LINEAR model: rho(h) = p0 + p1 * h
+    p0 = 1.3
+    p1 = -0.001  # Density decreases with height
+
+    def rho_linear(h):
+        return p0 + p1 * h
 
     # Create air density at each height
     rho_vals = np.stack([
-        np.full((2, 3), p0 + p1 * np.log(h)) for h in heights
+        np.full((2, 3), rho_linear(h)) for h in heights
     ], axis=0)
 
     rho_da = xr.DataArray(
@@ -371,20 +375,39 @@ def test_air_density_interpolation_uses_shared_helper():
         name="air_density",
     )
 
-    # Target height
-    target_height = 125.0
-
-    # Use internal helper directly
-    rho_hub = _interp_da_to_height_log(rho_da, target_height)
-
-    # Oracle
-    rho_oracle = p0 + p1 * np.log(target_height)
-
-    # Check all pixels match oracle
-    np.testing.assert_allclose(
-        rho_hub.values, rho_oracle, rtol=0, atol=1e-12,
-        err_msg="Air density interpolation does not match log-height-linear oracle"
+    # Template for mock atlas
+    template = xr.DataArray(
+        np.ones((len(y), len(x)), dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": y, "x": x},
+        name="template",
     )
+
+    ds = xr.Dataset(
+        data_vars={"air_density": rho_da, "template": template},
+        coords={"wind_speed": wind_speed},
+        attrs={"country": "TEST"},
+    )
+
+    class MockAtlas:
+        def __init__(self, data):
+            self.data = data
+            self.parent = SimpleNamespace(country="TEST", crs="epsg:4326")
+
+    atlas = MockAtlas(ds)
+
+    # Target heights to test
+    for target_height in [80.0, 120.0, 175.0]:
+        rho_hub = compute_air_density_at_height(atlas, target_height)
+
+        # Oracle: linear interpolation
+        rho_oracle = rho_linear(target_height)
+
+        # Check all pixels match oracle with tight tolerance
+        np.testing.assert_allclose(
+            rho_hub.values, rho_oracle, rtol=0, atol=1e-12,
+            err_msg=f"Air density interpolation at h={target_height} does not match linear oracle"
+        )
 
 
 # ============================================================================
@@ -515,8 +538,8 @@ def test_lazy_load_air_density_success_path():
     Test that compute_air_density_at_height works via lazy loading when
     air_density is NOT in the dataset but load_air_density returns valid data.
 
-    Uses monkeypatch to provide fake load_air_density that returns log-linear data.
-    Verifies interpolation matches oracle without requiring self.data["air_density"].
+    Uses monkeypatch to provide fake load_air_density that returns LINEAR data.
+    Verifies LINEAR interpolation matches oracle without requiring self.data["air_density"].
     """
     from cleo.assess import compute_air_density_at_height
 
@@ -525,12 +548,13 @@ def test_lazy_load_air_density_success_path():
     x = np.arange(3)
     wind_speed = np.arange(0.0, 40.0 + 0.5, 0.5)
 
-    # Log-linear air density: rho(h) = p0 + p1 * ln(h)
-    p0 = 1.5
-    p1 = -0.05
+    # LINEAR air density: rho(h) = p0 + p1 * h
+    # (NOT log-linear - air density uses linear interpolation in height)
+    p0 = 1.3
+    p1 = -0.001  # Density decreases with height
 
     def rho_oracle(h):
-        return p0 + p1 * np.log(h)
+        return p0 + p1 * h
 
     # Build DataArrays for each height
     def make_rho_da(h):
@@ -562,7 +586,7 @@ def test_lazy_load_air_density_success_path():
             self.parent = SimpleNamespace(country="TEST", crs="epsg:4326")
 
         def load_air_density(self, height):
-            """Fake loader returning log-linear air density."""
+            """Fake loader returning LINEAR air density."""
             if height not in [50, 100, 150, 200]:
                 raise FileNotFoundError(f"No data for height={height}")
             return make_rho_da(float(height))
@@ -576,7 +600,7 @@ def test_lazy_load_air_density_success_path():
     target_height = 80.0
     rho_hub = compute_air_density_at_height(atlas, target_height)
 
-    # Oracle: log-linear interpolation
+    # Oracle: LINEAR interpolation
     expected_rho = rho_oracle(target_height)
 
     # Check result
@@ -584,9 +608,9 @@ def test_lazy_load_air_density_success_path():
     np.testing.assert_allclose(
         rho_hub.values,
         expected_rho,
-        rtol=1e-10,
+        rtol=0,
         atol=1e-12,
-        err_msg="Lazy-loaded air density interpolation does not match oracle"
+        err_msg="Lazy-loaded air density interpolation does not match linear oracle"
     )
 
     # Also test at another height
@@ -597,9 +621,9 @@ def test_lazy_load_air_density_success_path():
     np.testing.assert_allclose(
         rho_hub_2.values,
         expected_rho_2,
-        rtol=1e-10,
+        rtol=0,
         atol=1e-12,
-        err_msg="Lazy-loaded air density interpolation at h=120m does not match oracle"
+        err_msg="Lazy-loaded air density interpolation at h=120m does not match linear oracle"
     )
 
 

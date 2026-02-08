@@ -954,7 +954,9 @@ def _interp_da_to_height_log(
     Internal helper for height interpolation. Uses x = ln(height) space.
     No extrapolation: target_height must be within [min(height), max(height)].
 
-    :param da: DataArray with dim "height" (e.g., Weibull A/k, air density at multiple heights)
+    This implementation is xarray-native and dask-friendly (no Python loops, no .values calls).
+
+    :param da: DataArray with dim "height" (e.g., Weibull A/k at multiple heights)
     :param target_height: Target height for interpolation
     :return: DataArray without "height" dim, with coord hub_height=target_height
     :raises ValueError: If target_height is outside available height range or insufficient heights
@@ -963,60 +965,39 @@ def _interp_da_to_height_log(
     if "height" not in da.dims:
         raise ValueError("DataArray must have a 'height' dimension")
 
-    heights = np.asarray(da.coords["height"].values, dtype=np.float64)
+    heights = da.coords["height"].values
     if len(heights) < 2:
         raise ValueError(f"At least 2 heights required for interpolation, got {len(heights)}")
 
     # No extrapolation: check bounds
-    h_min, h_max = float(heights.min()), float(heights.max())
+    h_min, h_max = float(np.min(heights)), float(np.max(heights))
     if target_height < h_min or target_height > h_max:
         raise ValueError(
             f"target_height={target_height} is outside available height range [{h_min}, {h_max}]. "
             "Extrapolation is not supported."
         )
 
-    # Sort heights ascending for np.interp
-    sort_idx = np.argsort(heights)
-    heights_sorted = heights[sort_idx]
-    x_i = np.log(heights_sorted)  # ln(height)
-    x_target = np.log(float(target_height))
+    # Create ln_height coordinate and transform to log-space
+    ln_heights = np.log(np.asarray(heights, dtype=np.float64))
+    da_log = da.assign_coords(ln_height=("height", ln_heights))
 
-    # Reorder DataArray to match sorted heights
-    da_sorted = da.isel(height=sort_idx)
+    # Swap dims to use ln_height, sort, and interpolate
+    da_log = da_log.swap_dims({"height": "ln_height"})
+    da_log = da_log.sortby("ln_height")
 
-    # Interpolate along height axis
-    def interp_along_height(arr_values, x_i, x_target):
-        """Interpolate along first axis (height)."""
-        orig_shape = arr_values.shape
-        n_heights = orig_shape[0]
-        n_spatial = int(np.prod(orig_shape[1:])) if len(orig_shape) > 1 else 1
+    # Interpolate in log-height space (xarray-native, dask-friendly)
+    ln_target = np.log(float(target_height))
+    result = da_log.interp(ln_height=ln_target, method="linear")
 
-        if n_spatial == 1 and len(orig_shape) == 1:
-            # 1D case: just heights
-            return np.interp(x_target, x_i, arr_values)
+    # Drop the ln_height coordinate (now scalar after interp)
+    if "ln_height" in result.coords:
+        result = result.drop_vars("ln_height")
+    if "height" in result.coords:
+        result = result.drop_vars("height")
 
-        # Reshape to (n_heights, n_spatial)
-        flat = arr_values.reshape(n_heights, n_spatial)
-        result = np.empty(n_spatial, dtype=np.float64)
-        for i in range(n_spatial):
-            result[i] = np.interp(x_target, x_i, flat[:, i])
-        return result.reshape(orig_shape[1:])
-
-    # Get values with height as first dimension
-    vals = da_sorted.transpose("height", ...).values.astype(np.float64)
-    result_vals = interp_along_height(vals, x_i, x_target)
-
-    # Build output DataArray without height dim
-    spatial_dims = [d for d in da.dims if d != "height"]
-    spatial_coords = {k: v for k, v in da.coords.items() if k != "height" and k in spatial_dims}
-
-    result = xr.DataArray(
-        result_vals,
-        dims=spatial_dims,
-        coords=spatial_coords,
-        name=da.name,
-    )
+    # Assign hub_height coordinate
     result = result.assign_coords(hub_height=target_height)
+    result.name = da.name
 
     return result
 
@@ -1114,7 +1095,11 @@ def compute_air_density_at_height(
     """
     Compute air density at a specific hub height using GWA air_density data.
 
-    Uses the same log-height-linear interpolation as Weibull parameters.
+    Uses LINEAR interpolation in height on rho (physically correct for air density).
+    This is different from Weibull parameter interpolation which uses log-height space.
+
+    The correction factor c=(rho/rho0)^(1/3) is computed AFTER interpolating rho,
+    never interpolated directly.
 
     If "air_density" exists in dataset with "height" dim, uses that.
     Otherwise, lazily loads GWA air-density rasters from disk via load_air_density().
@@ -1161,13 +1146,30 @@ def compute_air_density_at_height(
         air_density = xr.concat(loaded, dim="height").assign_coords(height=loaded_heights)
         air_density.name = "air_density"
 
-    # Interpolate to target height using log-height-linear
-    rho_hub = _interp_da_to_height_log(air_density, height)
+    # Interpolate rho linearly in height (xarray-native, dask-friendly)
+    # Sort and use xarray's interp (no log transform for air density)
+    heights = air_density.coords["height"].values
+    h_min, h_max = float(np.min(heights)), float(np.max(heights))
+    if height < h_min or height > h_max:
+        raise ValueError(
+            f"target_height={height} is outside available height range [{h_min}, {h_max}]. "
+            "Extrapolation is not supported."
+        )
+
+    rho_sorted = air_density.sortby("height")
+    rho_hub = rho_sorted.interp(height=float(height), method="linear")
     rho_hub.name = "air_density"
+
+    # Drop height coordinate (now scalar after interp)
+    if "height" in rho_hub.coords:
+        rho_hub = rho_hub.drop_vars("height")
 
     # Drop trivial band dim if present (from lazy-loaded rasters)
     if "band" in rho_hub.dims and rho_hub.sizes["band"] == 1:
         rho_hub = rho_hub.isel(band=0, drop=True)
+
+    # Assign hub_height coordinate
+    rho_hub = rho_hub.assign_coords(hub_height=height)
 
     # Align to template if available
     if "template" in self.data.data_vars:

@@ -1,104 +1,218 @@
 # CLEO
 
-CLEO is a [xarray](https://docs.xarray.dev)-based Python library that downloads and converts 
-[Global Wind Atlas](https://globalwindatlas.info) rasters into a structured, analysis-ready form for wind resource 
-assessment at the GWA's native resolution.
+CLEO is an **xarray-based** Python package for wind resource assessment using the **Global Wind Atlas (GWA)**.
+It downloads (once) country rasters into a local work directory, builds a canonical grid, and computes wind-energy metrics
+such as Weibull PDFs, capacity factors, and LCOE.
 
-CLEO can produce data such as
+Design principles:
 
-* wind shear coefficient
-* air density correction
-* mean wind speed at various heights
-* capacity factor of wind turbines at their hub height (given power curves)
-* levelized cost of electricity (LCOE)
+- **Explicit IO, deterministic compute:** network downloads happen during `materialize()` (or explicit loader calls), not inside compute methods.
+- **Local, explicit prerequisites:** higher-level computations trigger required *derived* prerequisites when needed.
+- **Reproducible & cacheable:** results live in `xarray.Dataset`s with stable coordinates; repeated calls can skip recomputation when inputs/parameters match.
+- **Workdir-first resources:** packaged YAML resources (turbines, costs, land cover codes) are deployed into your workdir for inspection/override.
 
-CLEO also provides common geospatial operations (CRS handling, reprojection, clipping) tailored to the atlas workflow.
-
-## Status and scope
-
-- The public API is centered around the `Atlas` class.
-- YAML resources (turbine power curves, cost assumptions, etc.) are **packaged** with the wheel and are **deployed to the atlas workdir** automatically on `Atlas(...)` construction.
-- Python requirement: **Python >= 3.10**.
+---
 
 ## Installation
-### From source (local checkout)
 
-From the repository root:
+From a local checkout:
 
 ```bash
 python -m pip install -e .
 ```
 
-### Directly from GitHub
-
-```bash
-python -m pip install "cleo @ git+https://github.com/sebwehrle/cleo.git"
-```
-
-If you use conda/mamba for scientific stacks, you may prefer creating an environment first and then installing CLEO into it.
+---
 
 ## Quick start
 
 ```python
 from cleo import Atlas
 
-atlas = Atlas("/path/to/cleo-workdir", "AUT", "EPSG:4326")
+atlas = Atlas("/path/to/cleo-workdir", country="AUT", crs="EPSG:3035")
+
+# First-time setup: downloads required raw inputs (GWA rasters, NUTS) and builds base NetCDF scaffolds
 atlas.materialize()
 
-# Compute wind resource metrics
+# Add one or more turbine models (YAML expected at <workdir>/resources/<turbine>.yml)
+atlas.add_turbine("Vestas.V150.4200")
+
+# Derived metrics
 atlas.wind.compute_wind_shear_coefficient()
-atlas.wind.compute_air_density_correction()
 atlas.wind.compute_mean_wind_speed(100)
+
+# Capacity factors (hub-height Weibull + optional air-density correction)
+cf = atlas.wind.simulate_capacity_factors(
+    weibull_height_mode="hub",
+    air_density_mode="gwa",   # lazily loads local GWA air-density GeoTIFFs; no network during compute
+)
+
+# LCOE (uses cost assumptions YAML in <workdir>/resources/cost_assumptions.yml)
+lcoe = atlas.wind.compute_lcoe()
 ```
 
 Notes:
 
-- `AUT` is a 3-letter ISO country code as used by the GWA API.
-- `EPSG:4326` is the target coordinate reference system for the atlas.
+- `country` is an **ISO-3166 alpha-3** country code used by the GWA endpoints (e.g. `AUT`).
+- `crs` is the target CRS for the processed atlas grid (e.g. `EPSG:3035` or `EPSG:4326`).
 
-On first use, run `.materialize()` to download required GWA rasters for the selected country into the workdir and build 
-processed NetCDF outputs under `data/processed`.
-The class wraps two `xarray.Dataset`s, one for wind resources and one for further spatial characteristics.
-The corresponding data is accessible through `atlas.wind.data` and `atlas.landscape.data`, respectively
+---
 
-## GWA4 CRS and elevation behavior
+## Atlas model
 
-- **GWA4 CRS metadata:** GWA4 rasters lack CRS metadata. CLEO infers CRS from GWA4's country GeoJSON metadata and 
-enforces consistent CRS throughout the atlas pipeline.
-- **Elevation:** if a legacy elevation file (`elevation_w_bathymetry`) is available, it is used. Otherwise, CLEO falls 
-back to Copernicus DEM.
+The public API is centered around the `Atlas` class:
 
-#### Properties
-An `Atlas`-object has the following properties:
-* `path`: the atlas base-path
-* `country`: 3-digit ISO code of the country to assess
-* `region`: (optional) the Latin name of a EU NUTS-region within a `country`. 
-* `crs`: coordinate reference system of the `WindResourceAtlas`' spatial data.
-* `wind_turbines`: list of wind turbine models to process. **Must** be set by the user to allow wind resource assessment. 
-Further turbines can be added as a list. Additional turbines require a data file in the `/resources`-directory.
+- `atlas.wind` is a WindAtlas holding wind resource data and derived products.
+- `atlas.landscape` is a LandscapeAtlas holding supporting spatial characteristics (e.g., NUTS shapes).
+- Both are backed by `xarray.Dataset`s:
+  - `atlas.wind.data`
+  - `atlas.landscape.data`
 
-#### Methods
-The `WindAtlas`-subclass provides several methods, including:
-* `compute_wind_shear_coefficient()`: computes wind shear coefficient
-* `compute_air_density_correction()`: computes air density correction factor alpha
-* `compute_weibull_pdf()`: computes a Weibull pdf of wind speeds
-* `simulate_capacity_factors()`: simulate capacity factors of the wind turbines in `atlas.wind_turbine`. 
-Before simulating capacity factors, properly named (`manufacturer.model.power.yml`) `yaml`-file in `/resources` for all
-wind turbines in `atlas.wind_turbine` must be loaded with `atlas.load_powercurves()`. 
-* `compute_lcoe()`: calculates LCOE for each pixel and each wind turbine in `atlas.wind_turbines` based on the 
-cost-assumptions in `/resources/cost_assumptions.yml`. By default, overnight cost of wind turbines are estimated with 
-the [Rinne et al. cost model](https://doi.org/10.1038/s41560-018-0137-9), which is implemented in `turbine_overnight_cost()` in `cleo.assess`.
+### Workdir layout
+
+CLEO uses the following structure:
+
+- `<workdir>/resources/`
+  - YAML resources deployed from the package (not overwritten if you edit them).
+- `<workdir>/data/raw/<ISO3>/`
+  - Downloaded GWA rasters (GeoTIFF).
+- `<workdir>/data/nuts/`
+  - Downloaded/extracted NUTS shapefiles for region clipping.
+- `<workdir>/data/processed/`
+  - NetCDF outputs for WindAtlas and LandscapeAtlas (optionally versioned by scenario/timestamp).
+- `<workdir>/data/index.jsonl`
+  - Append-only index used by `save()` / `load()` for version selection.
+- `<workdir>/logs/`
+  - Log output.
+
+---
+
+## Turbines and YAML resources
+
+Packaged turbine definitions live in `cleo/resources/*.yml` and are deployed to:
+
+- `<workdir>/resources/<turbine_name>.yml`
+
+Add a turbine by name:
+
+```python
+atlas.add_turbine("Enercon.E115.3000")
+```
+
+To add your own turbine:
+
+1. Create `<workdir>/resources/MyMaker.MyModel.yml` (follow the existing turbine YAML structure).
+2. Call `atlas.add_turbine("MyMaker.MyModel")`.
+
+---
+
+## Wind resource assessment
+
+All wind assessment methods are called on `atlas.wind`.
+
+### Wind shear coefficient
+
+```python
+atlas.wind.compute_wind_shear_coefficient()
+```
+
+### Mean wind speed at height
+
+```python
+atlas.wind.compute_mean_wind_speed(100)
+```
+
+### Weibull PDF
+
+```python
+atlas.wind.compute_weibull_pdf()
+```
+
+### Capacity factors
+
+```python
+cf = atlas.wind.simulate_capacity_factors(
+    weibull_height_mode="hub",
+    air_density_mode="none",  # or "gwa"
+)
+```
+
+Key modes:
+
+- `weibull_height_mode="hub"`:
+  - Interpolates GWA Weibull parameters to hub height and computes the PDF at hub height.
+- `weibull_height_mode="100m_shear"` (legacy):
+  - Uses the 100 m Weibull PDF and shear scaling for hub-height adjustment.
+
+Air density correction (`air_density_mode="gwa"`) uses local GWA air-density rasters and the equivalent wind-speed mapping
+
+\[
+u_{eq} = u \left(\frac{\rho}{\rho_0}\right)^{1/3},
+\qquad \rho_0 = 1.225\ \mathrm{kg/m^3}.
+\]
+
+Air density contract (important):
+
+- **No network downloads during compute.**
+- `air_density_mode="gwa"` lazily loads local GeoTIFFs from `<workdir>/data/raw/<ISO3>/` via `load_air_density(height)`.
+- Interpolation requires **at least two** available GWA air-density height levels (from the package’s `GWA_HEIGHTS`, e.g. 50/100/150/200 m).
+- If required raw files are missing, CLEO raises an actionable `FileNotFoundError` (run `atlas.materialize()` / `atlas.wind._load_gwa()` first).
+
+### LCOE
+
+```python
+lcoe = atlas.wind.compute_lcoe()
+```
+
+LCOE uses cost assumptions from:
+
+- `<workdir>/resources/cost_assumptions.yml`
+
+---
+
+## Spatial operations
+
+### Clip to NUTS region
+
+```python
+atlas.clip_to_nuts("Wien")
+atlas.clip_to_nuts(["Wien", "Niederösterreich"], merged_name="W + NÖ")
+```
+
+This clips both `atlas.wind.data` and `atlas.landscape.data` to the chosen shape and sets `atlas.region`.
+
+---
+
+## Persistence and versioning
+
+### Save
+
+```python
+atlas.save()
+atlas.save(scenario="my_scenario")
+```
+
+### Load
+
+```python
+atlas.load()  # load latest
+atlas.load(scenario="my_scenario")
+atlas.load(scenario="my_scenario", timestamp="2026-02-08T12-34-56")
+```
+
+(Timestamp formats follow what was written by `save()`.)
+
+---
 
 ## Testing
 
-From the repository root:
+From repository root:
+
 ```bash
 pytest -q
 ```
 
-### Author and Copyright
-Copyright (c) 2024 Sebastian Wehrle
+---
 
-### License
-MIT License
+## License
 
+MIT License. See `LICENSE.md`.

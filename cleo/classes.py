@@ -678,11 +678,21 @@ class Atlas:
                 latest_entries[subclass] = entry
 
         # Delete older versions
+        atlas_root = self.path.resolve()
+        def _resolve_under_root(p: Path) -> Path:
+            rp = p if p.is_absolute() else (self.path / p)
+            rp = rp.resolve()
+            try:
+                rp.relative_to(atlas_root)
+            except ValueError as e:
+                raise RuntimeError(f"Refusing to delete path outside of atlas dir: {rp}") from e
+            return rp
+
         for entry in filtered_entries:
             if entry not in latest_entries.values():
-                file_path = Path(entry[4])
-                if file_path.exists():
-                    file_path.unlink()
+                resolved = _resolve_under_root(Path(entry[4]))
+                if resolved.exists():
+                    resolved.unlink()
 
         # Update the index
         remaining_entries = [

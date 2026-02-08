@@ -211,3 +211,54 @@ def test_region_none_produces_filename_token_and_json_null(tmp_path: Path) -> No
     legacy = "WindAtlas:AUT:__all__:default:x.nc:20260101T000000"
     parsed = C._parse_index_line(legacy)
     assert parsed[2] is None
+
+
+def test_cleanup_refuses_to_delete_outside_atlas_root(tmp_path: Path) -> None:
+    atlas = _mk_unmaterialized_atlas(tmp_path)
+
+    with _chdir(tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        # inside atlas root
+        f_new = Path("new.nc")
+        f_old = Path("old.nc")
+        _touch(f_new, b"x")
+        _touch(f_old, b"x")
+
+        # outside atlas root (create file outside tmp_path)
+        outside_abs = (tmp_path.parent / "outside.nc").resolve()
+        outside_abs.write_bytes(b"x")
+
+        atlas.index_file = data_dir / "index.jsonl"
+
+        # old entry points OUTSIDE atlas root via relative path
+        lines = [
+            {
+                "subclass": "WindAtlas",
+                "country": "AUT",
+                "region": None,
+                "scenario": "default",
+                "path": "../outside.nc",
+                "timestamp": "20200101T000000",
+            },
+            {
+                "subclass": "WindAtlas",
+                "country": "AUT",
+                "region": None,
+                "scenario": "default",
+                "path": str(f_new),
+                "timestamp": "20210101T000000",
+            },
+        ]
+        atlas.index_file.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="Refusing to delete path outside of atlas dir"):
+            atlas.cleanup_datasets(scenario="default")
+
+        # must not delete outside file
+        assert outside_abs.exists()
+        # and should not have deleted anything inside either (cleanup aborted)
+        assert f_old.exists()  # still present
+        assert f_new.exists()
+

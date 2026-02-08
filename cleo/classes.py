@@ -38,6 +38,7 @@ from cleo.loaders import (
     get_turbine_attribute,
     get_clc_codes,
     load_weibull_parameters,
+    load_air_density,
     load_gwa,
     load_nuts,
     add_corine_land_cover,
@@ -957,6 +958,7 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
 
     # loaders
     load_weibull_parameters = load_weibull_parameters
+    load_air_density = load_air_density
     get_turbine_attribute = get_turbine_attribute
     get_cost_assumptions = get_cost_assumptions
     get_overnight_cost = get_overnight_cost

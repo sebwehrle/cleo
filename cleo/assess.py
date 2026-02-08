@@ -532,6 +532,46 @@ def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
 
 
 # %% dependent methods
+# TODO(rotor-eq-cf, option1):
+# Add an OPTIONAL rotor-equivalent mode to capacity factor simulation that stays consistent with
+# the existing hub-height Weibull workflow and avoids introducing a separate shear exponent alpha.
+#
+# Idea (Option 1, minimal & pythonic):
+# - We already have GWA Weibull parameters A(z), k(z) across multiple heights (via existing hub-height
+#   interpolation utilities). Use those directly to compute a rotor-equivalent cubic-moment factor f.
+#
+# Definitions:
+#   U(z) ~ Weibull(A(z), k(z))
+#   m3(z) = E[U(z)^3] = A(z)^3 * Gamma(1 + 3/k(z))
+#   weights over rotor disk (vertical slice): w(y) = 2 * sqrt(R^2 - y^2),  y in [-R, R]
+#   z(y) = z_hub + y
+#   m3_rotor = (∫_{-R}^{R} m3(z(y)) * w(y) dy) / (∫_{-R}^{R} w(y) dy)
+#   ueq_rotor = m3_rotor^(1/3)
+#   ueq_hub   = m3(z_hub)^(1/3)
+#   f = ueq_rotor / ueq_hub
+#
+# Implementation sketch:
+# - New simulate_capacity_factors(...) parameter, e.g. rotor_mode="hub"|"rotor_eq_moment".
+# - When rotor_mode=="rotor_eq_moment":
+#     1) Ensure we can evaluate A(z), k(z) at arbitrary z near hub height (use existing A/k interpolation).
+#     2) Numerically integrate m3(z(y)) across y in [-R, R] using quadrature points y_i and weights w_i.
+#        Choose a small fixed N (e.g. 200) for determinism.
+#     3) Compute f = ueq_rotor/ueq_hub and apply a SIMPLE scale adjustment:
+#           A_hub_eff = A_hub * f
+#        Keep k_hub unchanged.
+#     4) Continue with the existing Weibull PDF + turbine power-curve integration exactly as in hub mode.
+# - Important constraints:
+#     * No network IO / downloads in compute paths.
+#     * Do not introduce global DAG/pipeline; keep prerequisite logic local and explicit.
+#     * If turbine metadata lacks rotor diameter / hub height, raise a clear ValueError.
+#
+# Tests (oracle-first):
+# - alpha-free: purely based on A(z), k(z).
+# - Property checks:
+#     * If A(z),k(z) are constant in z => f == 1 (rotor == hub).
+#     * Monotonic sanity: if A(z) increases with z (k constant), then f > 1.
+# - Integration test: rotor_mode changes CF relative to hub_mode in expected direction on a toy case.
+
 def simulate_capacity_factors(
     self,
     chunk_size=None,
@@ -1075,31 +1115,59 @@ def compute_air_density_at_height(
     Compute air density at a specific hub height using GWA air_density data.
 
     Uses the same log-height-linear interpolation as Weibull parameters.
-    Requires "air_density" variable in atlas dataset with dim "height".
+
+    If "air_density" exists in dataset with "height" dim, uses that.
+    Otherwise, lazily loads GWA air-density rasters from disk via load_air_density().
 
     :param self: An instance of the _WindAtlas class
     :param height: Target height (e.g., turbine hub height)
     :param chunk_size: Unused, kept for API consistency
     :return: DataArray with spatial dims (y, x) containing air density at target height
-    :raises ValueError: If air_density not in dataset, height out of range,
-        or values are invalid (non-positive or median outside [0.5, 2.0] kg/m³)
+    :raises ValueError: If height out of range or values are invalid
+    :raises FileNotFoundError: If air_density not in dataset and raw GWA rasters missing
     """
-    if "air_density" not in self.data.data_vars:
-        raise ValueError(
-            "air_density variable not found in atlas dataset. "
-            "Ensure GWA air density rasters are loaded for air_density_mode='gwa'."
-        )
+    air_density = None
 
-    air_density = self.data["air_density"]
+    # Option 1: Use pre-loaded air_density from dataset if available
+    if "air_density" in self.data.data_vars:
+        air_density = self.data["air_density"]
+        if "height" not in air_density.dims:
+            raise ValueError(
+                "air_density in dataset must have 'height' dimension for interpolation."
+            )
 
-    if "height" not in air_density.dims:
-        raise ValueError(
-            "air_density must have 'height' dimension for height interpolation."
-        )
+    # Option 2: Lazy-load from raw GWA rasters
+    if air_density is None:
+        loaded = []
+        loaded_heights = []
+        for h in GWA_HEIGHTS:
+            try:
+                rho_h = self.load_air_density(h)
+                # Drop trivial band dim if present
+                if "band" in rho_h.dims and rho_h.sizes["band"] == 1:
+                    rho_h = rho_h.isel(band=0, drop=True)
+                loaded.append(rho_h)
+                loaded_heights.append(float(h))
+            except FileNotFoundError:
+                continue  # Skip missing heights
 
-    # Use shared log-height interpolation helper
+        if len(loaded) < 2:
+            raise FileNotFoundError(
+                f"Insufficient air-density rasters found (need >=2, got {len(loaded)}). "
+                f"Run atlas.materialize() or atlas.wind._load_gwa() to download GWA data."
+            )
+
+        # Stack into single DataArray with height dimension
+        air_density = xr.concat(loaded, dim="height").assign_coords(height=loaded_heights)
+        air_density.name = "air_density"
+
+    # Interpolate to target height using log-height-linear
     rho_hub = _interp_da_to_height_log(air_density, height)
     rho_hub.name = "air_density"
+
+    # Drop trivial band dim if present (from lazy-loaded rasters)
+    if "band" in rho_hub.dims and rho_hub.sizes["band"] == 1:
+        rho_hub = rho_hub.isel(band=0, drop=True)
 
     # Align to template if available
     if "template" in self.data.data_vars:

@@ -428,13 +428,14 @@ def test_air_density_mode_validation():
 
 
 # ============================================================================
-# Test 6: Missing air_density raises helpful error
+# Test 6: Missing air_density AND raw files raises actionable error
 # ============================================================================
 
-def test_missing_air_density_raises():
-    """Test that air_density_mode='gwa' without air_density data raises ValueError."""
-    import pytest
-
+def test_missing_air_density_and_raw_files_raises():
+    """
+    Test that air_density_mode='gwa' without air_density data AND without raw GWA files
+    raises an actionable FileNotFoundError mentioning materialize/_load_gwa.
+    """
     heights = np.array([50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(2)
@@ -489,12 +490,117 @@ def test_missing_air_density_raises():
         def load_weibull_parameters(self, height):
             return self._weibull_A.sel(height=height), self._weibull_k.sel(height=height)
 
+        def load_air_density(self, height):
+            # Simulate missing raw files
+            raise FileNotFoundError(
+                f"Missing air-density raster for height={height}. "
+                f"Run atlas.materialize() or atlas.wind._load_gwa() to download GWA data."
+            )
+
     atlas = MockAtlasNoRho(ds)
 
-    with pytest.raises(ValueError, match="air_density variable not found"):
+    # Should raise FileNotFoundError with actionable message
+    with pytest.raises(FileNotFoundError, match=r"(materialize|_load_gwa)"):
         simulate_capacity_factors(
             atlas, force=True, weibull_height_mode="hub", air_density_mode="gwa"
         )
+
+
+# ============================================================================
+# Test 6b: Lazy loader success path (no air_density in dataset, load from disk)
+# ============================================================================
+
+def test_lazy_load_air_density_success_path():
+    """
+    Test that compute_air_density_at_height works via lazy loading when
+    air_density is NOT in the dataset but load_air_density returns valid data.
+
+    Uses monkeypatch to provide fake load_air_density that returns log-linear data.
+    Verifies interpolation matches oracle without requiring self.data["air_density"].
+    """
+    from cleo.assess import compute_air_density_at_height
+
+    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    y = np.arange(2)
+    x = np.arange(3)
+    wind_speed = np.arange(0.0, 40.0 + 0.5, 0.5)
+
+    # Log-linear air density: rho(h) = p0 + p1 * ln(h)
+    p0 = 1.5
+    p1 = -0.05
+
+    def rho_oracle(h):
+        return p0 + p1 * np.log(h)
+
+    # Build DataArrays for each height
+    def make_rho_da(h):
+        rho_val = rho_oracle(h)
+        return xr.DataArray(
+            np.full((len(y), len(x)), rho_val, dtype=np.float64),
+            dims=("y", "x"),
+            coords={"y": y, "x": x},
+            name="air_density",
+        )
+
+    # Dataset WITHOUT air_density
+    template = xr.DataArray(
+        np.ones((len(y), len(x)), dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": y, "x": x},
+        name="template",
+    )
+
+    ds = xr.Dataset(
+        data_vars={"template": template},
+        coords={"wind_speed": wind_speed},
+        attrs={"country": "TEST"},
+    )
+
+    class MockAtlasLazyLoad:
+        def __init__(self, data):
+            self.data = data
+            self.parent = SimpleNamespace(country="TEST", crs="epsg:4326")
+
+        def load_air_density(self, height):
+            """Fake loader returning log-linear air density."""
+            if height not in [50, 100, 150, 200]:
+                raise FileNotFoundError(f"No data for height={height}")
+            return make_rho_da(float(height))
+
+    atlas = MockAtlasLazyLoad(ds)
+
+    # Verify air_density is NOT in dataset
+    assert "air_density" not in atlas.data.data_vars
+
+    # Call compute_air_density_at_height with target between available heights
+    target_height = 80.0
+    rho_hub = compute_air_density_at_height(atlas, target_height)
+
+    # Oracle: log-linear interpolation
+    expected_rho = rho_oracle(target_height)
+
+    # Check result
+    assert rho_hub.shape == (len(y), len(x))
+    np.testing.assert_allclose(
+        rho_hub.values,
+        expected_rho,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg="Lazy-loaded air density interpolation does not match oracle"
+    )
+
+    # Also test at another height
+    target_height_2 = 120.0
+    rho_hub_2 = compute_air_density_at_height(atlas, target_height_2)
+    expected_rho_2 = rho_oracle(target_height_2)
+
+    np.testing.assert_allclose(
+        rho_hub_2.values,
+        expected_rho_2,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg="Lazy-loaded air density interpolation at h=120m does not match oracle"
+    )
 
 
 # ============================================================================

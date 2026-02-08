@@ -381,6 +381,53 @@ def load_weibull_parameters(self, height):
         raise RuntimeError(f"Failed to load Weibull parameters for height {height}: {e}") from e
 
 
+def load_air_density(self, height):
+    """
+    Load air density raster for a specific height.
+
+    Contract:
+    - Missing raster file must raise immediately (no silent fallback).
+    - Returned raster is in `self.parent.crs` (Atlas CRS).
+
+    :param self: an instance of the _WindAtlas class
+    :param height: Height for which to load air density (e.g. 50, 100, 150, 200)
+    :type height: int
+    :return: DataArray containing air density raster
+    :rtype: xarray.DataArray
+    :raises FileNotFoundError: If raster file is missing
+    :raises RuntimeError: If reprojection/clipping fails
+    """
+    from pathlib import Path
+
+    path_raw_country = Path(self.parent.path) / "data" / "raw" / f"{self.parent.country}"
+    rho_path = path_raw_country / f"{self.parent.country}_air-density_{height}.tif"
+
+    if not rho_path.is_file():
+        raise FileNotFoundError(
+            f"Missing air-density raster for height={height}: {rho_path}. "
+            f"Run atlas.materialize() or atlas.wind._load_gwa() to download GWA data."
+        )
+
+    try:
+        rho = rxr.open_rasterio(rho_path).chunk("auto")
+        rho.name = "air_density"
+
+        # Ensure CRS is set before reprojection
+        rho = ensure_crs_from_gwa(rho, self.parent.country)
+
+        # Reproject to Atlas CRS if needed
+        rho = reproject_raster_if_needed(rho, self.parent.crs, nodata=np.nan)
+
+        if self.parent.region is not None:
+            clip_shape = self.parent.get_nuts_region(self.parent.region)
+            clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
+            rho = rho.rio.clip(clip_shape.geometry)
+
+        return rho
+    except Exception as e:
+        raise RuntimeError(f"Failed to load air density for height {height}: {e}") from e
+
+
 # %% methods
 # def get_nuts_borders(self):
 #     alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2

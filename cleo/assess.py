@@ -532,66 +532,230 @@ def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
 
 
 # %% dependent methods
-def simulate_capacity_factors(self, chunk_size=None, bias_correction=1, force: bool = False):
+def simulate_capacity_factors(
+    self,
+    chunk_size=None,
+    loss_factor=1,
+    force: bool = False,
+    weibull_height_mode: str = "hub",
+    air_density_mode: str = "none",
+):
     """
-    Simulate capacity factors for specified wind turbine models
+    Simulate capacity factors for specified wind turbine models.
 
     :param self: An instance of the Atlas-class
     :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
     :type chunk_size: int
-    :param bias_correction: Bias correction factor for simulated capacity factors.
-    :type bias_correction: float
+    :param loss_factor: Loss correction factor for simulated capacity factors.
+    :type loss_factor: float
     :param force: if True, always recompute even if cached result exists
+    :param weibull_height_mode: Method for computing Weibull PDF at hub height.
+        - "hub": (default) Interpolate Weibull A,k to hub height using GWA multi-height data,
+          then compute PDF directly at hub height. No shear scaling needed.
+        - "100m_shear": Legacy mode. Uses Weibull PDF at 100m and applies wind shear
+          coefficient scaling to adjust power curve for hub height.
+    :type weibull_height_mode: str
+    :param air_density_mode: Method for air density correction (hub mode only).
+        - "none": (default) No air density correction.
+        - "gwa": Use GWA air density rasters. Applies equivalent wind speed correction:
+          u_eq = u * (rho/rho0)^(1/3) where rho0=1.225 kg/m³.
+    :type air_density_mode: str
+    :raises ValueError: If weibull_height_mode or air_density_mode has invalid value
     """
+    if weibull_height_mode not in ("hub", "100m_shear"):
+        raise ValueError(
+            f"weibull_height_mode must be 'hub' or '100m_shear', got {weibull_height_mode!r}"
+        )
+    if air_density_mode not in ("none", "gwa"):
+        raise ValueError(
+            f"air_density_mode must be 'none' or 'gwa', got {air_density_mode!r}"
+        )
+    if air_density_mode == "gwa" and weibull_height_mode != "hub":
+        raise ValueError(
+            "air_density_mode='gwa' is only supported with weibull_height_mode='hub'"
+        )
+
     # Semantic cache check
     algo = "simulate_capacity_factors"
-    ver = "1"
+    ver = "3"  # Version bump for air_density_mode parameter
     turbines = sorted(str(t) for t in self.data.coords["turbine"].values)
     params = _base_params(self)
-    params["bias_correction"] = bias_correction
+    params["loss_factor"] = loss_factor
     params["turbines"] = turbines
+    params["weibull_height_mode"] = weibull_height_mode
+    params["air_density_mode"] = air_density_mode
     expected_sig = _sig(algo, ver, params)
 
     if not force and _matches(self.data, "capacity_factors", expected_sig):
         logger.info(f"Capacity factors already computed (sig match), skipping.")
         return
 
-    # Ensure dependencies are computed (only call if method exists and data missing)
-    if hasattr(self, "compute_wind_shear_coefficient") and "wind_shear" not in self.data.data_vars:
-        self.compute_wind_shear_coefficient(chunk_size, force=force)
-    if hasattr(self, "compute_weibull_pdf") and "weibull_pdf" not in self.data.data_vars:
-        self.compute_weibull_pdf(chunk_size, force=force)
+    # For 100m_shear mode, ensure wind_shear and weibull_pdf are computed
+    if weibull_height_mode == "100m_shear":
+        if hasattr(self, "compute_wind_shear_coefficient") and "wind_shear" not in self.data.data_vars:
+            self.compute_wind_shear_coefficient(chunk_size, force=force)
+        if hasattr(self, "compute_weibull_pdf") and "weibull_pdf" not in self.data.data_vars:
+            self.compute_weibull_pdf(chunk_size, force=force)
 
     cap_factor = []
 
+    # Cache PDFs and air density per unique hub height to avoid redundant computation
+    pdf_cache = {}  # {hub_height: pdf_da}
+    rho_cache = {}  # {hub_height: rho_da}
+    dummy_shear = None  # Will be computed once if needed
+
     for turbine_model in self.data.coords["turbine"].values:
-        inputs = {
-            "weibull_pdf": self.data["weibull_pdf"],
-            "wind_shear": self.data["wind_shear"],
-            "u_power_curve": self.data.coords["wind_speed"].values,
-            "p_power_curve": self.data.power_curve.sel(turbine=turbine_model).values,
-            "h_turbine": self.get_turbine_attribute(turbine_model, "hub_height"),
-            "correction_factor": bias_correction
-        }
+        h_turbine = self.get_turbine_attribute(turbine_model, "hub_height")
+        p_power_curve = self.data.power_curve.sel(turbine=turbine_model).values
+        u_power_curve = self.data.coords["wind_speed"].values
 
-        if chunk_size is None:
-            cf = capacity_factor(**inputs)
+        if weibull_height_mode == "hub":
+            # Hub-height mode: compute PDF at turbine hub height via interpolation
+            # Use cache to avoid recomputing PDF for same hub height
+            if h_turbine not in pdf_cache:
+                pdf_cache[h_turbine] = compute_weibull_pdf_at_height(
+                    self, h_turbine, chunk_size=chunk_size, method="log_height_linear"
+                )
+            pdf_hub = pdf_cache[h_turbine]
+
+            # Air density correction (if enabled)
+            if air_density_mode == "gwa":
+                # Cache air density per hub height
+                if h_turbine not in rho_cache:
+                    rho_cache[h_turbine] = compute_air_density_at_height(
+                        self, h_turbine, chunk_size=chunk_size
+                    )
+                rho_hub = rho_cache[h_turbine]
+
+                # Compute density correction factor: c = (rho/rho0)^(1/3)
+                c = (rho_hub / RHO_0) ** (1.0 / 3.0)
+
+                # Integrate with density-corrected power curve evaluation
+                # CF = ∫ PC(u * c) * pdf(u) du
+                cf = _integrate_cf_with_density_correction(
+                    pdf=pdf_hub,
+                    u_grid=u_power_curve,
+                    p_curve=p_power_curve,
+                    c=c,
+                    loss_factor=loss_factor,
+                )
+            else:
+                # No density correction - use standard capacity_factor
+                if dummy_shear is None:
+                    template = self.data["template"] if "template" in self.data.data_vars else pdf_hub.isel(wind_speed=0)
+                    dummy_shear = xr.zeros_like(template).rename("wind_shear")
+
+                inputs = {
+                    "weibull_pdf": pdf_hub,
+                    "wind_shear": dummy_shear,
+                    "u_power_curve": u_power_curve,
+                    "p_power_curve": p_power_curve,
+                    "h_turbine": h_turbine,
+                    "h_reference": h_turbine,
+                    "correction_factor": loss_factor,
+                }
+                if chunk_size is None:
+                    cf = capacity_factor(**inputs)
+                else:
+                    cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
         else:
-            cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
+            # Legacy 100m_shear mode: use 100m PDF + wind shear scaling
+            inputs = {
+                "weibull_pdf": self.data["weibull_pdf"],
+                "wind_shear": self.data["wind_shear"],
+                "u_power_curve": u_power_curve,
+                "p_power_curve": p_power_curve,
+                "h_turbine": h_turbine,
+                "correction_factor": loss_factor,
+            }
+            if chunk_size is None:
+                cf = capacity_factor(**inputs)
+            else:
+                cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
 
-        # cf = cf * self.data["air_density_correction"]
         cf = cf.expand_dims(turbine=[turbine_model])
         logger.info(f"Capacity factors for {turbine_model} in {self.data.attrs['country']} computed.")
-        # cap_factor = xr.merge([cap_factor, cf.rename("capacity_factor")])
         cap_factor.append(cf)
 
     cap_factor = xr.concat(cap_factor, dim="turbine")
-    # cap_factor = cap_factor.assign_coords(turbine=self.wind_turbines)
     cap_factor = cap_factor.rename("capacity_factor")
 
     # Set provenance and store (overwrite existing)
     cap_factor = _set_prov(cap_factor, algo, ver, params)
     self._set_var("capacity_factors", cap_factor)
+
+
+def _integrate_cf_with_density_correction(
+    pdf: xr.DataArray,
+    u_grid: np.ndarray,
+    p_curve: np.ndarray,
+    c: xr.DataArray,
+    loss_factor: float = 1.0,
+) -> xr.DataArray:
+    """
+    Integrate capacity factor with air density correction.
+
+    CF = loss_factor * ∫ PC(u * c) * pdf(u) du
+
+    The correction factor c = (rho/rho0)^(1/3) scales wind speed to equivalent
+    wind speed at reference density, applying the correction INSIDE the power
+    curve evaluation, NOT as a post-hoc CF multiplier.
+
+    :param pdf: Weibull PDF at hub height, dims (wind_speed, y, x)
+    :param u_grid: 1D wind speed grid
+    :param p_curve: 1D power curve values (same length as u_grid)
+    :param c: Density correction factor (rho/rho0)^(1/3), dims (y, x)
+    :param loss_factor: Additional correction factor
+    :return: Capacity factor DataArray with dims (y, x)
+    """
+    u = np.asarray(u_grid, dtype=np.float64)
+    p = np.asarray(p_curve, dtype=np.float64)
+
+    # Get spatial shape from c
+    spatial_shape = c.shape
+
+    # Align PDF to wind_speed order
+    if "wind_speed" in pdf.dims:
+        pdf_aligned = pdf.sel(wind_speed=u)
+        pdf_vals = pdf_aligned.transpose("wind_speed", ...).values
+    else:
+        pdf_vals = pdf.values
+
+    # Get c values
+    c_vals = c.values
+
+    # Trapezoidal integration: CF = ∫ PC(u*c) * pdf(u) du
+    # For each spatial point, evaluate PC at u*c and integrate
+    acc = np.zeros(spatial_shape, dtype=np.float64)
+
+    n = len(u)
+    for i in range(n - 1):
+        du = u[i + 1] - u[i]
+
+        # u_eq at this wind speed for all spatial points
+        u_eq_i = u[i] * c_vals
+        u_eq_ip1 = u[i + 1] * c_vals
+
+        # Evaluate power curve at equivalent wind speeds.
+        # We assume turbine curves include cut-out or are undefined beyond range;
+        # to avoid overestimation we set out-of-range CF to 0.
+        pc_i = np.interp(u_eq_i.ravel(), u, p, left=0.0, right=0.0).reshape(spatial_shape)
+        pc_ip1 = np.interp(u_eq_ip1.ravel(), u, p, left=0.0, right=0.0).reshape(spatial_shape)
+
+        # PDF values at this wind speed
+        pdf_i = pdf_vals[i]
+        pdf_ip1 = pdf_vals[i + 1]
+
+        # Trapezoidal term
+        term_i = pdf_i * pc_i
+        term_ip1 = pdf_ip1 * pc_ip1
+        acc += 0.5 * (term_i + term_ip1) * du
+
+    # Build result DataArray
+    result = c.copy()
+    result.values = acc * loss_factor
+    result.name = "capacity_factor"
+    return result
 
 
 def compute_lcoe(self, chunk_size=None, turbine_cost_share=1, force: bool = False):
@@ -740,6 +904,292 @@ def minimum_lcoe(self, force: bool = False):
 
 
 # %% functions
+def _interp_da_to_height_log(
+    da: xr.DataArray,
+    target_height: float | int,
+) -> xr.DataArray:
+    """
+    Interpolate a DataArray with "height" dimension to a target height using log-height-linear interpolation.
+
+    Internal helper for height interpolation. Uses x = ln(height) space.
+    No extrapolation: target_height must be within [min(height), max(height)].
+
+    :param da: DataArray with dim "height" (e.g., Weibull A/k, air density at multiple heights)
+    :param target_height: Target height for interpolation
+    :return: DataArray without "height" dim, with coord hub_height=target_height
+    :raises ValueError: If target_height is outside available height range or insufficient heights
+    """
+    # Validate height dimension exists
+    if "height" not in da.dims:
+        raise ValueError("DataArray must have a 'height' dimension")
+
+    heights = np.asarray(da.coords["height"].values, dtype=np.float64)
+    if len(heights) < 2:
+        raise ValueError(f"At least 2 heights required for interpolation, got {len(heights)}")
+
+    # No extrapolation: check bounds
+    h_min, h_max = float(heights.min()), float(heights.max())
+    if target_height < h_min or target_height > h_max:
+        raise ValueError(
+            f"target_height={target_height} is outside available height range [{h_min}, {h_max}]. "
+            "Extrapolation is not supported."
+        )
+
+    # Sort heights ascending for np.interp
+    sort_idx = np.argsort(heights)
+    heights_sorted = heights[sort_idx]
+    x_i = np.log(heights_sorted)  # ln(height)
+    x_target = np.log(float(target_height))
+
+    # Reorder DataArray to match sorted heights
+    da_sorted = da.isel(height=sort_idx)
+
+    # Interpolate along height axis
+    def interp_along_height(arr_values, x_i, x_target):
+        """Interpolate along first axis (height)."""
+        orig_shape = arr_values.shape
+        n_heights = orig_shape[0]
+        n_spatial = int(np.prod(orig_shape[1:])) if len(orig_shape) > 1 else 1
+
+        if n_spatial == 1 and len(orig_shape) == 1:
+            # 1D case: just heights
+            return np.interp(x_target, x_i, arr_values)
+
+        # Reshape to (n_heights, n_spatial)
+        flat = arr_values.reshape(n_heights, n_spatial)
+        result = np.empty(n_spatial, dtype=np.float64)
+        for i in range(n_spatial):
+            result[i] = np.interp(x_target, x_i, flat[:, i])
+        return result.reshape(orig_shape[1:])
+
+    # Get values with height as first dimension
+    vals = da_sorted.transpose("height", ...).values.astype(np.float64)
+    result_vals = interp_along_height(vals, x_i, x_target)
+
+    # Build output DataArray without height dim
+    spatial_dims = [d for d in da.dims if d != "height"]
+    spatial_coords = {k: v for k, v in da.coords.items() if k != "height" and k in spatial_dims}
+
+    result = xr.DataArray(
+        result_vals,
+        dims=spatial_dims,
+        coords=spatial_coords,
+        name=da.name,
+    )
+    result = result.assign_coords(hub_height=target_height)
+
+    return result
+
+
+def interpolate_weibull_params_to_height(
+    weibull_A: xr.DataArray,
+    weibull_k: xr.DataArray,
+    target_height: float | int,
+    *,
+    method: str = "log_height_linear",
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """
+    Interpolate Weibull A and k parameters to an arbitrary target height.
+
+    Uses log-height-linear interpolation: x = ln(height).
+    For each cell: A* = interp(x*, x_i, A_i), k* = interp(x*, x_i, k_i).
+
+    :param weibull_A: DataArray with dim "height" containing A parameter at multiple heights
+    :param weibull_k: DataArray with dim "height" containing k parameter at multiple heights
+    :param target_height: Target height for interpolation (e.g., turbine hub height)
+    :param method: Interpolation method. Only "log_height_linear" supported in v1.
+    :return: Tuple (A_hub, k_hub) as DataArrays without "height" dim, with coord hub_height=target_height
+    :raises ValueError: If method is not supported, or if target_height is outside available height range
+    """
+    if method != "log_height_linear":
+        raise ValueError(f"Unsupported interpolation method: {method!r}. Only 'log_height_linear' is supported.")
+
+    # Validate height dimension exists in both
+    if "height" not in weibull_A.dims or "height" not in weibull_k.dims:
+        raise ValueError("weibull_A and weibull_k must have a 'height' dimension")
+
+    # Use shared interpolation helper
+    A_hub = _interp_da_to_height_log(weibull_A, target_height)
+    A_hub.name = "weibull_A"
+
+    k_hub = _interp_da_to_height_log(weibull_k, target_height)
+    k_hub.name = "weibull_k"
+
+    return A_hub, k_hub
+
+
+# Standard GWA heights for multi-height Weibull data
+GWA_HEIGHTS = (50, 100, 150, 200)
+
+# Reference air density at sea level (kg/m³)
+RHO_0 = 1.225
+
+
+def _validate_air_density(arr: np.ndarray, context: str) -> None:
+    """
+    Validate air density values are physically plausible (kg/m³).
+
+    Checks:
+    - All finite values must be strictly > 0
+    - Median must be in [0.5, 2.0] kg/m³ (plausible atmospheric range)
+
+    :param arr: numpy array of air density values
+    :param context: description of where validation is happening (for error messages)
+    :raises ValueError: If validation fails
+    """
+    finite_mask = np.isfinite(arr)
+    finite_vals = arr[finite_mask]
+
+    if finite_vals.size == 0:
+        raise ValueError(
+            f"Invalid air_density {context}: no finite values found."
+        )
+
+    min_finite = float(np.min(finite_vals))
+    max_finite = float(np.max(finite_vals))
+    median_finite = float(np.nanmedian(finite_vals))
+
+    # All finite values must be > 0
+    if min_finite <= 0:
+        raise ValueError(
+            f"Invalid air_density {context}: values must be > 0. "
+            f"Found min={min_finite:.6g}, max={max_finite:.6g}, median={median_finite:.6g}"
+        )
+
+    # Median must be in plausible atmospheric range [0.5, 2.0] kg/m³
+    if not (0.5 <= median_finite <= 2.0):
+        raise ValueError(
+            f"Unexpected air_density units/values {context}: median={median_finite:.6g} kg/m³ "
+            f"outside plausible range [0.5, 2.0]. "
+            f"min={min_finite:.6g}, max={max_finite:.6g}"
+        )
+
+
+def compute_air_density_at_height(
+    self,
+    height: float | int,
+    *,
+    chunk_size: int | None = None,
+) -> xr.DataArray:
+    """
+    Compute air density at a specific hub height using GWA air_density data.
+
+    Uses the same log-height-linear interpolation as Weibull parameters.
+    Requires "air_density" variable in atlas dataset with dim "height".
+
+    :param self: An instance of the _WindAtlas class
+    :param height: Target height (e.g., turbine hub height)
+    :param chunk_size: Unused, kept for API consistency
+    :return: DataArray with spatial dims (y, x) containing air density at target height
+    :raises ValueError: If air_density not in dataset, height out of range,
+        or values are invalid (non-positive or median outside [0.5, 2.0] kg/m³)
+    """
+    if "air_density" not in self.data.data_vars:
+        raise ValueError(
+            "air_density variable not found in atlas dataset. "
+            "Ensure GWA air density rasters are loaded for air_density_mode='gwa'."
+        )
+
+    air_density = self.data["air_density"]
+
+    if "height" not in air_density.dims:
+        raise ValueError(
+            "air_density must have 'height' dimension for height interpolation."
+        )
+
+    # Use shared log-height interpolation helper
+    rho_hub = _interp_da_to_height_log(air_density, height)
+    rho_hub.name = "air_density"
+
+    # Align to template if available
+    if "template" in self.data.data_vars:
+        tpl = self.data["template"]
+        rho_hub = _match_to_template(rho_hub, tpl)
+
+    # Validate interpolated values: must be > 0 and in plausible kg/m³ range
+    # Compute if dask to get numpy array for validation
+    arr = rho_hub.values if not hasattr(rho_hub.data, "compute") else rho_hub.compute().values
+    _validate_air_density(arr, context=f"after interpolation to height={height}m")
+
+    return rho_hub
+
+
+def compute_weibull_pdf_at_height(
+    self,
+    height: float | int,
+    *,
+    chunk_size: int | None = None,
+    method: str = "log_height_linear",
+) -> xr.DataArray:
+    """
+    Compute Weibull PDF at a specific hub height using interpolated A and k parameters.
+
+    Loads Weibull parameters for all available heights (e.g., 50/100/150/200m from GWA),
+    interpolates to target height, and computes the PDF.
+
+    :param self: An instance of the _WindAtlas class (requires load_weibull_parameters)
+    :param height: Target height (e.g., turbine hub height)
+    :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
+    :param method: Interpolation method for Weibull parameters. Only "log_height_linear" supported.
+    :return: DataArray with dims (wind_speed, y, x) containing PDF at target height
+    :raises ValueError: If height is outside available range or method not supported
+    """
+    # Load Weibull params at all standard heights
+    A_list = []
+    k_list = []
+    available_heights = []
+
+    for h in GWA_HEIGHTS:
+        try:
+            a_h, k_h = self.load_weibull_parameters(h)
+            A_list.append(a_h)
+            k_list.append(k_h)
+            available_heights.append(h)
+        except (FileNotFoundError, Exception):
+            # Skip heights that don't have data
+            continue
+
+    if len(available_heights) < 2:
+        raise ValueError(
+            f"At least 2 height levels required for interpolation, but only found: {available_heights}"
+        )
+
+    # Stack into DataArrays with height dimension
+    A_stack = xr.concat(A_list, dim="height").assign_coords(height=available_heights)
+    k_stack = xr.concat(k_list, dim="height").assign_coords(height=available_heights)
+
+    # Interpolate to target height
+    A_hub, k_hub = interpolate_weibull_params_to_height(
+        A_stack, k_stack, height, method=method
+    )
+
+    # Align to template if available
+    if "template" in self.data.data_vars:
+        tpl = self.data["template"]
+        A_hub = _match_to_template(A_hub, tpl)
+        k_hub = _match_to_template(k_hub, tpl)
+
+    # Get wind speed grid
+    u = self.data.coords["wind_speed"].values
+
+    inputs = {
+        "weibull_a": A_hub,
+        "weibull_k": k_hub,
+        "u_power_curve": u,
+    }
+
+    if chunk_size is None:
+        pdf = weibull_probability_density(**inputs)
+    else:
+        pdf = compute_chunked(self, weibull_probability_density, chunk_size, **inputs)
+
+    # Align result to template if available
+    if "template" in self.data.data_vars:
+        pdf = _match_to_template(pdf, self.data["template"])
+
+    return pdf
+
+
 def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
     """
     Calculate Weibull probability density at wind-speed grid u_power_curve.

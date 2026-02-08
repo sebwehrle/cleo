@@ -213,7 +213,7 @@ def test_capacity_factor_aligns_pdf_by_windspeed_label_not_position() -> None:
     wind_shear[:] = 0.0
 
     # Oracle: explicitly align by label
-    pdf_aligned = np.array([float(weibull_pdf.sel(wind_speed=uu).values) for uu in u_asc], dtype=float)
+    pdf_aligned = np.array([weibull_pdf.sel(wind_speed=uu).item() for uu in u_asc], dtype=float)
     integrand = pdf_aligned * p
     cf_oracle = float(np.trapezoid(integrand, x=u_asc))
 

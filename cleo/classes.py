@@ -835,10 +835,11 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
             self.data.attrs["cleo_schema_version"] = "windatlas_v2"
             changed = True
 
-        # Persist migration
+        # Persist migration (schema changes only, not normal compute flow)
         if changed and getattr(self, "_netcdf_path", None) is not None:
             logger.info(f"Migrated WindAtlas schema; writing back to {self._netcdf_path}")
-            # Load all data into memory and close file handle before overwriting
+            # [MIGRATION ONLY] Load all data into memory to close file handle before overwriting.
+            # This .load() is intentional for file I/O safety, not invoked in normal compute paths.
             self.data = self.data.load()
             self.data.close()
             # Write to temp file then rename (avoids file handle conflicts)

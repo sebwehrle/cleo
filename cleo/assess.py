@@ -463,7 +463,8 @@ def compute_wind_shear_coefficient(self, chunk_size=None, force: bool = False):
             np.nan,
         )
 
-    # Log warning if invalid cells exist (dask-safe scalar reduction)
+    # [VALIDATION BRANCH] Log warning if invalid cells exist.
+    # This .compute() is intentional for the validation log message only.
     invalid_sum = (~valid).sum()
     if hasattr(invalid_sum.data, "compute"):
         invalid_sum = invalid_sum.compute()
@@ -725,6 +726,46 @@ def simulate_capacity_factors(
     self._set_var("capacity_factors", cap_factor)
 
 
+def _interp_power_curve(u_eq: xr.DataArray, u: np.ndarray, p: np.ndarray) -> xr.DataArray:
+    """
+    Interpolate power curve at equivalent wind speeds (dask-friendly).
+
+    Uses xr.apply_ufunc to wrap np.interp with dask="parallelized".
+
+    :param u_eq: Equivalent wind speeds, any shape (dask-backed OK)
+    :param u: 1D wind speed grid (numpy)
+    :param p: 1D power curve values (numpy)
+    :return: Power curve values at u_eq, same shape as u_eq
+    """
+    return xr.apply_ufunc(
+        lambda x: np.interp(x, u, p, left=0.0, right=0.0),
+        u_eq,
+        dask="parallelized",
+        output_dtypes=[np.float64],
+    )
+
+
+def _trapz_over_wind_speed(y: xr.DataArray, x: xr.DataArray) -> xr.DataArray:
+    """
+    Trapezoidal integration over the wind_speed dimension (dask-friendly).
+
+    Uses np.trapezoid via xr.apply_ufunc with dask="parallelized".
+
+    :param y: Integrand with dims ("wind_speed", ...spatial...), dask-backed OK
+    :param x: 1D wind_speed coordinate DataArray (same for all pixels)
+    :return: Integrated values with wind_speed dim removed
+    """
+    return xr.apply_ufunc(
+        np.trapezoid,
+        y, x,
+        input_core_dims=[["wind_speed"], ["wind_speed"]],
+        output_core_dims=[[]],
+        dask="parallelized",
+        vectorize=True,
+        output_dtypes=[np.float64],
+    )
+
+
 def _integrate_cf_with_density_correction(
     pdf: xr.DataArray,
     u_grid: np.ndarray,
@@ -741,6 +782,9 @@ def _integrate_cf_with_density_correction(
     wind speed at reference density, applying the correction INSIDE the power
     curve evaluation, NOT as a post-hoc CF multiplier.
 
+    This implementation is fully vectorized and dask-friendly (no Python loops,
+    no .values on large arrays). Uses np.trapezoid via xr.apply_ufunc.
+
     :param pdf: Weibull PDF at hub height, dims (wind_speed, y, x)
     :param u_grid: 1D wind speed grid
     :param p_curve: 1D power curve values (same length as u_grid)
@@ -751,49 +795,31 @@ def _integrate_cf_with_density_correction(
     u = np.asarray(u_grid, dtype=np.float64)
     p = np.asarray(p_curve, dtype=np.float64)
 
-    # Get spatial shape from c
-    spatial_shape = c.shape
-
     # Align PDF to wind_speed order
     if "wind_speed" in pdf.dims:
-        pdf_aligned = pdf.sel(wind_speed=u)
-        pdf_vals = pdf_aligned.transpose("wind_speed", ...).values
+        pdf_aligned = pdf.sel(wind_speed=u).transpose("wind_speed", ...)
     else:
-        pdf_vals = pdf.values
+        pdf_aligned = pdf
 
-    # Get c values
-    c_vals = c.values
+    # Build wind_speed as 1D DataArray for vectorized operations
+    u_da = xr.DataArray(u, dims=("wind_speed",), coords={"wind_speed": u})
 
-    # Trapezoidal integration: CF = ∫ PC(u*c) * pdf(u) du
-    # For each spatial point, evaluate PC at u*c and integrate
-    acc = np.zeros(spatial_shape, dtype=np.float64)
+    # Compute equivalent wind speed: u_eq = u * c
+    # Broadcasting: u_da (wind_speed,) * c (y, x) => (wind_speed, y, x)
+    u_eq = u_da * c
 
-    n = len(u)
-    for i in range(n - 1):
-        du = u[i + 1] - u[i]
+    # Evaluate power curve at all equivalent wind speeds (vectorized, dask-friendly)
+    p_eq = _interp_power_curve(u_eq, u, p)
 
-        # u_eq at this wind speed for all spatial points
-        u_eq_i = u[i] * c_vals
-        u_eq_ip1 = u[i + 1] * c_vals
+    # Build integrand: pdf(u) * PC(u*c)
+    # Both have dims (wind_speed, y, x) after alignment
+    integrand = pdf_aligned * p_eq
 
-        # Evaluate power curve at equivalent wind speeds.
-        # We assume turbine curves include cut-out or are undefined beyond range;
-        # to avoid overestimation we set out-of-range CF to 0.
-        pc_i = np.interp(u_eq_i.ravel(), u, p, left=0.0, right=0.0).reshape(spatial_shape)
-        pc_ip1 = np.interp(u_eq_ip1.ravel(), u, p, left=0.0, right=0.0).reshape(spatial_shape)
+    # Vectorized trapezoidal integration over wind_speed (dask-friendly)
+    cf = _trapz_over_wind_speed(integrand, u_da)
 
-        # PDF values at this wind speed
-        pdf_i = pdf_vals[i]
-        pdf_ip1 = pdf_vals[i + 1]
-
-        # Trapezoidal term
-        term_i = pdf_i * pc_i
-        term_ip1 = pdf_ip1 * pc_ip1
-        acc += 0.5 * (term_i + term_ip1) * du
-
-    # Build result DataArray
-    result = c.copy()
-    result.values = acc * loss_factor
+    # Apply loss factor and set name
+    result = cf * loss_factor
     result.name = "capacity_factor"
     return result
 
@@ -881,10 +907,11 @@ def compute_optimal_power_energy(self, force: bool = False):
         self.compute_lcoe(force=force)
 
     # Compute optimal power using turbine metadata (not string parsing)
-    least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine').compute()
+    # Keep lazy - apply_ufunc with dask="parallelized" handles dask arrays
+    least_cost_turbine = self.data["lcoe"].idxmin(dim='turbine')
 
     # Build lookup dict from turbine labels to capacity using metadata
-    turbine_labels = self.data.coords["turbine"].values
+    turbine_labels = self.data.coords["turbine"].values  # coords-only .values OK
     capacity_lookup = {
         label: self.get_turbine_attribute(label, "capacity")
         for label in turbine_labels
@@ -896,13 +923,18 @@ def compute_optimal_power_energy(self, force: bool = False):
         else:
             return np.nan
 
-    power = xr.apply_ufunc(get_capacity, least_cost_turbine, vectorize=True)
+    power = xr.apply_ufunc(
+        get_capacity, least_cost_turbine,
+        vectorize=True, dask="parallelized", output_dtypes=[np.float64]
+    )
 
     # Set provenance and store
     power = _set_prov(power, algo, ver, params)
     self._set_var("optimal_power", power)
 
-    # compute optimal energy
+    # Compute optimal energy using argmin for positional indexing
+    # [REQUIRED COMPUTE] xarray's .isel() with DataArray indexer requires eager array
+    # for advanced indexing - this cannot be avoided without restructuring the algorithm.
     least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
     energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
     energy = energy.assign_coords({'turbine': "min_lcoe"})
@@ -1176,8 +1208,8 @@ def compute_air_density_at_height(
         tpl = self.data["template"]
         rho_hub = _match_to_template(rho_hub, tpl)
 
-    # Validate interpolated values: must be > 0 and in plausible kg/m³ range
-    # Compute if dask to get numpy array for validation
+    # [VALIDATION BRANCH] Validate interpolated values: must be > 0 and in plausible kg/m³ range.
+    # This .compute()/.values is intentional for runtime validation only.
     arr = rho_hub.values if not hasattr(rho_hub.data, "compute") else rho_hub.compute().values
     _validate_air_density(arr, context=f"after interpolation to height={height}m")
 
@@ -1301,6 +1333,10 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
     calculates wind turbine capacity factors given Weibull probability density pdf, roughness factor alpha, wind turbine
     power curve data in u_power_curve and p_power_curve, turbine height h_turbine and reference height of wind speed
     modelling h_reference
+
+    This implementation is fully vectorized and dask-friendly (no Python loops,
+    no .values on large arrays). Uses np.trapezoid via xr.apply_ufunc.
+
     :param correction_factor:
     :param weibull_pdf: probability density function from weibull_probability_density()
     :param wind_shear: wind shear coefficient
@@ -1310,7 +1346,7 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
     :param h_reference: reference height at which weibull pdf is computed
     :return:
     """
-    # Ensure u and p are numpy arrays
+    # Ensure u and p are numpy arrays (1D power curve, small)
     u = np.asarray(u_power_curve)
     p = np.asarray(p_power_curve)
 
@@ -1325,25 +1361,13 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
         )
 
     # Compute shear scaling factor s(y,x) = (h_turbine / h_reference) ** wind_shear
-    s = (h_turbine / h_reference) ** wind_shear.values
-
-    # Get spatial shape from wind_shear
-    spatial_shape = wind_shear.shape
-
-    # Helper to evaluate power curve at hub-height wind speed (2D)
-    def eval_power_curve(u_ref_scalar, s_2d):
-        u_hub_2d = u_ref_scalar * s_2d
-        flat = u_hub_2d.ravel()
-        p_flat = np.interp(flat, u, p, left=0.0, right=0.0)
-        return p_flat.reshape(spatial_shape)
-
-    # Streaming trapezoidal integration over u_ref
-    acc = np.zeros(spatial_shape, dtype=np.float64)
+    # Stay as xarray DataArray (dask-friendly)
+    s = (h_turbine / h_reference) ** wind_shear
 
     # Exact wind_speed grid contract (no tolerant float matching).
     # Order may differ; alignment MUST be by label (prevents positional bugs).
     if "wind_speed" in weibull_pdf.dims:
-        ws = np.asarray(weibull_pdf.coords["wind_speed"].values)
+        ws = np.asarray(weibull_pdf.coords["wind_speed"].values)  # coords-only .values OK
 
         # Require exact same labels (no tolerance), but allow different order.
         if ws.shape != u.shape or not np.array_equal(np.sort(ws), np.sort(u)):
@@ -1354,27 +1378,31 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
             )
 
         # Reorder by label to match u_power_curve order (contract: label-based)
-        weibull_pdf_aligned = weibull_pdf.sel(wind_speed=u)
-        pdf_vals = weibull_pdf_aligned.transpose("wind_speed", ...).values
+        pdf_aligned = weibull_pdf.sel(wind_speed=u).transpose("wind_speed", ...)
     else:
-        pdf_vals = weibull_pdf.values
+        pdf_aligned = weibull_pdf
 
-    n = len(u)
-    for i in range(n - 1):
-        du = u[i + 1] - u[i]
-        pdf_i = pdf_vals[i]
-        pdf_ip1 = pdf_vals[i + 1]
-        pc_i = eval_power_curve(u[i], s)
-        pc_ip1 = eval_power_curve(u[i + 1], s)
-        term_i = pdf_i * pc_i
-        term_ip1 = pdf_ip1 * pc_ip1
-        acc += 0.5 * (term_i + term_ip1) * du
+    # Build wind_speed as 1D DataArray for vectorized operations
+    u_da = xr.DataArray(u, dims=("wind_speed",), coords={"wind_speed": u})
 
-    # Apply correction factor and build result
-    cap_factor = wind_shear.copy()
-    cap_factor.values = acc * correction_factor
-    cap_factor.name = "capacity_factor"
-    return cap_factor
+    # Compute hub-height wind speed: u_hub = u * s
+    # Broadcasting: u_da (wind_speed,) * s (y, x) => (wind_speed, y, x)
+    u_hub = u_da * s
+
+    # Evaluate power curve at all hub-height wind speeds (vectorized, dask-friendly)
+    pc = _interp_power_curve(u_hub, u, p)
+
+    # Build integrand: pdf(u) * PC(u*s)
+    # Both have dims (wind_speed, y, x) after alignment
+    integrand = pdf_aligned * pc
+
+    # Vectorized trapezoidal integration over wind_speed (dask-friendly)
+    cf = _trapz_over_wind_speed(integrand, u_da)
+
+    # Apply correction factor
+    result = cf * correction_factor
+    result.name = "capacity_factor"
+    return result
 
 
 def turbine_overnight_cost(power, hub_height, rotor_diameter, year):

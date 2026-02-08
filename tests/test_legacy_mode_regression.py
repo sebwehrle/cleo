@@ -112,7 +112,7 @@ def test_legacy_100m_shear_mode_regression_snapshot():
             self.data = data
             self.parent = SimpleNamespace(country="TEST", crs="epsg:4326")
 
-        def get_turbine_attribute(self, turbine_model: str, key: str):
+        def get_turbine_attribute(self, turbine_id: str, key: str):
             if key == "hub_height":
                 return hub_height
             raise KeyError(f"Unknown attribute: {key}")
@@ -221,7 +221,7 @@ def test_legacy_mode_with_nonzero_shear_regression():
             self.data = data
             self.parent = SimpleNamespace(country="TEST", crs="epsg:4326")
 
-        def get_turbine_attribute(self, turbine_model: str, key: str):
+        def get_turbine_attribute(self, turbine_id: str, key: str):
             if key == "hub_height":
                 return hub_height
             raise KeyError(f"Unknown attribute: {key}")

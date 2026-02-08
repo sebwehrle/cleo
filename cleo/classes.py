@@ -851,11 +851,20 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
     def add_turbine_data(self, yaml_file):
         """
         Add wind turbine data to the xarray Dataset wrapped by the _WindAtlas class.
+
+        The turbine coordinate value is the YAML file stem (config id), NOT derived
+        from manufacturer/model/capacity. This allows the same turbine model with
+        different hub heights to coexist.
+
+        All turbine metadata is stored in the dataset; no runtime YAML reads required.
+
         Parameters:
-        yaml_content (str): The YAML content containing the wind turbine data.
+        yaml_file: Path to the YAML file containing the wind turbine data.
         Returns:
         None
         """
+        from pathlib import Path
+
         # Strict preconditions (no self-heal - _ensure_windatlas_schema should have run)
         if "wind_speed" not in self.data.coords:
             raise ValueError("WindAtlas invalid: missing wind_speed coord.")
@@ -864,11 +873,29 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
         if "template" not in self.data.data_vars:
             raise ValueError("WindAtlas invalid: missing template.")
 
-        # # Load the YAML file
+        # Turbine ID is the YAML file stem (allows same model with different configs)
+        turbine_id = Path(yaml_file).stem
+
+        # Validate uniqueness
+        if "turbine" in self.data.coords:
+            existing = list(self.data.coords["turbine"].values)
+            if turbine_id in existing:
+                raise ValueError(f"Duplicate turbine_id: {turbine_id!r}")
+
+        # Load the YAML file
         with yaml_file.open('r') as f:
             turbine_data = yaml.safe_load(f)
-        # extract wind turbine data
-        turbine_name = f"{turbine_data['manufacturer']}.{turbine_data['model']}.{turbine_data['capacity']}"
+
+        # Extract required turbine metadata
+        manufacturer = str(turbine_data['manufacturer'])
+        model = str(turbine_data['model'])
+        capacity = float(turbine_data['capacity'])
+        hub_height = float(turbine_data['hub_height'])
+        rotor_diameter = float(turbine_data['rotor_diameter'])
+        commissioning_year = int(turbine_data['commissioning_year'])
+        turbine_model_key = f"{manufacturer}.{model}.{capacity}"
+
+        # Extract power curve data
         old_u = np.array(list(map(float, turbine_data['V'])))
         old_p = np.array(list(map(float, turbine_data['cf'])))
 
@@ -876,25 +903,53 @@ class _WindAtlas(_AtlasDataVarSetterMixin):
         u = self.data.coords["wind_speed"].values
         new_p = np.interp(u, old_u, old_p, left=0.0, right=0.0)
 
-        # initialize wind turbine power curves on atlas grid
+        # Initialize wind turbine power curves on atlas grid
         power_curve = xr.DataArray(data=new_p, coords={'wind_speed': u}, dims=['wind_speed'])
-        power_curve = power_curve.assign_coords(turbine=turbine_name).expand_dims('turbine')
-
-        # Direct assignment (power_curve is non-raster: dims are wind_speed/turbine, not x/y)
+        power_curve = power_curve.assign_coords(turbine=turbine_id).expand_dims('turbine')
         power_curve.name = "power_curve"
 
+        # Create metadata DataArrays (1D on turbine dim)
+        meta_vars = {
+            "turbine_manufacturer": xr.DataArray([manufacturer], dims=["turbine"], coords={"turbine": [turbine_id]}),
+            "turbine_model": xr.DataArray([model], dims=["turbine"], coords={"turbine": [turbine_id]}),
+            "turbine_capacity": xr.DataArray([capacity], dims=["turbine"], coords={"turbine": [turbine_id]}),
+            "turbine_hub_height": xr.DataArray([hub_height], dims=["turbine"], coords={"turbine": [turbine_id]}),
+            "turbine_rotor_diameter": xr.DataArray([rotor_diameter], dims=["turbine"], coords={"turbine": [turbine_id]}),
+            "turbine_commissioning_year": xr.DataArray([commissioning_year], dims=["turbine"], coords={"turbine": [turbine_id]}),
+            "turbine_model_key": xr.DataArray([turbine_model_key], dims=["turbine"], coords={"turbine": [turbine_id]}),
+        }
+
         if "power_curve" not in self.data.data_vars:
-            # First turbine: establish Dataset coord turbine=[turbine_name], then assign
-            self.data = self.data.assign_coords(turbine=[turbine_name])
+            # First turbine: establish Dataset coord turbine=[turbine_id], then assign
+            self.data = self.data.assign_coords(turbine=[turbine_id])
             self.data["power_curve"] = power_curve
+            for name, da in meta_vars.items():
+                self.data[name] = da
             return
 
-        # Append: concat, then replace entire power_curve in dataset
-        # Must drop old power_curve first to avoid xarray dimension conflict during coord update
-        combined = xr.concat([self.data["power_curve"], power_curve], dim="turbine")
-        self.data = self.data.drop_vars("power_curve")
-        self.data = self.data.assign_coords(turbine=combined.coords["turbine"].values)
-        self.data["power_curve"] = combined
+        # Append: concat power_curve and metadata, then replace in dataset
+        # First, collect existing data before dropping
+        old_pc = self.data["power_curve"]
+        old_meta = {name: self.data[name] for name in meta_vars if name in self.data.data_vars}
+
+        # Concat power curve
+        combined_pc = xr.concat([old_pc, power_curve], dim="turbine")
+
+        # Concat metadata
+        combined_meta = {}
+        for name, new_da in meta_vars.items():
+            if name in old_meta:
+                combined_meta[name] = xr.concat([old_meta[name], new_da], dim="turbine")
+            else:
+                combined_meta[name] = new_da
+
+        # Drop existing vars to avoid dimension conflict during coord update
+        vars_to_drop = ["power_curve"] + list(old_meta.keys())
+        self.data = self.data.drop_vars(vars_to_drop)
+        self.data = self.data.assign_coords(turbine=combined_pc.coords["turbine"].values)
+        self.data["power_curve"] = combined_pc
+        for name, da in combined_meta.items():
+            self.data[name] = da
 
     _load_gwa = load_gwa
     _build_netcdf = build_netcdf

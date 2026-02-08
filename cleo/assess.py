@@ -604,9 +604,9 @@ def simulate_capacity_factors(
     rho_cache = {}  # {hub_height: rho_da}
     dummy_shear = None  # Will be computed once if needed
 
-    for turbine_model in self.data.coords["turbine"].values:
-        h_turbine = self.get_turbine_attribute(turbine_model, "hub_height")
-        p_power_curve = self.data.power_curve.sel(turbine=turbine_model).values
+    for turbine_id in self.data.coords["turbine"].values:
+        h_turbine = self.get_turbine_attribute(turbine_id, "hub_height")
+        p_power_curve = self.data.power_curve.sel(turbine=turbine_id).values
         u_power_curve = self.data.coords["wind_speed"].values
 
         if weibull_height_mode == "hub":
@@ -673,8 +673,8 @@ def simulate_capacity_factors(
             else:
                 cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
 
-        cf = cf.expand_dims(turbine=[turbine_model])
-        logger.info(f"Capacity factors for {turbine_model} in {self.data.attrs['country']} computed.")
+        cf = cf.expand_dims(turbine=[turbine_id])
+        logger.info(f"Capacity factors for {turbine_id} in {self.data.attrs['country']} computed.")
         cap_factor.append(cf)
 
     cap_factor = xr.concat(cap_factor, dim="turbine")
@@ -788,14 +788,14 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1, force: bool = Fals
         self.simulate_capacity_factors(chunk_size, force=force)
 
     lcoe_list = []
-    for turbine_model in self.data.coords["turbine"].values:
+    for turbine_id in self.data.coords["turbine"].values:
 
         inputs = {
-            "power": self.get_turbine_attribute(turbine_model, "capacity"),
-            "capacity_factors": self.data["capacity_factors"].sel(turbine=turbine_model),
-            "overnight_cost": self.get_overnight_cost(turbine_model) *
-                              self.get_turbine_attribute(turbine_model, "capacity") * turbine_cost_share,
-            "grid_cost": grid_connect_cost(self.get_turbine_attribute(turbine_model, "capacity")),
+            "power": self.get_turbine_attribute(turbine_id, "capacity"),
+            "capacity_factors": self.data["capacity_factors"].sel(turbine=turbine_id),
+            "overnight_cost": self.get_overnight_cost(turbine_id) *
+                              self.get_turbine_attribute(turbine_id, "capacity") * turbine_cost_share,
+            "grid_cost": grid_connect_cost(self.get_turbine_attribute(turbine_id, "capacity")),
             "om_fixed": self.get_cost_assumptions("fixed_om_cost"),
             "om_variable": self.get_cost_assumptions("variable_om_cost"),
             "discount_rate": self.get_cost_assumptions("discount_rate"),
@@ -807,7 +807,7 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1, force: bool = Fals
         else:
             lcoe = compute_chunked(self, levelized_cost, chunk_size, **inputs)
 
-        lcoe = lcoe.expand_dims(turbine=[turbine_model])
+        lcoe = lcoe.expand_dims(turbine=[turbine_id])
         lcoe_list.append(lcoe)
 
     lcoe_combined = xr.concat(lcoe_list, dim='turbine').rename("lcoe").assign_attrs(units="EUR/MWh")

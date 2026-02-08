@@ -116,7 +116,7 @@ def create_mock_atlas_with_density(
             self._weibull_A = A_da
             self._weibull_k = k_da
 
-        def get_turbine_attribute(self, turbine_model: str, key: str):
+        def get_turbine_attribute(self, turbine_id: str, key: str):
             if key == "hub_height":
                 return hub_height
             raise KeyError(f"Unknown attribute: {key}")
@@ -478,7 +478,7 @@ def test_missing_air_density_raises():
             self._weibull_A = A_da
             self._weibull_k = k_da
 
-        def get_turbine_attribute(self, turbine_model, key):
+        def get_turbine_attribute(self, turbine_id, key):
             if key == "hub_height":
                 return 100.0
             raise KeyError(key)

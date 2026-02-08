@@ -19,15 +19,29 @@ import cleo
 import cleo.classes as C
 
 
-def _make_turbine_yaml(path: Path, manufacturer: str, model: str, capacity: int) -> Path:
-    """Create a minimal turbine YAML file."""
+def _make_turbine_yaml(
+    path: Path,
+    manufacturer: str,
+    model: str,
+    capacity: int,
+    hub_height: float = 80.0,
+    rotor_diameter: float = 40.0,
+    commissioning_year: int = 2020,
+    filename: str | None = None,
+) -> Path:
+    """Create a minimal turbine YAML file with all required fields."""
     yaml_content = f"""manufacturer: {manufacturer}
 model: {model}
 capacity: {capacity}
+hub_height: {hub_height}
+rotor_diameter: {rotor_diameter}
+commissioning_year: {commissioning_year}
 V: [0, 5, 10, 15, 20, 25]
 cf: [0.0, 0.1, 0.3, 0.4, 0.3, 0.1]
 """
-    yaml_file = path / f"{manufacturer}.{model}.{capacity}.yml"
+    if filename is None:
+        filename = f"{manufacturer}.{model}.{capacity}"
+    yaml_file = path / f"{filename}.yml"
     yaml_file.write_text(yaml_content)
     return yaml_file
 
@@ -68,10 +82,10 @@ def test_windatlas_add_turbine_data_appends_without_collapse(tmp_path: Path) -> 
     wind.add_turbine_data(yaml2)
     assert wind.data.sizes["turbine"] == 2, f"Should have 2 turbines, got {wind.data.sizes['turbine']}"
 
-    # Verify both turbine names are present
-    turbine_names = set(wind.data.coords["turbine"].values.tolist())
-    assert "TestMfg.ModelA.500" in turbine_names
-    assert "TestMfg.ModelB.1000" in turbine_names
+    # Verify both turbine IDs (YAML stems) are present
+    turbine_ids = set(wind.data.coords["turbine"].values.tolist())
+    assert "TestMfg.ModelA.500" in turbine_ids  # YAML stem is the turbine ID
+    assert "TestMfg.ModelB.1000" in turbine_ids
 
 
 def test_atlas_add_turbine_keeps_list_synced_with_dataset(tmp_path: Path) -> None:

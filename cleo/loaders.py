@@ -245,11 +245,11 @@ def get_cost_assumptions(self, attribute_name):
     return data[attribute_name]
 
 
-def get_overnight_cost(self, turbine_model):
-    power = self.get_turbine_attribute(turbine_model, "capacity") / 1000
-    hub_height = self.get_turbine_attribute(turbine_model, "hub_height")
-    rotor_diameter = self.get_turbine_attribute(turbine_model, "rotor_diameter")
-    year = self.get_turbine_attribute(turbine_model, "commissioning_year")
+def get_overnight_cost(self, turbine_id):
+    power = self.get_turbine_attribute(turbine_id, "capacity") / 1000
+    hub_height = self.get_turbine_attribute(turbine_id, "hub_height")
+    rotor_diameter = self.get_turbine_attribute(turbine_id, "rotor_diameter")
+    year = self.get_turbine_attribute(turbine_id, "commissioning_year")
     return turbine_overnight_cost(power=power, hub_height=hub_height, rotor_diameter=rotor_diameter, year=year)
 
 
@@ -283,19 +283,49 @@ def get_powercurves(self):
     logger.info(f"Power curves for {self.wind_turbines} loaded.")
 
 
-def get_turbine_attribute(self, turbine, attribute_name):
+def get_turbine_attribute(self, turbine_id, attribute_name):
     """
-    Retrieve turbine attribute from YAML in `<atlas.path>/resources/`.
+    Retrieve turbine attribute from dataset metadata.
 
-    :param turbine: Name of the wind turbine in the format "Manufacturer.Type.Power_in_kW"
-    :type turbine: str
+    Turbine metadata is stored in the dataset during ingest; no runtime YAML reads.
+
+    :param turbine_id: Turbine config ID (YAML file stem)
+    :type turbine_id: str
     :param attribute_name: Name of the turbine attribute to retrieve
+        (e.g., "hub_height", "capacity", "rotor_diameter", "commissioning_year",
+         "manufacturer", "model", "turbine_model_key")
     :type attribute_name: str
     :return: Value of the specific turbine attribute
+    :raises ValueError: If turbine_id not found or attribute missing from dataset
     """
-    path = Path(self.parent.path) / "resources" / f"{turbine}.yml"
-    data = _load_yaml_file(path, context=f"turbine metadata turbine={turbine}")
-    return data[attribute_name]
+    # Map attribute names to dataset variable names
+    var_name = f"turbine_{attribute_name}"
+
+    if var_name not in self.data.data_vars:
+        raise ValueError(
+            f"Turbine attribute '{attribute_name}' not found in dataset for turbine_id={turbine_id!r}. "
+            f"Dataset may have been created before turbine metadata storage was implemented. "
+            f"Re-add turbines to store metadata."
+        )
+
+    # Check turbine_id exists in dataset
+    if "turbine" not in self.data.coords:
+        raise ValueError(
+            f"No turbines in dataset; cannot retrieve attribute '{attribute_name}' for turbine_id={turbine_id!r}."
+        )
+
+    turbine_ids = list(self.data.coords["turbine"].values)
+    if turbine_id not in turbine_ids:
+        raise ValueError(
+            f"Turbine ID {turbine_id!r} not found in dataset. Available: {turbine_ids}"
+        )
+
+    # Retrieve value for this turbine
+    value = self.data[var_name].sel(turbine=turbine_id).values
+    # Convert numpy scalar to Python scalar
+    if hasattr(value, "item"):
+        value = value.item()
+    return value
 
 
 def load_weibull_parameters(self, height):

@@ -1,7 +1,7 @@
 """assess: test_wind_shear.
 
 Contracts for compute_wind_shear_coefficient():
-- rejects dask-backed inputs (TypeError)
+- accepts dask-backed inputs (output remains lazy)
 - masks invalid cells (<=0, NaN) as NaN in output
 - never produces inf
 - does not emit RuntimeWarnings from log/divide on invalid inputs
@@ -62,14 +62,15 @@ def _make_self(u50: np.ndarray, u100: np.ndarray) -> _Self:
     return _Self(data=xr.Dataset({"mean_wind_speed": mean}), parent=_Parent(country="AUT"))
 
 
-def test_wind_shear_rejects_dask_arrays() -> None:
+def test_wind_shear_accepts_dask_arrays() -> None:
     """
-    D3=B: Dask arrays are unsupported; must raise TypeError with a clear message.
+    Dask arrays are now supported; output should remain dask-backed (lazy).
     """
     da = pytest.importorskip("dask.array")
+    from cleo.assess import _is_dask_backed
 
-    u50 = xr.DataArray(da.ones((2, 2), chunks=(2, 2)), dims=("y", "x"))
-    u100 = xr.DataArray(da.ones((2, 2), chunks=(2, 2)), dims=("y", "x"))
+    u50 = xr.DataArray(da.ones((2, 2), chunks=(2, 2)) * 5.0, dims=("y", "x"))
+    u100 = xr.DataArray(da.ones((2, 2), chunks=(2, 2)) * 10.0, dims=("y", "x"))
 
     mean = xr.concat(
         [u50.expand_dims(height=[50.0]), u100.expand_dims(height=[100.0])],
@@ -79,8 +80,16 @@ def test_wind_shear_rejects_dask_arrays() -> None:
 
     self = _Self(data=xr.Dataset({"mean_wind_speed": mean}), parent=_Parent(country="AUT"))
 
-    with pytest.raises(TypeError, match="Dask arrays are not supported"):
-        compute_wind_shear_coefficient(self, chunk_size=None)
+    # Should NOT raise - dask is now supported
+    compute_wind_shear_coefficient(self, chunk_size=None)
+
+    # Output should be dask-backed (lazy)
+    assert _is_dask_backed(self.data["wind_shear"]), "wind_shear should remain dask-backed"
+
+    # Compute to verify correctness
+    ws = self.data["wind_shear"].compute().values
+    expected = float(np.log(10.0 / 5.0) / np.log(100.0 / 50.0))  # = 1.0
+    np.testing.assert_allclose(ws, expected, rtol=1e-12)
 
 
 def test_wind_shear_masks_zero_wind_speed() -> None:

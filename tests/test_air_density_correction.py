@@ -784,7 +784,7 @@ def test_air_density_nonpositive_raises():
 
 
 # ============================================================================
-# Test 9: Air density median outside plausible range raises ValueError
+# Test 9: Air density median outside expected range raises ValueError
 # ============================================================================
 
 def test_air_density_units_median_out_of_range_raises():
@@ -817,7 +817,7 @@ def test_air_density_units_median_out_of_range_raises():
         hub_height=100.0,
     )
 
-    with pytest.raises(ValueError, match=r"outside plausible range"):
+    with pytest.raises(ValueError, match=r"outside expected range"):
         simulate_capacity_factors(
             atlas, force=True, weibull_height_mode="hub", air_density_mode="gwa"
         )
@@ -832,7 +832,7 @@ def test_air_density_units_median_out_of_range_raises():
         hub_height=100.0,
     )
 
-    with pytest.raises(ValueError, match=r"outside plausible range"):
+    with pytest.raises(ValueError, match=r"outside expected range"):
         simulate_capacity_factors(
             atlas_low, force=True, weibull_height_mode="hub", air_density_mode="gwa"
         )

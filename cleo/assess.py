@@ -9,7 +9,10 @@ import logging
 from scipy.special import gamma
 from cleo.utils import _match_to_template
 from cleo.chunk import compute_chunked
-from cleo.spatial import crs_equal, reproject_raster_if_needed, to_crs_if_needed, _rio_clip_robust
+from cleo.spatial import (
+    crs_equal, reproject_raster_if_needed, to_crs_if_needed, _rio_clip_robust,
+    _validate_values, _is_dask_backed as _spatial_is_dask_backed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -173,20 +176,6 @@ def _is_dask_backed(data):
     return False
 
 
-def _require_not_dask(*arrays):
-    """
-    Raise TypeError if any input is dask-backed.
-
-    :param arrays: Variable number of arrays to check
-    :raises TypeError: If any array is dask-backed
-    """
-    for arr in arrays:
-        if _is_dask_backed(arr):
-            raise TypeError(
-                "Dask arrays are not supported; call .compute() first."
-            )
-
-
 # %% compute methods
 def compute_air_density_correction(self, chunk_size=None, force: bool = False):
     """
@@ -295,7 +284,8 @@ def compute_air_density_correction(self, chunk_size=None, force: bool = False):
                 f"elevation.rio.crs={elevation.rio.crs}, clip_shape.total_bounds={clip_shape.total_bounds}"
             ) from e
 
-    if chunk_size is None:
+    if chunk_size is None or _is_dask_backed(elevation):
+        # Dask-backed: execute directly (dask handles chunking internally)
         rho = rho_correction(elevation)
     else:
         rho = compute_chunked(self, rho_correction, chunk_size, elevation=elevation)
@@ -349,11 +339,11 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True, force: 
         return mean_wind_speed.rename("mean_wind_speed").assign_attrs(units="m/s").squeeze()
 
     weibull_a, weibull_k = self.load_weibull_parameters(height)
-    mean_wind_speed_data = (
-        calculate_mean_wind_speed(weibull_a=weibull_a, weibull_k=weibull_k)
-        if chunk_size is None
-        else compute_chunked(self, calculate_mean_wind_speed, chunk_size, weibull_a=weibull_a, weibull_k=weibull_k)
-    )
+    if chunk_size is None or _is_dask_backed(weibull_a):
+        # Dask-backed: execute directly (dask handles chunking internally)
+        mean_wind_speed_data = calculate_mean_wind_speed(weibull_a=weibull_a, weibull_k=weibull_k)
+    else:
+        mean_wind_speed_data = compute_chunked(self, calculate_mean_wind_speed, chunk_size, weibull_a=weibull_a, weibull_k=weibull_k)
 
     # Align new slice to template grid if available
     has_template = "template" in self.data.data_vars
@@ -449,8 +439,7 @@ def compute_wind_shear_coefficient(self, chunk_size=None, force: bool = False):
     u_mean_50 = self.data.mean_wind_speed.sel(height=50)
     u_mean_100 = self.data.mean_wind_speed.sel(height=100)
 
-    # Dask arrays not supported - require eager computation
-    _require_not_dask(u_mean_50, u_mean_100)
+    # Note: operations below are dask-compatible (comparisons, np.log, xr.where all work lazily)
 
     # Mask invalid cells to avoid log(<=0) which produces inf/NaN
     valid = (u_mean_50 > 0) & (u_mean_100 > 0) & np.isfinite(u_mean_50) & np.isfinite(u_mean_100)
@@ -463,17 +452,16 @@ def compute_wind_shear_coefficient(self, chunk_size=None, force: bool = False):
             np.nan,
         )
 
-    # [VALIDATION BRANCH] Log warning if invalid cells exist.
-    # This .compute() is intentional for the validation log message only.
-    invalid_sum = (~valid).sum()
-    if hasattr(invalid_sum.data, "compute"):
-        invalid_sum = invalid_sum.compute()
-    invalid_count = int(invalid_sum.values.item())
-    if invalid_count > 0:
-        total_count = int(valid.size)
-        logger.warning(
-            f"wind_shear: {invalid_count}/{total_count} cells masked (non-positive or non-finite wind speed)"
-        )
+    # [VALIDATION BRANCH] Log warning if invalid cells exist (eager mode only).
+    # For dask-backed arrays, skip count to avoid triggering full compute.
+    if not _is_dask_backed(valid):
+        invalid_sum = (~valid).sum()
+        if bool(invalid_sum > 0):
+            invalid_count = int(invalid_sum)
+            total_count = int(valid.size)
+            logger.warning(
+                f"wind_shear: {invalid_count}/{total_count} cells masked (non-positive or non-finite wind speed)"
+            )
 
     # Set provenance and store
     alpha = _set_prov(alpha.squeeze().rename("wind_shear"), algo, ver, params)
@@ -516,7 +504,8 @@ def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
         "u_power_curve": u
     }
 
-    if chunk_size is None:
+    if chunk_size is None or _is_dask_backed(a100):
+        # Dask-backed: execute directly (dask handles chunking internally)
         p = weibull_probability_density(**inputs)
     else:
         p = compute_chunked(self, weibull_probability_density, chunk_size, **inputs)
@@ -533,11 +522,11 @@ def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
 
 
 # %% dependent methods
-# TODO(rotor-eq-cf, option1):
+# TODO(rotor-eq-cf, REWS: Rotor Equivalent Wind Speed):
 # Add an OPTIONAL rotor-equivalent mode to capacity factor simulation that stays consistent with
 # the existing hub-height Weibull workflow and avoids introducing a separate shear exponent alpha.
 #
-# Idea (Option 1, minimal & pythonic):
+# Idea (minimal & pythonic):
 # - We already have GWA Weibull parameters A(z), k(z) across multiple heights (via existing hub-height
 #   interpolation utilities). Use those directly to compute a rotor-equivalent cubic-moment factor f.
 #
@@ -695,7 +684,8 @@ def simulate_capacity_factors(
                     "h_reference": h_turbine,
                     "correction_factor": loss_factor,
                 }
-                if chunk_size is None:
+                if chunk_size is None or _is_dask_backed(pdf_hub):
+                    # Dask-backed: execute directly (dask handles chunking internally)
                     cf = capacity_factor(**inputs)
                 else:
                     cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
@@ -709,7 +699,8 @@ def simulate_capacity_factors(
                 "h_turbine": h_turbine,
                 "correction_factor": loss_factor,
             }
-            if chunk_size is None:
+            if chunk_size is None or _is_dask_backed(self.data["weibull_pdf"]):
+                # Dask-backed: execute directly (dask handles chunking internally)
                 cf = capacity_factor(**inputs)
             else:
                 cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
@@ -868,7 +859,8 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1, force: bool = Fals
             "lifetime": self.get_cost_assumptions("turbine_lifetime")
         }
 
-        if chunk_size is None:
+        if chunk_size is None or _is_dask_backed(self.data["capacity_factors"]):
+            # Dask-backed: execute directly (dask handles chunking internally)
             lcoe = levelized_cost(**inputs)
         else:
             lcoe = compute_chunked(self, levelized_cost, chunk_size, **inputs)
@@ -932,11 +924,13 @@ def compute_optimal_power_energy(self, force: bool = False):
     power = _set_prov(power, algo, ver, params)
     self._set_var("optimal_power", power)
 
-    # Compute optimal energy using argmin for positional indexing
-    # [REQUIRED COMPUTE] xarray's .isel() with DataArray indexer requires eager array
-    # for advanced indexing - this cannot be avoided without restructuring the algorithm.
-    least_cost_index = self.data["lcoe"].fillna(9999).argmin(dim='turbine').compute()
-    energy = self.data["capacity_factors"].isel(turbine=least_cost_index).drop_vars("turbine")
+    # Compute optimal energy using xr.where() to stay lazy
+    # Select capacity_factors where lcoe == min(lcoe) for each (y, x)
+    lcoe_filled = self.data["lcoe"].fillna(9999)
+    min_lcoe = lcoe_filled.min(dim='turbine')
+    is_min_lcoe = lcoe_filled == min_lcoe
+    # Use where + max to select CF at min-LCOE turbine (max collapses dim, only one True per location)
+    energy = self.data["capacity_factors"].where(is_min_lcoe).max(dim='turbine')
     energy = energy.assign_coords({'turbine': "min_lcoe"})
     # power is in kW; CF is dimensionless; 8766 h/year -> kWh/year; divide by 1e6 -> GWh/year
     energy = (energy * power * 8766 / 10 ** 6).rename("optimal_energy").assign_attrs(units="GWh/a")
@@ -1209,9 +1203,15 @@ def compute_air_density_at_height(
         rho_hub = _match_to_template(rho_hub, tpl)
 
     # [VALIDATION BRANCH] Validate interpolated values: must be > 0 and in plausible kg/m³ range.
-    # This .compute()/.values is intentional for runtime validation only.
-    arr = rho_hub.values if not hasattr(rho_hub.data, "compute") else rho_hub.compute().values
-    _validate_air_density(arr, context=f"after interpolation to height={height}m")
+    # Uses policy-driven validation: probe-based for dask, full for eager.
+    _validate_values(
+        rho_hub, self.data,
+        validation="auto",
+        check_nan=False,  # NaNs allowed at edges
+        check_positive=True,
+        check_range=(0.5, 2.0),
+        context=f"air_density after interpolation to height={height}m",
+    )
 
     return rho_hub
 
@@ -1247,8 +1247,8 @@ def compute_weibull_pdf_at_height(
             A_list.append(a_h)
             k_list.append(k_h)
             available_heights.append(h)
-        except (FileNotFoundError, Exception):
-            # Skip heights that don't have data
+        except FileNotFoundError:
+            # Skip heights that don't have data files
             continue
 
     if len(available_heights) < 2:
@@ -1280,7 +1280,8 @@ def compute_weibull_pdf_at_height(
         "u_power_curve": u,
     }
 
-    if chunk_size is None:
+    if chunk_size is None or _is_dask_backed(A_hub):
+        # Dask-backed: execute directly (dask handles chunking internally)
         pdf = weibull_probability_density(**inputs)
     else:
         pdf = compute_chunked(self, weibull_probability_density, chunk_size, **inputs)

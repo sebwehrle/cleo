@@ -19,6 +19,23 @@ from cleo.spatial import reproject_raster_if_needed, to_crs_if_needed
 logger = logging.getLogger(__name__)
 
 
+def _maybe_chunk_auto(x):
+    """
+    Chunk a DataArray with 'auto' chunking if dask is available.
+
+    If dask is not installed or chunking fails, returns the input unchanged.
+    This allows the codebase to work with or without dask installed.
+    """
+    try:
+        import dask.array  # noqa: F401
+    except ImportError:
+        return x
+    try:
+        return x.chunk("auto")
+    except Exception:
+        return x
+
+
 def _load_yaml_file(path: Path, *, context: str) -> dict:
     """Load a YAML file with consistent UTF-8 handling and good error context."""
     path = Path(path)
@@ -357,8 +374,8 @@ def load_weibull_parameters(self, height):
         )
 
     try:
-        a = rxr.open_rasterio(a_path).chunk("auto")
-        k = rxr.open_rasterio(k_path).chunk("auto")
+        a = _maybe_chunk_auto(rxr.open_rasterio(a_path))
+        k = _maybe_chunk_auto(rxr.open_rasterio(k_path))
         a.name = "weibull_a"
         k.name = "weibull_k"
 
@@ -409,7 +426,7 @@ def load_air_density(self, height):
         )
 
     try:
-        rho = rxr.open_rasterio(rho_path).chunk("auto")
+        rho = _maybe_chunk_auto(rxr.open_rasterio(rho_path))
         rho.name = "air_density"
 
         # Ensure CRS is set before reprojection

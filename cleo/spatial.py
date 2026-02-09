@@ -6,10 +6,236 @@ import pyproj
 import rasterio.crs
 import xarray as xr
 
-from typing import Union
+from typing import Union, Literal
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Validation Policy Helpers (dask-friendly automated validation)
+# =============================================================================
+
+Validation = Literal["auto", "full", "probe", "none"]
+
+
+def _is_dask_backed(obj) -> bool:
+    """
+    Check if obj is backed by a dask array.
+
+    :param obj: xarray DataArray, Dataset, or array-like
+    :return: True if dask-backed, False otherwise
+    """
+    if hasattr(obj, "data"):
+        arr = obj.data
+    else:
+        arr = obj
+
+    # Check for dask array via module
+    if hasattr(arr, "compute") and hasattr(arr, "__module__"):
+        module = getattr(arr, "__module__", "") or ""
+        if module.startswith("dask"):
+            return True
+
+    # Alternative: check __dask_graph__
+    if hasattr(arr, "__dask_graph__"):
+        return True
+
+    return False
+
+
+def _get_probe_points(ds: xr.Dataset, n: int = 8) -> list[tuple[float, float]]:
+    """
+    Get probe points for dask-friendly validation.
+
+    Returns cached probe points from ds.attrs["cleo_probe_points"] if present.
+    Otherwise, derives n spread-out valid indices from the "template" variable.
+
+    :param ds: Dataset (may contain "template" variable)
+    :param n: Number of probe points to derive (default 8)
+    :return: List of (x, y) coordinate tuples. Empty list if "template" absent.
+    """
+    # Return cached probe points if present
+    if "cleo_probe_points" in ds.attrs:
+        return ds.attrs["cleo_probe_points"]
+
+    # Template absent -> return empty (structural checks still run; no probe value check)
+    if "template" not in ds.data_vars:
+        return []
+
+    template = ds["template"]
+
+    # Get validity mask (True where valid data exists)
+    if np.issubdtype(template.dtype, np.floating):
+        mask = template.notnull()
+    else:
+        # For non-float types, assume all non-zero values are valid
+        mask = template.astype(bool)
+
+    # If mask is dask-backed, compute ONCE here (validation setup only)
+    if _is_dask_backed(mask):
+        mask = mask.compute()
+
+    # Find valid indices
+    valid_mask_np = mask.values
+    valid_indices = np.argwhere(valid_mask_np)
+
+    if len(valid_indices) == 0:
+        return []
+
+    # Choose n spread-out valid indices using linspace
+    n_valid = len(valid_indices)
+    if n_valid <= n:
+        selected_indices = valid_indices
+    else:
+        idx_positions = np.linspace(0, n_valid - 1, n, dtype=int)
+        selected_indices = valid_indices[idx_positions]
+
+    # Map indices to (x, y) coordinates
+    x_coords = template.coords["x"].values
+    y_coords = template.coords["y"].values
+
+    # Handle dimension order (y, x) or (x, y)
+    dims = template.dims
+    probe_points = []
+    for idx in selected_indices:
+        if dims == ("y", "x"):
+            y_idx, x_idx = idx
+        else:  # ("x", "y")
+            x_idx, y_idx = idx
+        probe_points.append((float(x_coords[x_idx]), float(y_coords[y_idx])))
+
+    # Cache in attrs (does NOT mutate data_vars; attrs are metadata)
+    ds.attrs["cleo_probe_points"] = probe_points
+
+    return probe_points
+
+
+def _probe_scalars(da: xr.DataArray, pts: list[tuple[float, float]]) -> np.ndarray:
+    """
+    Extract scalar values at probe points (dask-friendly).
+
+    Only computes a handful of scalars via .sel().compute().
+
+    :param da: DataArray to probe (may be dask-backed)
+    :param pts: List of (x, y) coordinate tuples
+    :return: 1D numpy array of probed values
+    """
+    if not pts:
+        return np.array([])
+
+    values = []
+    for x, y in pts:
+        val = da.sel(x=x, y=y, method="nearest").compute()
+        values.append(float(val.values))
+
+    return np.array(values)
+
+
+def _validate_values(
+    da: xr.DataArray,
+    ds: xr.Dataset,
+    *,
+    validation: Validation = "auto",
+    check_nan: bool = True,
+    check_positive: bool = False,
+    check_range: tuple[float, float] | None = None,
+    context: str = "",
+) -> None:
+    """
+    Validate DataArray values using policy-driven approach.
+
+    Validation modes:
+    - "auto" (default): probe if dask-backed, full if eager
+    - "full": compute full-array reductions (may trigger dask compute)
+    - "probe": use probe points from template (dask-friendly)
+    - "none": skip value checks (structural checks still apply elsewhere)
+
+    :param da: DataArray to validate
+    :param ds: Dataset (for probe points from "template")
+    :param validation: Validation policy
+    :param check_nan: Check for NaN values
+    :param check_positive: Check that all values are > 0
+    :param check_range: Check that median is in (min, max) range
+    :param context: Context string for error messages
+    :raises ValueError: If validation fails
+    """
+    if validation == "none":
+        return
+
+    if validation == "auto":
+        validation = "probe" if _is_dask_backed(da) else "full"
+
+    if validation == "full":
+        # Full-array checks using xarray reductions
+        # bool()/float() on 0-dim result triggers compute if dask-backed
+
+        if check_nan:
+            # Check for NaN or Inf
+            is_invalid = da.isnull() | np.isinf(da)
+            if bool(is_invalid.any()):
+                nan_count = int(is_invalid.sum())
+                raise ValueError(
+                    f"Invalid values {context}: {nan_count} NaN/Inf values found."
+                )
+
+        # For remaining checks, work with finite values only
+        finite_da = da.where(np.isfinite(da))
+
+        if check_positive:
+            min_val = finite_da.min(skipna=True)
+            # min of empty array (all NaN) returns NaN
+            if not np.isnan(float(min_val)) and float(min_val) <= 0:
+                raise ValueError(
+                    f"Invalid values {context}: values must be > 0. "
+                    f"Found min={float(min_val):.6g}"
+                )
+
+        if check_range is not None:
+            median_val = finite_da.median(skipna=True)
+            # median of empty array (all NaN) returns NaN
+            if not np.isnan(float(median_val)):
+                lo, hi = check_range
+                if not (lo <= float(median_val) <= hi):
+                    raise ValueError(
+                        f"Invalid values {context}: median={float(median_val):.6g} "
+                        f"outside expected range [{lo}, {hi}]"
+                    )
+
+    elif validation == "probe":
+        pts = _get_probe_points(ds)
+        if not pts:
+            # Template absent -> skip probe value check (non-fatal)
+            # Structural checks still apply elsewhere
+            return
+
+        vals = _probe_scalars(da, pts)
+
+        if check_nan:
+            if np.any(~np.isfinite(vals)):
+                nan_count = int(np.sum(~np.isfinite(vals)))
+                raise ValueError(
+                    f"Invalid values {context}: {nan_count}/{len(vals)} probe points are NaN/Inf."
+                )
+
+        if check_positive:
+            finite_vals = vals[np.isfinite(vals)]
+            if finite_vals.size > 0 and np.min(finite_vals) <= 0:
+                raise ValueError(
+                    f"Invalid values {context}: probe values must be > 0. "
+                    f"Found min={np.min(finite_vals):.6g}"
+                )
+
+        if check_range is not None:
+            finite_vals = vals[np.isfinite(vals)]
+            if finite_vals.size > 0:
+                median = float(np.nanmedian(finite_vals))
+                lo, hi = check_range
+                if not (lo <= median <= hi):
+                    raise ValueError(
+                        f"Invalid values {context}: probe median={median:.6g} "
+                        f"outside expected range [{lo}, {hi}]"
+                    )
 
 
 # =============================================================================
@@ -388,7 +614,9 @@ def save_to_geotiff(da: xr.DataArray, crs: str, save_path: Path, raster_name: st
     save_path.mkdir(parents=True, exist_ok=True)
 
     # Handle NaNs -> nodata only when NaNs exist (B1)
-    if bool(da.isnull().any()):
+    # bool() on 0-dim result triggers compute if dask-backed
+    has_nan = da.isnull().any()
+    if bool(has_nan):
         da = da.fillna(nodata_value)
         da.rio.write_nodata(nodata_value, inplace=True)
 

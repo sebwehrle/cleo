@@ -1,6 +1,6 @@
 """assess: test_dask_behavior.
 
-Tests for cleo.assess dask-guard helpers.
+Tests for cleo.assess dask detection helpers.
 
 Contract:
 - Tests must pass whether or not dask is installed.
@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from cleo.assess import _is_dask_backed, _require_not_dask
+from cleo.assess import _is_dask_backed
 
 dask = pytest.importorskip("dask")
 import dask.array as da  # noqa: E402
@@ -34,20 +34,3 @@ def test_is_dask_backed_detects_dask_array() -> None:
     """_is_dask_backed identifies dask-backed DataArrays."""
     assert _is_dask_backed(_da_dask()) is True
     assert _is_dask_backed(_da_numpy()) is False
-
-
-def test_require_not_dask_raises_typeerror() -> None:
-    """_require_not_dask raises TypeError with clear message for dask arrays."""
-    with pytest.raises(TypeError, match=r"Dask arrays are not supported"):
-        _require_not_dask(_da_dask())
-
-
-def test_require_not_dask_allows_numpy() -> None:
-    """_require_not_dask is a no-op for numpy-backed arrays."""
-    _require_not_dask(_da_numpy())
-
-
-def test_require_not_dask_checks_all_inputs() -> None:
-    """_require_not_dask checks all provided arrays, not just the first."""
-    with pytest.raises(TypeError, match=r"Dask arrays are not supported"):
-        _require_not_dask(_da_numpy(), _da_dask())

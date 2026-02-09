@@ -471,7 +471,7 @@ def load_gwa(self):
     """
     url = "https://globalwindatlas.info/api/gis/country"
     layers = ["air-density", "combined-Weibull-A", "combined-Weibull-k"]
-    heights = ["50", "100", "150", "200"]
+    heights = ["10", "50", "100", "150", "200"]
 
     c = self.parent.country
     path_raw = self.parent.path / "data" / "raw" / c

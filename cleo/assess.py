@@ -3,16 +3,13 @@ import hashlib
 import json
 import numpy as np
 import xarray as xr
-import rioxarray as rxr
+# rioxarray not imported here - assess.py is pure compute (no raw I/O)
 import logging
 
 from scipy.special import gamma
 from cleo.utils import _match_to_template
 from cleo.chunk import compute_chunked
-from cleo.spatial import (
-    crs_equal, reproject_raster_if_needed, to_crs_if_needed, _rio_clip_robust,
-    _validate_values, _is_dask_backed as _spatial_is_dask_backed,
-)
+from cleo.spatial import _validate_values
 
 logger = logging.getLogger(__name__)
 
@@ -177,126 +174,64 @@ def _is_dask_backed(data):
 
 
 # %% compute methods
-def compute_air_density_correction(self, chunk_size=None, force: bool = False):
+
+
+def compute_air_density_correction_core(
+    *,
+    elevation: xr.DataArray,
+    template: xr.DataArray,
+) -> xr.DataArray:
     """
-    Compute air density correction factor rho based on elevation data.
+    Pure compute function: air density correction factor based on elevation.
+
+    This is a stateless, I/O-free computation primitive. The caller is responsible
+    for providing elevation and template DataArrays that are already aligned to the
+    canonical grid.
+
+    Formula: rho_correction = 1.247015 * exp(-0.000104 * elevation) / 1.225
 
     Contract:
-    - Output is guaranteed to be on the same x/y grid as the Atlas template (if present),
-      otherwise on the reference GWA raster grid.
-    - CRS is enforced to self.parent.crs (Atlas CRS discipline).
-    - Final assignment to self.data is exact-grid safe (prevents NaN stripes from implicit alignment).
-    - Semantic caching: skips if existing result has matching signature.
+    - elevation and template MUST have identical y/x coords (caller must verify alignment).
+    - Output is NaN where elevation is NaN (propagates nodata).
+    - Remains lazy: never forces eager evaluation (compute/load/values).
+    - Returns a DataArray named "air_density_correction" on the same coords as elevation.
 
-    :param self: an instance of the _WindAtlas class
-    :param chunk_size: size of chunks in pixels for chunked computation. If None, computation is not chunked
-    :param force: if True, always recompute even if cached result exists
+    :param elevation: Elevation DataArray (meters a.s.l.) on canonical grid.
+    :param template: Template DataArray for output coords/dims alignment.
+    :return: DataArray "air_density_correction" factor, lazy if input is lazy.
     """
-    from cleo.loaders import load_elevation
-    from pathlib import Path
-    from rasterio.enums import Resampling
-    from rasterio.crs import CRS
+    # Core formula: barometric-like correction
+    rho_correction_factor = 1.247015 * np.exp(-0.000104 * elevation) / 1.225
 
-    # Semantic cache check
-    algo = "compute_air_density_correction"
-    ver = "1"
-    params = _base_params(self)
-    params["region"] = getattr(self.parent, "region", None) if self.parent else None
-    expected_sig = _sig(algo, ver, params)
+    # Ensure output has correct name and preserves coords from elevation
+    result = rho_correction_factor.rename("air_density_correction")
 
-    if not force and _matches(self.data, "air_density_correction", expected_sig):
-        logger.info(f"Air density correction for {self.parent.country} already computed (sig match), skipping.")
-        return
+    # Squeeze any singleton dimensions (e.g., band) but keep y, x
+    if "band" in result.dims:
+        result = result.squeeze("band", drop=True)
 
-    def rho_correction(elevation):
-        """
-        Compute air density correction factor based on elevation (meters a.s.l.)
-        """
-        rho_correction_factor = 1.247015 * np.exp(-0.000104 * elevation) / 1.225
-        return rho_correction_factor.squeeze().rename("air_density_correction_factor")
+    return result
 
-    # Normalize path to Path object (handles str input)
-    parent_path = Path(self.parent.path) if not isinstance(self.parent.path, Path) else self.parent.path
 
-    # Use A_100 raster as reference for grid alignment (raw GWA raster)
-    path_raw_country = parent_path / "data" / "raw" / f"{self.parent.country}"
-    reference_file = path_raw_country / f"{self.parent.country}_combined-Weibull-A_100.tif"
+def mean_wind_speed_from_weibull(
+    *,
+    A: xr.DataArray,
+    k: xr.DataArray,
+) -> xr.DataArray:
+    """
+    Compute mean wind speed from Weibull A and k parameters.
 
-    if not reference_file.exists():
-        raise FileNotFoundError(
-            f"Raw GWA files missing: {reference_file}. "
-            f"Run Atlas init/download first to fetch data for {self.parent.country}."
-        )
+    Pure compute primitive: no I/O, dask-friendly, returns same shape as inputs.
 
-    reference_da = rxr.open_rasterio(reference_file).squeeze()
+    Mathematical definition:
+        mean_wind_speed = A * gamma(1 + 1/k)
 
-    # Determine template grid to enforce exact alignment
-    if "template" in self.data.data_vars:
-        template = self.data["template"]
-        # Hard fail if template CRS contradicts Atlas CRS discipline
-        tpl_crs = template.rio.crs
-        if tpl_crs is None:
-            raise ValueError("template DataArray missing CRS (.rio.crs is None)")
-        if not crs_equal(tpl_crs, self.parent.crs):
-            raise ValueError(
-                f"template CRS ({tpl_crs}) does not match Atlas CRS ({self.parent.crs}). "
-                "Refuse to compute air_density_correction on inconsistent grids."
-            )
-    else:
-        # Fallback: enforce Atlas CRS on the reference grid for a consistent output CRS
-        ref_crs = reference_da.rio.crs
-        if ref_crs is None:
-            raise ValueError("reference GWA raster missing CRS (.rio.crs is None)")
-        # Reproject to Atlas CRS if needed (semantic comparison)
-        reference_da = reproject_raster_if_needed(reference_da, self.parent.crs, nodata=np.nan).squeeze()
-        template = reference_da
-
-    # Load elevation (legacy preferred; CopDEM fallback). Contract: must be made to match template.
-    elevation = load_elevation(self.parent.path, self.parent.country, reference_da)
-
-    src_crs = elevation.rio.crs
-    if src_crs is None:
-        raise ValueError("elevation DataArray missing CRS (.rio.crs is None)")
-
-    # Enforce exact template grid + Atlas CRS with bilinear resampling (continuous elevation)
-    elevation = elevation.rio.reproject_match(template, resampling=Resampling.bilinear, nodata=np.nan).squeeze()
-
-    # Optional region clip AFTER reproject_match (avoids CRS mismatch NoDataInBounds)
-    # Use drop=False to preserve exact x/y grid invariants
-    if self.parent.region is not None:
-        clip_shape = self.parent.get_nuts_region(self.parent.region)
-        if clip_shape is None:
-            raise ValueError(f"region={self.parent.region!r} produced no geometry from get_nuts_region()")
-        clip_shape = to_crs_if_needed(clip_shape, elevation.rio.crs)
-        geoms = list(clip_shape.geometry)
-
-        # Import lazily for minimal envs (needed for error wrapping)
-        try:
-            from rioxarray.exceptions import NoDataInBounds
-        except Exception:
-            NoDataInBounds = ()  # fallback type, will never match
-
-        try:
-            elevation = _rio_clip_robust(elevation, geoms, drop=False, all_touched_primary=False)
-        except NoDataInBounds as e:
-            raise ValueError(
-                f"Region clip failed: geometry does not overlap elevation bounds. "
-                f"elevation.rio.crs={elevation.rio.crs}, clip_shape.total_bounds={clip_shape.total_bounds}"
-            ) from e
-
-    if chunk_size is None or _is_dask_backed(elevation):
-        # Dask-backed: execute directly (dask handles chunking internally)
-        rho = rho_correction(elevation)
-    else:
-        rho = compute_chunked(self, rho_correction, chunk_size, elevation=elevation)
-
-    # Final exact-grid enforcement before storing (prevents silent alignment/NaN stripes)
-    rho = rho.rio.reproject_match(template, resampling=Resampling.bilinear, nodata=np.nan).squeeze()
-
-    # Set provenance and store
-    rho = _set_prov(rho.rename("air_density_correction"), algo, ver, params)
-    self._set_var("air_density_correction", rho)
-    logger.info(f"Air density correction for {self.parent.country} computed.")
+    :param A: Weibull A (scale) parameter, DataArray with dims (y, x) or (height, y, x)
+    :param k: Weibull k (shape) parameter, DataArray with same dims as A
+    :return: DataArray with mean wind speed (m/s), same dims as inputs
+    """
+    mean_ws = A * gamma(1 / k + 1)
+    return mean_ws.rename("mean_wind_speed").assign_attrs(units="m/s")
 
 
 def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True, force: bool = False):
@@ -307,7 +242,7 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True, force: 
     - Semantic caching: skips if height slice already has matching signature.
     - Preserves dataset-level coords (never rebuild self.data from data_vars).
     - If template exists, all height slices are exact-grid matched to template and concat uses join="exact".
-      Otherwise concat uses join="outer" (legacy/no-template mode).
+      Otherwise concat uses join="outer" (no-template mode).
 
     :param self: An instance of the Atlas-class
     :param height: Height for which to compute mean wind speed
@@ -473,7 +408,7 @@ def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
     """
     Compute weibull probability density function for reference wind speeds
 
-    :param self: an instance of the _WindAtlas class
+    :param self: wind atlas instance with data property
     :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
     :type chunk_size: int
     :param force: if True, always recompute even if cached result exists
@@ -582,7 +517,7 @@ def simulate_capacity_factors(
     :param weibull_height_mode: Method for computing Weibull PDF at hub height.
         - "hub": (default) Interpolate Weibull A,k to hub height using GWA multi-height data,
           then compute PDF directly at hub height. No shear scaling needed.
-        - "100m_shear": Legacy mode. Uses Weibull PDF at 100m and applies wind shear
+        - "100m_shear": Fallback mode. Uses Weibull PDF at 100m and applies wind shear
           coefficient scaling to adjust power curve for hub height.
     :type weibull_height_mode: str
     :param air_density_mode: Method for air density correction (hub mode only).
@@ -636,7 +571,7 @@ def simulate_capacity_factors(
 
     for turbine_id in self.data.coords["turbine"].values:
         h_turbine = self.get_turbine_attribute(turbine_id, "hub_height")
-        p_power_curve = self.data.power_curve.sel(turbine=turbine_id).values
+        p_power_curve = self.data.power_curve.sel(turbine=turbine_id).values  # 1D curve
         u_power_curve = self.data.coords["wind_speed"].values
 
         if weibull_height_mode == "hub":
@@ -690,7 +625,7 @@ def simulate_capacity_factors(
                 else:
                     cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
         else:
-            # Legacy 100m_shear mode: use 100m PDF + wind shear scaling
+            # Fallback 100m_shear mode: use 100m PDF + wind shear scaling
             inputs = {
                 "weibull_pdf": self.data["weibull_pdf"],
                 "wind_shear": self.data["wind_shear"],
@@ -774,7 +709,7 @@ def _integrate_cf_with_density_correction(
     curve evaluation, NOT as a post-hoc CF multiplier.
 
     This implementation is fully vectorized and dask-friendly (no Python loops,
-    no .values on large arrays). Uses np.trapezoid via xr.apply_ufunc.
+    no eager array evaluation). Uses np.trapezoid via xr.apply_ufunc.
 
     :param pdf: Weibull PDF at hub height, dims (wind_speed, y, x)
     :param u_grid: 1D wind speed grid
@@ -980,7 +915,7 @@ def _interp_da_to_height_log(
     Internal helper for height interpolation. Uses x = ln(height) space.
     No extrapolation: target_height must be within [min(height), max(height)].
 
-    This implementation is xarray-native and dask-friendly (no Python loops, no .values calls).
+    This implementation is xarray-native and dask-friendly (no Python loops, no eager evaluation).
 
     :param da: DataArray with dim "height" (e.g., Weibull A/k at multiple heights)
     :param target_height: Target height for interpolation
@@ -1130,7 +1065,7 @@ def compute_air_density_at_height(
     If "air_density" exists in dataset with "height" dim, uses that.
     Otherwise, lazily loads GWA air-density rasters from disk via load_air_density().
 
-    :param self: An instance of the _WindAtlas class
+    :param self: wind atlas instance with data property
     :param height: Target height (e.g., turbine hub height)
     :param chunk_size: Unused, kept for API consistency
     :return: DataArray with spatial dims (y, x) containing air density at target height
@@ -1229,7 +1164,7 @@ def compute_weibull_pdf_at_height(
     Loads Weibull parameters for all available heights (e.g., 50/100/150/200m from GWA),
     interpolates to target height, and computes the PDF.
 
-    :param self: An instance of the _WindAtlas class (requires load_weibull_parameters)
+    :param self: wind atlas instance with data property containing weibull parameters
     :param height: Target height (e.g., turbine hub height)
     :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
     :param method: Interpolation method for Weibull parameters. Only "log_height_linear" supported.
@@ -1336,7 +1271,7 @@ def capacity_factor(weibull_pdf, wind_shear, u_power_curve, p_power_curve, h_tur
     modelling h_reference
 
     This implementation is fully vectorized and dask-friendly (no Python loops,
-    no .values on large arrays). Uses np.trapezoid via xr.apply_ufunc.
+    no eager array evaluation). Uses np.trapezoid via xr.apply_ufunc.
 
     :param correction_factor:
     :param weibull_pdf: probability density function from weibull_probability_density()

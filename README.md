@@ -10,6 +10,7 @@ Design principles:
 - **Local, explicit prerequisites:** higher-level computations trigger required *derived* prerequisites when needed.
 - **Reproducible & cacheable:** results live in `xarray.Dataset`s with stable coordinates; repeated calls can skip recomputation when inputs/parameters match.
 - **Workdir-first resources:** packaged YAML resources (turbines, costs, land cover codes) are deployed into your workdir for inspection/override.
+- **Optional Dask:** CLEO works without Dask; when enabled explicitly, it supports chunked, parallel execution for large rasters.
 
 ---
 
@@ -20,6 +21,15 @@ From a local checkout:
 ```bash
 python -m pip install -e .
 ```
+
+Optional (recommended for large rasters): install Dask support (chunking + parallel execution).  
+If your project defines extras, prefer the package extra; otherwise install Dask directly:
+
+```bash
+python -m pip install "dask[array]"
+```
+
+(For distributed clusters, install `dask[distributed]`.)
 
 ---
 
@@ -41,13 +51,13 @@ atlas.wind.compute_wind_shear_coefficient()
 atlas.wind.compute_mean_wind_speed(100)
 
 # Capacity factors (hub-height Weibull + optional air-density correction)
-cf = atlas.wind.simulate_capacity_factors(
+atlas.wind.simulate_capacity_factors(
     weibull_height_mode="hub",
-    air_density_mode="gwa",   # lazily loads local GWA air-density GeoTIFFs; no network during compute
+    air_density_mode="gwa",   # loads local GWA air-density GeoTIFFs; no network during compute
 )
 
 # LCOE (uses cost assumptions YAML in <workdir>/resources/cost_assumptions.yml)
-lcoe = atlas.wind.compute_lcoe()
+atlas.wind.compute_lcoe()
 ```
 
 Notes:
@@ -83,6 +93,139 @@ CLEO uses the following structure:
   - Append-only index used by `save()` / `load()` for version selection.
 - `<workdir>/logs/`
   - Log output.
+
+---
+
+## Dask support (chunking + parallel execution)
+
+CLEO supports **optional** Dask usage for:
+- **Chunking** large rasters (GeoTIFF and NetCDF-backed datasets).
+- **Parallel execution** when you explicitly request execution of lazy results.
+
+Two separate ideas matter:
+
+1) **Chunking** (how data is represented)
+- If data is opened with `chunks=...`, `xarray` will use Dask-backed arrays internally.
+- If `chunks=None`, arrays are typically NumPy-backed (eager). Dask schedulers have nothing to schedule in that case.
+
+2) **Execution mode** (when work actually runs)
+- Many operations build a lazy task graph when arrays are Dask-backed.
+- Work runs when you explicitly execute (or when an output operation triggers execution).
+
+### Unified Dask configuration
+
+CLEO uses a unified configuration object (stored on the Atlas) and allows per-call overrides:
+
+- **Atlas default:** configured at `Atlas(...)` construction, stored as `atlas.dask_cfg`.
+- **Method override:** heavy compute methods accept `dask=...` to override the Atlas default for that call.
+
+Configuration fields:
+
+- `use_dask`: `False | True | "auto"`
+  - `False`: never use Dask.
+  - `True`: require Dask to be installed.
+  - `"auto"`: enable Dask only if installed.
+- `chunks`: `None | "auto" | dict[str,int]`
+  - `None`: do not chunk (typically eager arrays).
+  - `"auto"`: let xarray choose chunking (only when Dask is enabled).
+  - `{"y": 1024, "x": 1024}`: explicit chunk sizes.
+- `scheduler`: `None | "threads" | "processes" | "single-threaded" | "distributed"`
+  - Used when executing graphs (see `execute` below).
+  - `"distributed"` requires an active `dask.distributed.Client` (see below).
+- `execute`: `"lazy" | "eager" | "cached"`
+  - `"lazy"`: store results without executing (keeps laziness if Dask-backed).
+  - `"eager"`: execute immediately and store NumPy-backed results.
+  - `"cached"`: execute immediately but keep Dask-backed cached results (`persist`).
+
+### Example: enable chunking at Atlas creation
+
+```python
+from cleo import Atlas
+
+atlas = Atlas(
+    "/path/to/cleo-workdir",
+    country="AUT",
+    crs="EPSG:3035",
+    use_dask="auto",
+    chunks={"y": 1024, "x": 1024},
+    scheduler="threads",
+    execute="lazy",
+)
+atlas.materialize()
+```
+
+### Example: execute a computation immediately (parallel) and store eager results
+
+```python
+from cleo.dask_utils import DaskConfig
+
+atlas.wind.simulate_capacity_factors(
+    weibull_height_mode="hub",
+    air_density_mode="gwa",
+    dask=DaskConfig(execute="eager", scheduler="threads"),
+)
+```
+
+### Example: keep results lazy but cache chunks for reuse
+
+```python
+from cleo.dask_utils import DaskConfig
+
+atlas.wind.simulate_capacity_factors(
+    weibull_height_mode="hub",
+    air_density_mode="gwa",
+    dask=DaskConfig(execute="cached", scheduler="threads"),
+)
+```
+
+### Scheduler warning (guidance)
+
+If you request a parallel scheduler (`"threads"` / `"processes"`) while **not chunking** (`chunks=None`), results are usually **not**
+Dask-backed and the scheduler cannot be applied. In this case CLEO emits a warning like:
+
+- "scheduler='threads' requested but result is not dask-backed (chunks=None); scheduler will be ignored. Set chunks …"
+
+To benefit from Dask parallelism on large rasters, enable chunking (`chunks="auto"` or a dict).
+
+### Distributed scheduler
+
+CLEO supports the `dask.distributed` scheduler for cluster-based parallelism. Key requirements:
+
+1. **Install `dask[distributed]`:**
+   ```bash
+   pip install "dask[distributed]"
+   ```
+
+2. **Start a Client outside CLEO:**
+   CLEO does **not** create or manage distributed clusters/clients. You must start a client before calling CLEO methods:
+   ```python
+   from dask.distributed import Client
+   client = Client()  # local cluster, or connect to existing cluster
+   ```
+
+3. **Use `scheduler="distributed"`:**
+   ```python
+   from cleo.dask_utils import DaskConfig
+
+   atlas.wind.simulate_capacity_factors(
+       weibull_height_mode="hub",
+       air_density_mode="gwa",
+       dask=DaskConfig(
+           chunks={"y": 1024, "x": 1024},
+           execute="eager",
+           scheduler="distributed",
+       ),
+   )
+   ```
+
+4. **Dashboard link logging:**
+   When `execute` is `"eager"` or `"cached"` and `scheduler="distributed"`, CLEO logs:
+   ```
+   INFO:cleo.assess:Dask dashboard: http://127.0.0.1:8787/status
+   ```
+   The link can change if the cluster restarts; CLEO does **not** persist or store it.
+
+If no active client exists when `scheduler="distributed"` is used, CLEO raises a clear `RuntimeError` with guidance.
 
 ---
 
@@ -130,7 +273,7 @@ atlas.wind.compute_weibull_pdf()
 ### Capacity factors
 
 ```python
-cf = atlas.wind.simulate_capacity_factors(
+atlas.wind.simulate_capacity_factors(
     weibull_height_mode="hub",
     air_density_mode="none",  # or "gwa"
 )
@@ -153,9 +296,9 @@ u_{eq} = u \left(\frac{\rho}{\rho_0}\right)^{1/3},
 Air density contract (important):
 
 - **No network downloads during compute.**
-- `air_density_mode="gwa"` lazily loads local GeoTIFFs from `<workdir>/data/raw/<ISO3>/` via `load_air_density(height)`.
+- `air_density_mode="gwa"` loads local GeoTIFFs from `<workdir>/data/raw/<ISO3>/` via the package loaders.
 - Interpolation requires **at least two** available GWA air-density height levels (from the package’s `GWA_HEIGHTS`, e.g. 50/100/150/200 m).
-- If required raw files are missing, CLEO raises an actionable `FileNotFoundError` (run `atlas.materialize()` / `atlas.wind._load_gwa()` first).
+- If required raw files are missing, CLEO raises an actionable `FileNotFoundError` (run `atlas.materialize()` first).
 
 ### LCOE
 

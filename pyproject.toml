@@ -25,7 +25,6 @@ dependencies = [
   "pandas",
   "openpyxl",
   "xarray",
-  "dask",
   "pycountry",
   "pint",
   "pyyaml",
@@ -35,7 +34,11 @@ dependencies = [
   "geopandas",
   "pyproj",
   "requests",
+  "dask[array]",
+  "zarr",
 ]
+
+[project.optional-dependencies]
 
 [tool.setuptools]
 include-package-data = true

@@ -93,10 +93,11 @@ class TestCrsGuardrails:
 
     def test_crs_equal_used_in_modules(self):
         """Verify modules import and use centralized CRS helpers."""
+        # Note: assess.py is now pure compute (no CRS operations),
+        # so it doesn't need CRS helper imports.
         expected_imports = {
-            "class_helpers.py": ["crs_equal", "reproject_raster_if_needed"],
+            "class_helpers.py": ["crs_equal"],
             "loaders.py": ["reproject_raster_if_needed", "to_crs_if_needed"],
-            "assess.py": ["crs_equal", "reproject_raster_if_needed", "to_crs_if_needed"],
             "utils.py": ["reproject_raster_if_needed"],
             "classes.py": ["to_crs_if_needed", "crs_equal"],
         }

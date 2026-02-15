@@ -421,17 +421,26 @@ def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False
 
 
 # %% methods
-def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Dataset, gpd.GeoDataFrame):
+def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.GeoDataFrame):
     """
-    Clip the atlas data to the provided geopandas shapefile / geometry.
+    Clip the atlas data to the provided GeoDataFrame geometry.
+
+    This is a primitives-only function: it accepts only GeoDataFrame objects,
+    not file paths. Path handling is done by callers (classes.py) which delegate
+    raw I/O to unify.py.
 
     Contract:
-    - If clip_shape is a path: it must be readable; otherwise raise immediately.
     - Invalid geometries are auto-repaired (A2). If repair fails, raise.
     - CRS discipline:
         - self.data.rio.crs is the source of truth for raster clipping.
         - Atlas invariant is enforced: self.parent.crs must equal self.data.rio.crs.
         - clip geometry is reprojected to self.data.rio.crs before clipping.
+
+    Args:
+        clip_shape: GeoDataFrame containing clipping geometry.
+
+    Returns:
+        Tuple of (clipped Dataset, reprojected clip_shape GeoDataFrame).
     """
     # Ensure data is loaded
     if self.data is None:
@@ -449,14 +458,12 @@ def clip_to_geometry(self, clip_shape: Union[str, gpd.GeoDataFrame]) -> (xr.Data
             f"but parent.crs={self.parent.crs}. This must never happen."
         )
 
-    # Handle clip_shape argument type
-    if isinstance(clip_shape, str):
-        try:
-            clip_shape = gpd.read_file(clip_shape)
-        except Exception as e:
-            raise ValueError(f"Cannot read clipping geometry from path: {clip_shape}") from e
-    elif not isinstance(clip_shape, gpd.GeoDataFrame):
-        raise TypeError("clip_shape must be a string path or a geopandas.GeoDataFrame")
+    # Validate clip_shape type (primitives-only: no path handling here)
+    if not isinstance(clip_shape, gpd.GeoDataFrame):
+        raise TypeError(
+            "clip_shape must be a geopandas.GeoDataFrame. "
+            "Path arguments should be handled by the caller."
+        )
 
     if clip_shape.empty:
         raise ValueError("Clipping geometry is empty.")

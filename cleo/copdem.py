@@ -1,13 +1,10 @@
 # Copernicus DEM helpers
+#
+# This module provides planning, metadata, and downloading utilities for CopDEM tiles.
+# Raw I/O operations (rasterio.open, mosaicing) are centralized in cleo.unify.
 import math
 from pathlib import Path
 
-import numpy as np
-import rasterio
-from rasterio.merge import merge
-from rasterio.enums import Resampling
-import rioxarray as rxr
-import xarray as xr
 import requests
 
 
@@ -210,6 +207,9 @@ def build_copdem_elevation_like(reference_da, tile_paths):
     """
     Mosaic Copernicus DEM tiles and reproject to match a reference raster.
 
+    This is a compatibility wrapper that delegates to cleo.unify._build_copdem_mosaic.
+    Raw I/O is centralized in unify.py.
+
     Contracts:
     - tile_paths must be non-empty
     - CRS must be present in both tiles and reference
@@ -225,63 +225,6 @@ def build_copdem_elevation_like(reference_da, tile_paths):
     :raises ValueError: If tile_paths is empty or CRS is missing
     :raises RuntimeError: If mosaicking fails
     """
-    if not tile_paths:
-        raise ValueError("tile_paths cannot be empty")
-
-    tile_datasets = []
-    nodata = None
-    try:
-        for path in tile_paths:
-            ds = rasterio.open(path)
-            if ds.crs is None:
-                raise ValueError(f"CRS missing in tile: {path}")
-            tile_datasets.append(ds)
-
-        nodata = tile_datasets[0].nodata
-        mosaic_arr, mosaic_transform = merge(tile_datasets)
-        mosaic_crs = tile_datasets[0].crs
-
-    finally:
-        for ds in tile_datasets:
-            try:
-                ds.close()
-            except Exception:
-                pass
-
-    mosaic_2d = mosaic_arr[0]
-
-    # Mask nodata / masked arrays to NaN
-    if np.ma.isMaskedArray(mosaic_2d):
-        mosaic_2d = mosaic_2d.filled(np.nan).astype("float32")
-    else:
-        mosaic_2d = mosaic_2d.astype("float32", copy=False)
-
-    if nodata is not None and not (isinstance(nodata, float) and np.isnan(nodata)):
-        mosaic_2d = np.where(mosaic_2d == float(nodata), np.nan, mosaic_2d)
-
-    height, width = mosaic_2d.shape
-    cols = np.arange(width)
-    rows = np.arange(height)
-    xs = mosaic_transform.c + mosaic_transform.a * (cols + 0.5)
-    ys = mosaic_transform.f + mosaic_transform.e * (rows + 0.5)
-
-    mosaic_da = xr.DataArray(
-        mosaic_2d,
-        dims=["y", "x"],
-        coords={"y": ys, "x": xs},
-        name="elevation",
-    )
-    mosaic_da = mosaic_da.rio.write_crs(mosaic_crs)
-    mosaic_da = mosaic_da.rio.write_transform(mosaic_transform)
-    mosaic_da = mosaic_da.rio.write_nodata(np.nan)
-
-    if reference_da.rio.crs is None:
-        raise ValueError("CRS missing in reference DataArray")
-
-    result = mosaic_da.rio.reproject_match(
-        reference_da,
-        resampling=Resampling.bilinear,
-        nodata=np.nan,
-    )
-    result.name = "elevation"
-    return result
+    # Delegate to unify.py for raw I/O
+    from cleo.unify import _build_copdem_mosaic
+    return _build_copdem_mosaic(tile_paths, reference_da)

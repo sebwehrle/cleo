@@ -146,7 +146,7 @@ def ensure_crs_from_gwa(ds, iso3):
 
 def load_elevation(base_dir, iso3, reference_da):
     """
-    Load elevation data with legacy-file preference.
+    Load elevation data with local GeoTIFF preference.
 
     Contract:
     - Returned elevation MUST match the reference grid exactly (dims/coords/transform/CRS),
@@ -160,7 +160,7 @@ def load_elevation(base_dir, iso3, reference_da):
     :param reference_da: Reference DataArray for CRS/bounds/grid alignment
     :return: Elevation DataArray aligned to reference grid
     :rtype: xarray.DataArray
-    :raises FileNotFoundError: If neither legacy file nor CopDEM tiles available
+    :raises FileNotFoundError: If neither local GeoTIFF nor CopDEM tiles available
     """
     from pathlib import Path
     from rasterio.enums import Resampling
@@ -170,7 +170,7 @@ def load_elevation(base_dir, iso3, reference_da):
     from cleo.copdem import download_copdem_tiles_for_bbox, build_copdem_elevation_like
 
     path_raw_country = Path(base_dir) / "data" / "raw" / iso3
-    legacy_path = path_raw_country / f"{iso3}_elevation_w_bathymetry.tif"
+    local_path = path_raw_country / f"{iso3}_elevation_w_bathymetry.tif"
 
     # Ensure reference_da has a CRS (needed for reproject_match and bounds transforms)
     if reference_da.rio.crs is None:
@@ -189,10 +189,10 @@ def load_elevation(base_dir, iso3, reference_da):
                 f"Reference DataArray has no CRS and air-density file also lacks CRS: {air_density_path}"
             )
 
-    # Try legacy file first (but always align to reference grid)
-    if legacy_path.exists():
+    # Try local GeoTIFF first (but always align to reference grid)
+    if local_path.exists():
         try:
-            elevation = rxr.open_rasterio(legacy_path).rename("elevation").squeeze()
+            elevation = rxr.open_rasterio(local_path).rename("elevation").squeeze()
             elevation = ensure_crs_from_gwa(elevation, iso3)
 
             elevation = elevation.rio.reproject_match(
@@ -211,13 +211,13 @@ def load_elevation(base_dir, iso3, reference_da):
                 if not np.array_equal(elevation[dim].values, reference_da[dim].values):
                     raise ValueError(f"Elevation coordinate mismatch on dim '{dim}' after reproject_match")
 
-            logger.info(f"Loaded legacy elevation from {legacy_path} and matched to reference grid.")
+            logger.info(f"Loaded local elevation from {local_path} and matched to reference grid.")
             return elevation
         except Exception as e:
-            logger.warning(f"Legacy elevation file exists but failed to open/match: {e}")
+            logger.warning(f"Local elevation file exists but failed to open/match: {e}")
 
     # Fall back to CopDEM
-    logger.info("Legacy elevation not available, building from Copernicus DEM")
+    logger.info("Local elevation not available, building from Copernicus DEM")
 
     bounds = reference_da.rio.bounds()
     src_crs = reference_da.rio.crs
@@ -304,20 +304,53 @@ def get_turbine_attribute(self, turbine_id, attribute_name):
     """
     Retrieve turbine attribute from dataset metadata.
 
-    Turbine metadata is stored in the dataset during ingest; no runtime YAML reads.
+    String metadata (manufacturer, model, model_key) is stored in cleo_turbines_json attr.
+    Numeric metadata (capacity, hub_height, etc.) is stored in dataset variables.
 
     :param turbine_id: Turbine config ID (YAML file stem)
     :type turbine_id: str
     :param attribute_name: Name of the turbine attribute to retrieve
         (e.g., "hub_height", "capacity", "rotor_diameter", "commissioning_year",
-         "manufacturer", "model", "turbine_model_key")
+         "manufacturer", "model", "model_key")
     :type attribute_name: str
     :return: Value of the specific turbine attribute
     :raises ValueError: If turbine_id not found or attribute missing from dataset
     """
-    # Map attribute names to dataset variable names
-    var_name = f"turbine_{attribute_name}"
+    import json
 
+    # Check turbine dimension exists
+    if "turbine" not in self.data.dims:
+        raise ValueError(
+            f"No turbines in dataset; cannot retrieve attribute '{attribute_name}' for turbine_id={turbine_id!r}."
+        )
+
+    # Read turbine metadata from cleo_turbines_json attr
+    if "cleo_turbines_json" not in self.data.attrs:
+        raise ValueError(
+            f"Dataset missing cleo_turbines_json attr; re-run materialize_canonical()."
+        )
+    turbines_meta = json.loads(self.data.attrs["cleo_turbines_json"])
+    turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
+
+    if turbine_id not in turbine_id_to_idx:
+        raise ValueError(
+            f"Turbine ID {turbine_id!r} not found in dataset. Available: {list(turbine_id_to_idx.keys())}"
+        )
+
+    turbine_idx = turbine_id_to_idx[turbine_id]
+    turbine_meta = turbines_meta[turbine_idx]
+
+    # String attributes from JSON attr
+    json_attrs = {"manufacturer", "model", "model_key"}
+    if attribute_name in json_attrs:
+        if attribute_name not in turbine_meta:
+            raise ValueError(
+                f"Turbine attribute '{attribute_name}' not found in cleo_turbines_json for turbine_id={turbine_id!r}."
+            )
+        return turbine_meta[attribute_name]
+
+    # Numeric attributes from dataset variables
+    var_name = f"turbine_{attribute_name}"
     if var_name not in self.data.data_vars:
         raise ValueError(
             f"Turbine attribute '{attribute_name}' not found in dataset for turbine_id={turbine_id!r}. "
@@ -325,20 +358,7 @@ def get_turbine_attribute(self, turbine_id, attribute_name):
             f"Re-add turbines to store metadata."
         )
 
-    # Check turbine_id exists in dataset
-    if "turbine" not in self.data.coords:
-        raise ValueError(
-            f"No turbines in dataset; cannot retrieve attribute '{attribute_name}' for turbine_id={turbine_id!r}."
-        )
-
-    turbine_ids = list(self.data.coords["turbine"].values)
-    if turbine_id not in turbine_ids:
-        raise ValueError(
-            f"Turbine ID {turbine_id!r} not found in dataset. Available: {turbine_ids}"
-        )
-
-    # Retrieve value for this turbine
-    value = self.data[var_name].sel(turbine=turbine_id).values
+    value = self.data[var_name].isel(turbine=turbine_idx).values
     # Convert numpy scalar to Python scalar
     if hasattr(value, "item"):
         value = value.item()
@@ -406,7 +426,7 @@ def load_air_density(self, height):
     - Missing raster file must raise immediately (no silent fallback).
     - Returned raster is in `self.parent.crs` (Atlas CRS).
 
-    :param self: an instance of the _WindAtlas class
+    :param self: wind atlas instance with data property
     :param height: Height for which to load air density (e.g. 50, 100, 150, 200)
     :type height: int
     :return: DataArray containing air density raster
@@ -467,7 +487,7 @@ def load_gwa(self):
     - combined Weibull parameters (A, k)
     for multiple heights.
 
-    Note: elevation is NOT downloaded from GWA (handled via legacy file or Copernicus DEM).
+    Note: elevation is NOT downloaded from GWA (handled via local GeoTIFF or Copernicus DEM).
     """
     url = "https://globalwindatlas.info/api/gis/country"
     layers = ["air-density", "combined-Weibull-A", "combined-Weibull-k"]
@@ -498,7 +518,7 @@ def load_gwa(self):
             else:
                 logger.info(f"Download of {fname} from {durl} failed")
 
-    logger.info("Skipping GWA elevation download; handled via legacy file or Copernicus DEM")
+    logger.info("Skipping GWA elevation download; handled via local GeoTIFF or Copernicus DEM")
     logger.info(f"Global Wind Atlas data for {c} initialized.")
 
 

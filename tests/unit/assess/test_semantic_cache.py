@@ -20,7 +20,7 @@ import cleo.assess as assess
 
 
 def _make_wind_atlas_stub(tmp_path):
-    """Create minimal _WindAtlas-like stub for testing compute_mean_wind_speed."""
+    """Create minimal wind atlas stub for testing compute_mean_wind_speed."""
     # Build minimal dataset with template and wind_speed coords
     template = xr.DataArray(
         np.ones((3, 3), dtype=np.float32),

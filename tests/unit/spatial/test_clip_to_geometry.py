@@ -19,12 +19,13 @@ from tests.helpers.factories import wind_speed_axis
 
 # --- merged from tests/_staging/test_clip_to_geometry_bad_path.py ---
 
-def test_clip_to_geometry_missing_path_raises():
+def test_clip_to_geometry_rejects_path_string():
+    """spatial.py is primitives-only: paths must be handled by caller (classes.py)."""
     ds = xr.Dataset({"a": (("y", "x"), np.ones((2, 2)))}, coords={"x": [0, 1], "y": [0, 1]})
     ds = ds.rio.write_crs("EPSG:4326")
     dummy = SimpleNamespace(data=ds, parent=SimpleNamespace(crs="EPSG:4326"))
 
-    with pytest.raises(ValueError, match="Cannot read clipping geometry"):
+    with pytest.raises(TypeError, match="clip_shape must be a geopandas.GeoDataFrame"):
         clip_to_geometry(dummy, "nonexistent.shp")
 
 

@@ -2,12 +2,17 @@
 import os
 import re
 import json
+import shutil
+import warnings
 import yaml
 import pyproj
 import logging
 import zipfile
 import datetime
 import rasterio.crs
+import zarr
+from collections.abc import Sequence
+from uuid import uuid4
 import numpy as np
 import xarray as xr
 import geopandas as gpd
@@ -18,11 +23,9 @@ from rasterio.enums import MergeAlg
 from rasterio.features import rasterize as rio_rasterize
 
 from cleo.class_helpers import (
-    build_netcdf,
     deploy_resources,
     set_attributes,
     setup_logging,
-    _sanitize_netcdf_attrs,
 )
 
 from cleo.utils import (
@@ -32,16 +35,10 @@ from cleo.utils import (
     download_file,
 )
 
-from cleo.loaders import (
-    get_cost_assumptions,
-    get_overnight_cost,
-    get_turbine_attribute,
-    get_clc_codes,
-    load_weibull_parameters,
-    load_air_density,
-    load_gwa,
-    load_nuts,
-    add_corine_land_cover,
+# Import from cleo.unify
+from cleo.unify import (
+    Unifier,
+    _read_vector_file,
 )
 
 from cleo.spatial import (
@@ -49,33 +46,20 @@ from cleo.spatial import (
 )
 
 from cleo.assess import (
-    compute_air_density_correction,
     compute_lcoe,
     compute_mean_wind_speed,
     compute_optimal_power_energy,
     compute_wind_shear_coefficient,
     compute_weibull_pdf,
+    mean_wind_speed_from_weibull,
     minimum_lcoe,
     simulate_capacity_factors,
+    interpolate_weibull_params_to_height,
+    weibull_probability_density,
+    capacity_factor,
 )
 
 logger = logging.getLogger(__name__)
-
-# %% region handling constants
-REGION_NONE_TOKEN = "__all__"
-
-
-def _region_for_filename(region: str | None) -> str:
-    """Convert internal region (None or str) to filename-safe token."""
-    return region if region is not None else REGION_NONE_TOKEN
-
-
-def _region_from_index(region_str: str | None) -> str | None:
-    """Convert index/filename region token to internal value (None means no region)."""
-    if region_str is None or region_str == REGION_NONE_TOKEN:
-        return None
-    return region_str
-
 
 # %% repr helpers (side-effect-free, never raise)
 def _safe_basename(path) -> str:
@@ -111,88 +95,609 @@ def _cap_list(items, max_items: int = 5, max_len: int = 60) -> str:
         return "[?]"
 
 
-def _parse_index_line(line):
+# %% Wind metric functions (canonical-only, no I/O)
+def _wind_metric_mean_wind_speed(
+    wind: xr.Dataset,
+    land: xr.Dataset | None,
+    *,
+    height: int,
+    **_,
+) -> xr.DataArray:
     """
-    Parse a single index line into a 6-tuple:
-    (subclass, country, region, scenario, path, timestamp)
+    Compute mean wind speed from canonical wind store at specified height.
 
-    Supports three formats:
-    1. JSONL: line starts with '{'
-    2. Tab-separated: line contains '\t' (strict 6 fields)
-    3. Legacy colon-separated: parse from RIGHT to handle ':' in Windows paths
+    Args:
+        wind: Canonical wind dataset (must have weibull_A and weibull_k).
+        land: Canonical landscape dataset (optional, for valid_mask).
+        height: Height level to compute (must exist in wind coords).
 
-    Region is normalized: REGION_NONE_TOKEN and JSON null become Python None.
+    Returns:
+        DataArray with mean wind speed (m/s).
     """
-    line = line.strip()
-    if not line:
-        raise ValueError("Empty index line")
+    # Get weibull params (canonical store uses weibull_A)
+    var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
+    var_k = "weibull_k"
 
-    # JSONL format
-    if line.startswith("{"):
-        try:
-            obj = json.loads(line)
-            return (
-                obj["subclass"],
-                obj["country"],
-                _region_from_index(obj["region"]),
-                obj["scenario"],
-                obj["path"],
-                obj["timestamp"],
+    A = wind[var_A]
+    k = wind[var_k]
+
+    # Validate height exists
+    if "height" not in A.coords:
+        raise ValueError(f"No height dimension in wind store {var_A}")
+    available = [int(h) for h in A.coords["height"].values]
+    if height not in available:
+        raise ValueError(
+            f"height={height} not in wind store; available: {sorted(available)}"
+        )
+
+    # Compute mean wind speed
+    da = mean_wind_speed_from_weibull(A=A.sel(height=height), k=k.sel(height=height))
+
+    # Apply valid_mask if available
+    if land is not None and "valid_mask" in land:
+        da = da.where(land["valid_mask"])
+
+    return da
+
+
+def _wind_metric_capacity_factors(
+    wind: xr.Dataset,
+    land: xr.Dataset | None,
+    *,
+    turbines: tuple[str, ...],
+    height: int = 100,
+    air_density: bool = False,
+    loss_factor: float = 1.0,
+    **_,
+) -> xr.DataArray:
+    """
+    Compute capacity factors from canonical wind store for selected turbines.
+
+    Uses hub-height mode with interpolated Weibull parameters.
+
+    Args:
+        wind: Canonical wind dataset (must have weibull_A, weibull_k, power_curve).
+        land: Canonical landscape dataset (must have valid_mask).
+        turbines: Tuple of turbine IDs to compute.
+        height: Reference height for Weibull interpolation (default 100).
+        air_density: If True, apply air density correction using rho.
+        loss_factor: Loss correction factor (default 1.0).
+
+    Returns:
+        DataArray with capacity factors, dims (turbine, y, x).
+    """
+    # Validate inputs
+    if land is None or "valid_mask" not in land:
+        raise ValueError("landscape store with valid_mask required for capacity_factors")
+
+    var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
+    var_k = "weibull_k"
+
+    if var_A not in wind or var_k not in wind:
+        raise ValueError(f"wind store must have {var_A} and {var_k}")
+    if "power_curve" not in wind:
+        raise ValueError("wind store must have power_curve variable")
+    if "turbine" not in wind.coords:
+        raise ValueError("wind store must have turbine coordinate")
+
+    # Get Weibull params and validate height
+    A = wind[var_A]
+    k = wind[var_k]
+
+    if "height" not in A.dims:
+        raise ValueError(f"{var_A} must have height dimension")
+    available = [int(h) for h in A.coords["height"].values]
+    if height not in available:
+        raise ValueError(
+            f"height={height} not in wind store; available: {sorted(available)}"
+        )
+
+    # Get wind speed grid
+    wind_speed = wind.coords["wind_speed"].values
+
+    # Build turbine ID to index mapping from cleo_turbines_json attr
+    if "cleo_turbines_json" not in wind.attrs:
+        raise ValueError("wind store must have cleo_turbines_json attr")
+    turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
+    turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
+
+    # Validate turbines exist
+    available_turbines = set(turbine_id_to_idx.keys())
+    for tid in turbines:
+        if tid not in available_turbines:
+            raise ValueError(f"turbine {tid!r} not in wind store")
+
+    # Compute capacity factor for each turbine
+    cf_list = []
+    for turbine_id in turbines:
+        turbine_idx = turbine_id_to_idx[turbine_id]
+        # Get hub height for this turbine
+        hub_height = float(wind["turbine_hub_height"].isel(turbine=turbine_idx).values)
+
+        # Interpolate Weibull params to hub height
+        A_hub, k_hub = interpolate_weibull_params_to_height(A, k, hub_height)
+
+        # Compute Weibull PDF at hub height
+        pdf_hub = weibull_probability_density(wind_speed, k_hub, A_hub)
+
+        # Get power curve
+        p_power_curve = wind["power_curve"].isel(turbine=turbine_idx).values
+
+        # Air density correction (if enabled)
+        if air_density and "rho" in wind:
+            from cleo.assess import RHO_0, _integrate_cf_with_density_correction
+
+            # Interpolate rho to hub height (linear)
+            rho = wind["rho"]
+            if "height" in rho.dims:
+                rho_hub = rho.interp(height=hub_height, method="linear")
+            else:
+                rho_hub = rho
+
+            # Compute density correction factor
+            c = (rho_hub / RHO_0) ** (1.0 / 3.0)
+
+            cf = _integrate_cf_with_density_correction(
+                pdf=pdf_hub,
+                u_grid=wind_speed,
+                p_curve=p_power_curve,
+                c=c,
+                loss_factor=loss_factor,
             )
-        except (json.JSONDecodeError, KeyError) as e:
-            raise ValueError(f"Malformed JSONL index entry: {line!r}") from e
+        else:
+            # Create dummy shear (zeros, same grid as pdf)
+            template = pdf_hub.isel(wind_speed=0)
+            dummy_shear = xr.zeros_like(template).rename("wind_shear")
 
-    # Tab-separated format (strict 6 fields)
-    if "\t" in line:
-        parts = line.split("\t")
-        if len(parts) != 6:
-            raise ValueError(f"Malformed tab-separated index entry (expected 6 fields): {line!r}")
-        subclass, country, region, scenario, path, timestamp = parts
-        return (subclass, country, _region_from_index(region), scenario, path, timestamp)
+            # Call capacity_factor
+            cf = capacity_factor(
+                weibull_pdf=pdf_hub,
+                wind_shear=dummy_shear,
+                u_power_curve=wind_speed,
+                p_power_curve=p_power_curve,
+                h_turbine=hub_height,
+                h_reference=hub_height,  # No shear scaling needed
+                correction_factor=loss_factor,
+            )
 
-    # Legacy colon-separated format: rsplit from right for timestamp, then split first 5
-    # This handles ":" inside Windows paths like "C:\path\to\file"
-    try:
-        prefix, timestamp = line.rsplit(":", 1)
-        parts = prefix.split(":", 4)
-        if len(parts) != 5:
-            raise ValueError(f"Expected 5 fields before timestamp, got {len(parts)}")
-        subclass, country, region, scenario, path = parts
-        return (subclass, country, _region_from_index(region), scenario, path, timestamp)
-    except ValueError as e:
-        raise ValueError(f"Malformed index entry: {line!r}") from e
+        cf = cf.expand_dims(turbine=[turbine_id])
+        cf_list.append(cf)
+
+    # Concatenate along turbine dimension
+    result = xr.concat(cf_list, dim="turbine")
+    result = result.rename("capacity_factors")
+
+    # Apply valid_mask
+    result = result.where(land["valid_mask"])
+
+    return result
 
 
-def _timestamp_key(ts):
+# Wind metrics registry
+_WIND_METRICS = {
+    "mean_wind_speed": {
+        "fn": _wind_metric_mean_wind_speed,
+        "requires_turbines": False,
+        "required": {"height"},
+    },
+    "capacity_factors": {
+        "fn": _wind_metric_capacity_factors,
+        "requires_turbines": True,
+        "required": set(),  # height has default
+    },
+}
+
+
+# %% Domain objects for v1 API
+class WindDomain:
     """
-    Convert timestamp string to a sortable key.
-    "legacy" is treated as older than any real timestamp.
-    Returns tuple (priority, datetime) where priority 0=legacy, 1=real timestamp.
+    Domain object for wind data access.
+
+    Provides lazy, cached access to the canonical wind.zarr store.
+    The .data property opens the store once and caches the result.
     """
-    if ts == "legacy":
-        return (0, datetime.datetime.min)
-    try:
-        return (1, datetime.datetime.strptime(ts, "%Y%m%dT%H%M%S"))
-    except ValueError as e:
-        raise ValueError(f"Invalid timestamp format: {ts!r}") from e
+
+    def __init__(self, atlas, *, selected_turbines=None):
+        self._atlas = atlas
+        self._selected_turbines = selected_turbines
+        self._data = None
+
+    @property
+    def data(self) -> xr.Dataset:
+        """
+        Lazy access to the wind zarr store as xr.Dataset.
+
+        Opens the store once and caches it. Validates store_state == "complete".
+
+        Raises:
+            FileNotFoundError: If wind.zarr store does not exist.
+            RuntimeError: If store_state != "complete".
+        """
+        if self._data is not None:
+            return self._data
+
+        store_path = getattr(self._atlas, "wind_store_path", None)
+        if store_path is None:
+            store_path = Path(self._atlas.path) / "wind.zarr"
+
+        if not store_path.exists():
+            raise FileNotFoundError(
+                f"Wind store missing at {store_path}; call atlas.materialize_canonical()."
+            )
+
+        ds = xr.open_zarr(store_path, consolidated=False)
+
+        state = ds.attrs.get("store_state", "")
+        if state != "complete":
+            raise RuntimeError(
+                f"Wind store incomplete (store_state={state!r}); "
+                f"call atlas.materialize_canonical()."
+            )
+
+        self._data = ds
+        return self._data
+
+    @property
+    def turbines(self) -> tuple[str, ...]:
+        """
+        Turbine IDs available in the wind store.
+
+        Returns:
+            Tuple of turbine ID strings (from cleo_turbines_json attr).
+
+        Raises:
+            RuntimeError: If no turbines in wind store (call Atlas.materialize()).
+        """
+        ds = self.data
+        if "turbine" not in ds.dims:
+            raise RuntimeError(
+                "No turbines in wind store; call Atlas.materialize() to add turbines."
+            )
+        # Read from cleo_turbines_json attr (avoids string arrays in Zarr v3)
+        if "cleo_turbines_json" not in ds.attrs:
+            raise RuntimeError(
+                "Wind store missing cleo_turbines_json attr; re-run materialize_canonical()."
+            )
+        turbines_meta = json.loads(ds.attrs["cleo_turbines_json"])
+        return tuple(t["id"] for t in turbines_meta)
+
+    @property
+    def selected_turbines(self) -> tuple[str, ...] | None:
+        """
+        Currently selected turbine IDs, or None if no selection (all turbines).
+
+        Returns:
+            Tuple of selected turbine IDs, or None for all turbines.
+        """
+        return self._selected_turbines
+
+    def _validate_turbines(self, turbines: list[str]) -> tuple[str, ...]:
+        """Validate turbine IDs against available turbines.
+
+        Args:
+            turbines: List of turbine IDs to validate.
+
+        Returns:
+            Validated tuple of turbine IDs.
+
+        Raises:
+            ValueError: If any turbine ID is unknown.
+        """
+        available = set(self.turbines)
+        requested = set(turbines)
+        unknown = requested - available
+        if unknown:
+            raise ValueError(
+                f"Unknown turbines: {sorted(unknown)}; see atlas.wind.turbines"
+            )
+        return tuple(turbines)
+
+    def select(self, *, turbines: list[str] | tuple[str, ...] | None = None) -> "WindDomain":
+        """
+        Return a new WindDomain with selected turbines.
+
+        This is immutable: the original WindDomain is unchanged.
+
+        Args:
+            turbines: Turbine IDs to select, or None to clear selection (all turbines).
+                     Empty list is not allowed.
+
+        Returns:
+            New WindDomain with the turbine selection applied.
+
+        Raises:
+            ValueError: If turbines is empty list or contains unknown IDs.
+        """
+        if turbines is None:
+            # Clear selection
+            return WindDomain(self._atlas, selected_turbines=None)
+
+        if len(turbines) == 0:
+            raise ValueError(
+                "turbines must be non-empty or None to clear; see atlas.wind.turbines"
+            )
+
+        # Validate and create new domain with selection
+        validated = self._validate_turbines(list(turbines))
+        return WindDomain(self._atlas, selected_turbines=validated)
+
+    def compute(self, metric: str, **kwargs) -> xr.DataArray:
+        """
+        Compute a wind metric from canonical data.
+
+        Args:
+            metric: Metric name (see supported metrics below).
+            **kwargs: Metric-specific parameters.
+
+        Supported metrics:
+            - "mean_wind_speed": requires height (int)
+            - "capacity_factors": requires turbines (via select() or kwargs)
+
+        Returns:
+            DataArray with computed metric.
+
+        Raises:
+            ValueError: If metric unknown, required params missing, or turbine validation fails.
+        """
+        if metric not in _WIND_METRICS:
+            supported = sorted(_WIND_METRICS.keys())
+            raise ValueError(
+                f"Unknown metric {metric!r}. Supported: {supported}"
+            )
+
+        spec = _WIND_METRICS[metric]
+        fn = spec["fn"]
+        required = spec["required"]
+        requires_turbines = spec["requires_turbines"]
+
+        # Check required kwargs
+        missing = required - kwargs.keys()
+        if missing:
+            raise ValueError(
+                f"Missing required parameters for {metric}: {sorted(missing)}"
+            )
+
+        # Turbine enforcement
+        if requires_turbines:
+            turbines = kwargs.get("turbines", None)
+            if turbines is None:
+                # Check if domain has selection
+                if self.selected_turbines is not None:
+                    turbines = self.selected_turbines
+                else:
+                    raise ValueError(
+                        "turbines required; use atlas.wind.turbines or atlas.wind.select(...)."
+                    )
+            else:
+                # Validate provided turbines
+                if len(turbines) == 0:
+                    raise ValueError(
+                        "turbines must be non-empty; see atlas.wind.turbines"
+                    )
+                turbines = self._validate_turbines(list(turbines))
+            kwargs["turbines"] = turbines
+
+        # Prepare canonical inputs
+        wind = self._atlas.wind_data
+        try:
+            land = self._atlas.landscape_data
+        except (FileNotFoundError, RuntimeError):
+            land = None
+
+        return fn(wind, land, **kwargs)
+
+    def mean_wind_speed(self, height: int, **kwargs) -> xr.DataArray:
+        """
+        Compute mean wind speed at specified height.
+
+        Thin wrapper around compute("mean_wind_speed", ...).
+
+        Args:
+            height: Height level (must exist in wind store).
+            **kwargs: Additional parameters passed to compute.
+
+        Returns:
+            DataArray with mean wind speed (m/s).
+        """
+        return self.compute("mean_wind_speed", height=height, **kwargs)
+
+    def capacity_factors(
+        self,
+        *,
+        turbines: list[str] | tuple[str, ...] | None = None,
+        height: int = 100,
+        air_density: bool = False,
+        loss_factor: float = 1.0,
+        **kwargs,
+    ) -> xr.DataArray:
+        """
+        Compute capacity factors for selected turbines.
+
+        Thin wrapper around compute("capacity_factors", ...).
+
+        Args:
+            turbines: Turbine IDs (uses selected_turbines if None).
+            height: Reference height for Weibull interpolation (default 100).
+            air_density: If True, apply air density correction.
+            loss_factor: Loss correction factor (default 1.0).
+            **kwargs: Additional parameters passed to compute.
+
+        Returns:
+            DataArray with capacity factors, dims (turbine, y, x).
+        """
+        return self.compute(
+            "capacity_factors",
+            turbines=turbines,
+            height=height,
+            air_density=air_density,
+            loss_factor=loss_factor,
+            **kwargs,
+        )
+
+
+class LandscapeDomain:
+    """
+    Domain object for landscape data access.
+
+    Provides lazy, cached access to the canonical landscape.zarr store.
+    The .data property opens the store once and caches the result.
+    """
+
+    def __init__(self, atlas):
+        self._atlas = atlas
+        self._data = None
+
+    def add(
+        self,
+        name: str,
+        source_path: str | Path,
+        *,
+        kind: str = "raster",
+        params: dict | None = None,
+        materialize: bool = True,
+        if_exists: str = "error",
+    ) -> None:
+        """Add a new variable to the landscape store.
+
+        Registers the source in __manifest__ and optionally materializes
+        the variable into landscape.zarr without recomputing existing variables.
+
+        Args:
+            name: Variable name for the new layer.
+            source_path: Path to the source raster file.
+            kind: Source kind (v1 only supports "raster").
+            params: Optional parameters dict (e.g., {"categorical": True}).
+            materialize: If True, materialize the variable immediately.
+            if_exists: Behavior when variable already exists:
+                - "error" (default): raise ValueError if variable exists
+                - "replace": atomically replace existing variable data
+                - "noop": silently skip if variable exists
+
+        Raises:
+            ValueError: If kind != "raster", if_exists invalid, or variable exists
+                when if_exists="error".
+            RuntimeError: If canonical stores not ready.
+
+        Returns:
+            None
+        """
+        from cleo.unify import Unifier
+
+        # Validate if_exists parameter
+        valid_if_exists = {"error", "replace", "noop"}
+        if if_exists not in valid_if_exists:
+            raise ValueError(
+                f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
+            )
+
+        # Ensure canonical stores exist
+        atlas = self._atlas
+        if not getattr(atlas, "_canonical_ready", False):
+            atlas.materialize_canonical()
+
+        u = Unifier(
+            chunk_policy=atlas.chunk_policy,
+            fingerprint_method=getattr(atlas, "fingerprint_method", "path_mtime_size"),
+        )
+
+        # Invalidate cached data since store may change
+        self._data = None
+
+        u.register_landscape_source(
+            atlas,
+            name=name,
+            source_path=Path(source_path),
+            kind=kind,
+            params=params or {},
+            if_exists=if_exists,
+        )
+
+        if materialize:
+            u.materialize_landscape_variable(
+                atlas,
+                variable_name=name,
+                if_exists=if_exists,
+            )
+
+    @property
+    def data(self) -> xr.Dataset:
+        """
+        Lazy access to the landscape zarr store as xr.Dataset.
+
+        Opens the store once and caches it. Validates store_state == "complete"
+        and presence of valid_mask variable.
+
+        Raises:
+            FileNotFoundError: If landscape.zarr store does not exist.
+            RuntimeError: If store_state != "complete" or valid_mask missing.
+        """
+        if self._data is not None:
+            return self._data
+
+        store_path = getattr(self._atlas, "landscape_store_path", None)
+        if store_path is None:
+            store_path = Path(self._atlas.path) / "landscape.zarr"
+
+        if not store_path.exists():
+            raise FileNotFoundError(
+                f"Landscape store missing at {store_path}; call atlas.materialize_canonical()."
+            )
+
+        ds = xr.open_zarr(store_path, consolidated=False)
+
+        state = ds.attrs.get("store_state", "")
+        if state != "complete":
+            raise RuntimeError(
+                f"Landscape store incomplete (store_state={state!r}); "
+                f"call atlas.materialize_canonical()."
+            )
+
+        if "valid_mask" not in ds.data_vars:
+            raise RuntimeError(
+                "Landscape store missing valid_mask; call atlas.materialize_canonical()."
+            )
+
+        self._data = ds
+        return self._data
 
 
 # %% classes
 class Atlas:
-    def __init__(self, path, country, crs):
+    def __init__(
+        self,
+        path,
+        country,
+        crs,
+        *,
+        chunk_policy: dict[str, int] | None = None,
+        results_root: Path | None = None,
+        fingerprint_method: str = "path_mtime_size",
+    ):
         self.path = path
         self.country = country
         self.region = None
         self.crs = crs
-        self._wind_turbines = []
+        self._turbines_configured: tuple[str, ...] | None = None
         self._setup_directories()
         self._setup_logging()
         self._deploy_resources()
-        self.index_file = self.path / "data" / "index.jsonl"
-        # Defer instantiation until materialize() is called
-        self._wind = None
-        self._landscape = None
-        self._materialized = False
+
+        # v1 Domain objects (cached, lazy)
+        self._wind_domain = None
+        self._landscape_domain = None
+
+        # Canonical store configuration
+        self.chunk_policy = chunk_policy if chunk_policy is not None else {"y": 1024, "x": 1024}
+        self.fingerprint_method = fingerprint_method
+
+        # Canonical store paths
+        self.wind_store_path = self.path / "wind.zarr"
+        self.landscape_store_path = self.path / "landscape.zarr"
+        self.results_root = results_root if results_root is not None else (self.path / "results")
+        self.results_root.mkdir(parents=True, exist_ok=True)
+
+        # Canonical store readiness flag
+        self._canonical_ready = False
 
     def __repr__(self) -> str:
         """Audit-safe repr: no IO, no mutation, bounded length."""
@@ -201,77 +706,388 @@ class Atlas:
             region = getattr(self, "_region", None) or ""
             crs = getattr(self, "_crs", "?")
             path = _safe_basename(getattr(self, "_path", None))
-
-            wind = getattr(self, "_wind", None)
-            land = getattr(self, "_landscape", None)
-
-            if wind is not None and getattr(wind, "data", None) is not None:
-                w_grid = _fmt_grid(wind.data)
-                h_count = wind.data.sizes.get("height", 0)
-                t_count = wind.data.sizes.get("turbine", 0)
-                wind_str = f"wind={w_grid} h={h_count} t={t_count}"
-            else:
-                wind_str = "wind=None"
-
-            if land is not None and getattr(land, "data", None) is not None:
-                l_grid = _fmt_grid(land.data)
-                land_str = f"land={l_grid}"
-            else:
-                land_str = "land=None"
+            canonical = "ready" if getattr(self, "_canonical_ready", False) else "not_ready"
 
             region_part = f", region={region!r}" if region else ""
-            return f"Atlas(country={country!r}{region_part}, crs={crs!r}, path={path!r}, {wind_str}, {land_str})"
+            return f"Atlas(country={country!r}{region_part}, crs={crs!r}, path={path!r}, stores={canonical})"
         except Exception:
             return "Atlas(?)"
 
     __str__ = __repr__
 
     def materialize(self):
+        """Materialize canonical wind.zarr and landscape.zarr stores.
+
+        Creates both canonical stores using the Unifier. Must be called before
+        accessing wind/landscape data.
+
+        Idempotent: does nothing if already materialized.
         """
-        Build/download data and instantiate WindAtlas and LandscapeAtlas.
-        Must be called before using wind/landscape data or calling save/load/clip.
-        """
-        if self._materialized:
+        if self._canonical_ready:
             return
-        self._wind = _WindAtlas(self)
-        self._landscape = _LandscapeAtlas(self)
-        self._materialized = True
-
-    def _require_materialized(self):
-        """Raise RuntimeError if atlas is not materialized."""
-        # Use getattr for defensive access (tests may bypass __init__)
-        wind = getattr(self, "_wind", None)
-        landscape = getattr(self, "_landscape", None)
-        if wind is None or landscape is None:
-            raise RuntimeError(
-                "Atlas not materialized. Call atlas.materialize() first."
-            )
+        self.materialize_canonical()
 
     @property
-    def wind(self):
-        """Access WindAtlas data (requires prior materialize() call)."""
-        if self._wind is None:
-            raise RuntimeError(
-                "Atlas not materialized. Call atlas.materialize() first."
-            )
-        return self._wind
+    def wind(self) -> WindDomain:
+        """Access WindDomain (v1 API).
 
-    @wind.setter
-    def wind(self, value):
-        self._wind = value
+        Returns a domain object with lazy, cached .data property.
+        Use atlas.wind_data for direct dataset access.
+        """
+        if self._wind_domain is None:
+            self._wind_domain = WindDomain(self)
+        return self._wind_domain
 
     @property
-    def landscape(self):
-        """Access LandscapeAtlas data (requires prior materialize() call)."""
-        if self._landscape is None:
-            raise RuntimeError(
-                "Atlas not materialized. Call atlas.materialize() first."
-            )
-        return self._landscape
+    def landscape(self) -> LandscapeDomain:
+        """Access LandscapeDomain (v1 API).
 
-    @landscape.setter
-    def landscape(self, value):
-        self._landscape = value
+        Returns a domain object with lazy, cached .data property.
+        Use atlas.landscape_data for direct dataset access.
+        """
+        if self._landscape_domain is None:
+            self._landscape_domain = LandscapeDomain(self)
+        return self._landscape_domain
+
+    @property
+    def wind_data(self) -> xr.Dataset:
+        """Direct access to wind dataset (convenience for atlas.wind.data)."""
+        return self.wind.data
+
+    @property
+    def landscape_data(self) -> xr.Dataset:
+        """Direct access to landscape dataset (convenience for atlas.landscape.data)."""
+        return self.landscape.data
+
+    @property
+    def wind_zarr(self) -> xr.Dataset:
+        """Open canonical wind zarr store as xr.Dataset.
+
+        Requires prior materialize() call to create the skeleton store.
+        """
+        if not getattr(self, "_canonical_ready", False):
+            raise RuntimeError(
+                "Canonical stores not ready. Call atlas.materialize() first."
+            )
+        return xr.open_zarr(self.wind_store_path, consolidated=False, chunks=self.chunk_policy)
+
+    @property
+    def landscape_zarr(self) -> xr.Dataset:
+        """Open canonical landscape zarr store as xr.Dataset.
+
+        Requires prior materialize() call to create the skeleton store.
+        """
+        if not getattr(self, "_canonical_ready", False):
+            raise RuntimeError(
+                "Canonical stores not ready. Call atlas.materialize() first."
+            )
+        return xr.open_zarr(self.landscape_store_path, consolidated=False, chunks=self.chunk_policy)
+
+    def materialize_canonical(self) -> None:
+        """Materialize both wind.zarr and landscape.zarr canonical stores.
+
+        This provides the canonical pathway for creating fully unified stores.
+
+        Creates:
+        - wind.zarr: Complete canonical wind store with GWA data
+        - landscape.zarr: Complete canonical landscape store with valid_mask and elevation
+
+        Requires that all GWA data files are present.
+        """
+        from cleo.unify import Unifier
+
+        u = Unifier(
+            chunk_policy=self.chunk_policy,
+            fingerprint_method=self.fingerprint_method,
+        )
+        u.materialize_wind(self)
+        u.materialize_landscape(self)
+        self._canonical_ready = True
+
+    # -------------------------------------------------------------------------
+    # Results API v1
+    # -------------------------------------------------------------------------
+
+    _RUN_ID_PREFIX_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+    def new_run_id(self, prefix: str | None = None) -> str:
+        """Generate a new unique run ID.
+
+        Creates a Windows-safe, sortable run ID with optional prefix.
+        Format: [prefix-]YYYYMMDDTHHMMSSz-<8-char-uuid>
+
+        Args:
+            prefix: Optional prefix to prepend to the run ID.
+                Must match pattern [A-Za-z0-9_-]+ (no colons or slashes).
+
+        Returns:
+            A unique run ID string.
+
+        Raises:
+            ValueError: If prefix contains invalid characters.
+        """
+        from datetime import datetime, timezone
+
+        if prefix is not None:
+            if not self._RUN_ID_PREFIX_PATTERN.match(prefix):
+                raise ValueError(
+                    f"prefix must match [A-Za-z0-9_-]+; got {prefix!r}"
+                )
+
+        now = datetime.now(timezone.utc)
+        base = now.strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
+
+        if prefix is not None:
+            return f"{prefix}-{base}"
+        return base
+
+    def persist(
+        self,
+        metric_name: str,
+        obj,
+        *,
+        run_id: str | None = None,
+        params: dict | None = None,
+    ) -> Path:
+        """Persist a result dataset/dataarray to a Zarr store.
+
+        Creates an atomic, Windows-safe Zarr store
+        under <results_root>/<run_id>/<metric_name>.zarr.
+
+        Args:
+            metric_name: Name of the metric/result being stored.
+            obj: xr.Dataset or xr.DataArray to store.
+            run_id: Unique identifier for this run/experiment.
+                If None, a new run_id is generated via new_run_id().
+            params: Optional parameters dict to store in attrs.
+
+        Returns:
+            Path to the created Zarr store.
+
+        Raises:
+            FileExistsError: If target store already exists (no silent overwrite).
+        """
+        from cleo.store import atomic_dir
+
+        if run_id is None:
+            run_id = self.new_run_id()
+
+        store_path = Path(self.results_root) / run_id / f"{metric_name}.zarr"
+
+        # Collision check - raise FileExistsError if target exists
+        if store_path.exists():
+            raise FileExistsError(
+                f"Result store already exists: {store_path}. "
+                f"Use a different run_id or metric_name."
+            )
+
+        # Handle DataArray vs Dataset
+        if isinstance(obj, xr.DataArray):
+            da = obj
+            if da.name is None:
+                da = da.rename(metric_name)
+            ds = da.to_dataset()
+        else:
+            ds = obj
+
+        # Ensure parent directory exists
+        (Path(self.results_root) / run_id).mkdir(parents=True, exist_ok=True)
+
+        # Atomic write
+        with atomic_dir(store_path) as tmp:
+            ds.to_zarr(tmp, mode="w", consolidated=False)
+
+            # Add metadata attrs
+            g = zarr.open_group(tmp, mode="a")
+            g.attrs["store_state"] = "complete"
+            g.attrs["run_id"] = run_id
+            g.attrs["metric_name"] = metric_name
+
+            # Inline timestamp and JSON serialization (no unify.py helper imports)
+            g.attrs["created_at"] = datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat()
+            if params is not None:
+                g.attrs["params_json"] = json.dumps(
+                    params, sort_keys=True, separators=(",", ":")
+                )
+
+            # Optional provenance from canonical stores
+            try:
+                if getattr(self, "_canonical_ready", False):
+                    w = self.wind_zarr
+                    l = self.landscape_zarr
+                    g.attrs["wind_grid_id"] = w.attrs.get("grid_id", "")
+                    g.attrs["landscape_grid_id"] = l.attrs.get("grid_id", "")
+            except Exception:
+                pass
+
+        return store_path
+
+    def open_result(self, run_id: str, metric_name: str) -> xr.Dataset:
+        """Open a persisted result Zarr store.
+
+        Opens the result store lazily.
+
+        Args:
+            run_id: Run identifier.
+            metric_name: Metric name.
+
+        Returns:
+            Lazy xr.Dataset (no compute performed).
+
+        Raises:
+            FileNotFoundError: If store doesn't exist.
+        """
+        store_path = Path(self.results_root) / run_id / f"{metric_name}.zarr"
+
+        if not store_path.exists():
+            raise FileNotFoundError(
+                f"Result store not found: {store_path}. "
+                f"Run persist() first."
+            )
+
+        return xr.open_zarr(store_path, consolidated=False)
+
+    def export_result_netcdf(
+        self,
+        run_id: str,
+        metric_name: str,
+        out_path: str | Path,
+        *,
+        encoding: dict | None = None,
+    ) -> Path:
+        """Export a result Zarr store to a single NetCDF file.
+
+        Reads from the existing Zarr store and writes atomically to NetCDF.
+
+        Args:
+            run_id: Run identifier.
+            metric_name: Metric name.
+            out_path: Output path (must end with ".nc").
+            encoding: Optional xarray encoding dict for NetCDF.
+
+        Returns:
+            Path to the created NetCDF file.
+
+        Raises:
+            ValueError: If out_path doesn't end with ".nc".
+            FileNotFoundError: If source Zarr store doesn't exist.
+        """
+        out_path = Path(out_path)
+
+        if not str(out_path).endswith(".nc"):
+            raise ValueError(f"out_path must end with '.nc', got: {out_path}")
+
+        src_store = Path(self.results_root) / run_id / f"{metric_name}.zarr"
+        if not src_store.exists():
+            raise FileNotFoundError(
+                f"Result store not found: {src_store}. "
+                f"Run persist() first."
+            )
+
+        # Open source store
+        ds = xr.open_zarr(src_store, consolidated=False)
+
+        # Build encoding: handle string/object dtype coords and vars
+        final_encoding = {}
+        for name, var in {**ds.coords, **ds.data_vars}.items():
+            if var.dtype == object or (hasattr(var.dtype, "kind") and var.dtype.kind == "U"):
+                # Convert object/unicode strings to fixed-length bytes for NetCDF compat
+                max_len = max((len(str(v)) for v in var.values.ravel()), default=1)
+                final_encoding[name] = {"dtype": f"S{max_len}"}
+        # Merge user-provided encoding (takes precedence)
+        final_encoding.update(encoding or {})
+
+        # Atomic file write
+        tmp = out_path.with_name(out_path.name + f".__tmp__{uuid4().hex}")
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            ds.to_netcdf(tmp, encoding=final_encoding)
+            os.replace(tmp, out_path)
+        except Exception:
+            if tmp.exists():
+                tmp.unlink()
+            raise
+
+        return out_path
+
+    def clean_results(
+        self,
+        run_id: str | None = None,
+        older_than: str | None = None,
+        metric_name: str | None = None,
+    ) -> int:
+        """Clean up result Zarr stores.
+
+        Deletes Zarr result directories matching the specified criteria.
+
+        Args:
+            run_id: If specified, only clean this run's results.
+            older_than: If specified, only clean results older than this date.
+                Accepts "YYYY-MM-DD" or ISO datetime format.
+            metric_name: If specified, only clean this metric's store.
+
+        Returns:
+            Number of stores deleted.
+        """
+        base = Path(self.results_root)
+        count = 0
+
+        # Determine which run directories to scan
+        if run_id:
+            runs = [base / run_id] if (base / run_id).exists() else []
+        else:
+            runs = sorted([p for p in base.iterdir() if p.is_dir()])
+
+        # Parse older_than threshold if specified
+        threshold_dt = None
+        if older_than:
+            try:
+                # Try ISO format first
+                threshold_dt = datetime.datetime.fromisoformat(older_than)
+            except ValueError:
+                # Try date-only format
+                threshold_dt = datetime.datetime.strptime(older_than, "%Y-%m-%d")
+
+        for run_dir in runs:
+            for store in sorted(run_dir.glob("*.zarr")):
+                # Filter by metric_name if specified
+                if metric_name and store.name != f"{metric_name}.zarr":
+                    continue
+
+                # Filter by age if older_than specified
+                if threshold_dt:
+                    store_dt = None
+                    # Try to get created_at from zarr attrs
+                    try:
+                        g = zarr.open_group(store, mode="r")
+                        created_at = g.attrs.get("created_at")
+                        if created_at:
+                            store_dt = datetime.datetime.fromisoformat(
+                                created_at.replace("Z", "+00:00")
+                            )
+                    except Exception:
+                        pass
+
+                    # Fallback to mtime
+                    if store_dt is None:
+                        mtime = store.stat().st_mtime
+                        store_dt = datetime.datetime.fromtimestamp(mtime)
+
+                    # Skip if not older than threshold
+                    if store_dt >= threshold_dt:
+                        continue
+
+                # Delete the store
+                shutil.rmtree(store)
+                count += 1
+
+            # Clean up empty run directories
+            if run_dir.exists() and not any(run_dir.iterdir()):
+                run_dir.rmdir()
+
+        return count
 
     @property
     def path(self):
@@ -315,19 +1131,53 @@ class Atlas:
             # Fallback: stable string representation
             self._crs = crs_obj.to_string()
 
+    def configure_turbines(self, turbines: Sequence[str]) -> None:
+        """Configure turbines for wind materialization.
+
+        Affects wind materialization into wind.zarr; does not change compute
+        defaults. Call before Atlas.materialize() or materialize_canonical().
+
+        Changing configured turbines changes the wind inputs_id, triggering
+        rebuild on next materialize().
+
+        Args:
+            turbines: Non-empty sequence of turbine IDs (e.g., ["Enercon.E40.500"]).
+
+        Raises:
+            ValueError: If turbines is empty, contains non-strings, empty/whitespace-only
+                IDs, or duplicates.
+
+        Example:
+            >>> atlas.configure_turbines(["Enercon.E40.500", "Vestas.V90.2000"])
+            >>> atlas.materialize()  # Materializes only configured turbines
+        """
+        if not turbines:
+            raise ValueError("turbines must be a non-empty sequence")
+
+        cleaned = []
+        seen = set()
+        for item in turbines:
+            if not isinstance(item, str):
+                raise ValueError(f"Each turbine ID must be a string, got {type(item).__name__}")
+            stripped = item.strip()
+            if not stripped:
+                raise ValueError("Turbine ID cannot be empty or whitespace-only")
+            if stripped in seen:
+                raise ValueError(f"Duplicate turbine ID: {stripped!r}")
+            seen.add(stripped)
+            cleaned.append(stripped)
+
+        self._turbines_configured = tuple(cleaned)
+
     @property
-    def wind_turbines(self):
-        return self._wind_turbines
+    def turbines_configured(self) -> tuple[str, ...] | None:
+        """Turbines configured for wind materialization.
 
-    @wind_turbines.setter
-    def wind_turbines(self, turbine_names):
-        if isinstance(turbine_names, str):
-            turbine_names = [turbine_names]
-        elif not isinstance(turbine_names, list):
-            raise ValueError(f"Turbine names must be provided as list or as string")
-
-        for name in turbine_names:
-            self.add_turbine(name)
+        Returns:
+            Tuple of turbine IDs if configure_turbines() was called, else None.
+            None means default turbine selection logic applies during materialize().
+        """
+        return self._turbines_configured
 
     _setup_logging = setup_logging
     _deploy_resources = deploy_resources
@@ -350,125 +1200,6 @@ class Atlas:
             index_file_path.touch()  # Create an empty file
             logger.info(f"Created new index file: {index_file_path}")
 
-    def load(self, user_string=None, *, region: str | None = None, scenario='default', timestamp='latest'):
-        """
-        Load the datasets for the specified country, region, and scenario. If no region is specified, the datasets for
-        the entire country are loaded. If no scenario is specified, the default scenario is loaded.
-
-        :param region: Region name (None for whole country). Rejects "", "None", and "__all__" as invalid.
-        """
-        self._require_materialized()
-
-        # Validate region: reject sentinel-like values
-        if region is not None:
-            region = region.strip()
-            if region == "" or region in {"None", REGION_NONE_TOKEN}:
-                raise ValueError(
-                    f"Invalid region value: {region!r}. Use region=None for whole country, "
-                    f"or provide a valid region name."
-                )
-
-        filename_pattern = re.compile(
-            r"(?P<type>[A-Za-z]+Atlas)_(?P<country>[A-Z]+)_(?P<region>__all__|[^\d_]+)_(?P<scenario>[A-Za-z0-9]+)_(?P<timestamp>\d{8}T\d{6})\.nc"
-        )
-        # Parse the user string
-        if user_string:
-            match = filename_pattern.match(user_string)
-            if not match:
-                raise ValueError(f"{user_string} does not match the expected format.")
-            metadata = match.groupdict()
-            # Convert filename token back to internal representation
-            region = _region_from_index(metadata["region"])
-            scenario = metadata["scenario"]
-            timestamp = metadata["timestamp"]
-            if metadata["country"] != self.country:
-                raise ValueError(f"Country code in {user_string} does not match the country code of the Atlas.")
-
-        # locate the appropriate directory
-        if scenario != 'default':
-            directory = self.path / "data" / "processed" / scenario
-            if not directory.exists():
-                raise FileNotFoundError(f"Scenario directory for {scenario} does not exist.")
-        else:
-            directory = self.path / "data" / "processed"
-
-        # find matching files (compare with filename token, not internal value)
-        region_token = _region_for_filename(region)
-        matching_files = []
-        for file in directory.glob(f"*.nc"):
-            match = filename_pattern.match(file.name)
-            if match:
-                file_metadata = match.groupdict()
-                if (
-                        file_metadata["country"] == self.country
-                        and file_metadata["region"] == region_token
-                        and file_metadata["scenario"] == scenario
-                        and (timestamp == 'latest' or file_metadata["timestamp"] == timestamp)
-                ):
-                    matching_files.append((file, file_metadata))
-
-        # Fallback to legacy filenames if no timestamped files found
-        if not matching_files:
-            # Try legacy pattern: {Type}_{Country}.nc or {Type}_{Country}_{Region}.nc
-            for atlas_type in ["WindAtlas", "LandscapeAtlas"]:
-                if region is not None:
-                    legacy_name = f"{atlas_type}_{self.country}_{region}.nc"
-                else:
-                    legacy_name = f"{atlas_type}_{self.country}.nc"
-                legacy_file = directory / legacy_name
-                if legacy_file.exists():
-                    matching_files.append((legacy_file, {
-                        "type": atlas_type,
-                        "country": self.country,
-                        "region": region,
-                        "scenario": scenario,
-                        "timestamp": "legacy",
-                    }))
-
-        if not matching_files:
-            raise FileNotFoundError(f"No matching files found in {directory}.")
-
-        if timestamp == 'latest':
-            matching_files.sort(key=lambda x: x[1]["timestamp"], reverse=True)
-
-        for file, metadata in matching_files:
-            subclass = metadata["type"]
-            if subclass == "WindAtlas":
-                wind_data = xr.open_dataset(file, engine="netcdf4")
-                self.wind.data = wind_data
-                if 'turbine' in self.wind.data.coords:
-                    self._wind_turbines = self.wind.data.coords['turbine'].values.tolist()
-                if self.wind.data.rio.crs is not None:
-                    self._crs = f"epsg:{self.wind.data.rio.crs.to_epsg()}"
-                if region is not None:
-                    self._region = region
-                logger.info(f"Wind dataset loaded successfully: {file}")
-            elif subclass == "LandscapeAtlas":
-                landscape_data = xr.open_dataset(file, engine="netcdf4")
-                self.landscape.data = landscape_data
-                logger.info(f"Landscape dataset loaded successfully: {file}")
-            else:
-                logger.warning(f"Unknown subclass: {subclass}")
-
-        return self
-
-    def add_turbine(self, turbine_name):
-        self._require_materialized()
-        # Check if the YAML file exists
-        yaml_file = self.path / "resources" / f"{turbine_name}.yml"
-        if not yaml_file.is_file():
-            raise FileNotFoundError(f"The YAML file for {turbine_name} does not exist.")
-        if turbine_name not in self._wind_turbines:
-            # Add the turbine data to the wind atlas
-            self.wind.add_turbine_data(yaml_file)
-            # Derive from dataset as source of truth (prevents list/dataset divergence)
-            ds_turbs = self.wind.data.coords["turbine"].values.tolist()
-            if turbine_name not in ds_turbs:
-                raise RuntimeError(f"Failed to add turbine {turbine_name!r} to dataset; dataset turbines={ds_turbs}")
-            self._wind_turbines = ds_turbs
-        else:
-            logger.warning(f"Turbine {turbine_name} already added.")
-
     def get_nuts_region(self, region, merged_name=None, to_atlascrs=True):
         nuts_dir = self.path / "data" / "nuts"
         shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
@@ -478,7 +1209,8 @@ class Atlas:
                 f"Run NUTS download/extract first (e.g. atlas.landscape._load_nuts() / cleo.loaders.load_nuts)."
             )
         nuts_shape = shp_files[0]
-        nuts = gpd.read_file(nuts_shape)
+        # Read vector via centralized helper
+        nuts = _read_vector_file(nuts_shape)
 
         # Convert three-digit country code to two-digit country code
         alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
@@ -520,817 +1252,9 @@ class Atlas:
                 f"Run NUTS download/extract first (e.g. atlas.landscape._load_nuts() / cleo.loaders.load_nuts)."
             )
         nuts_shape = shp_files[0]
-        nuts = gpd.read_file(nuts_shape)
+        # Read vector via centralized helper
+        nuts = _read_vector_file(nuts_shape)
         alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
         clip_shape = nuts.loc[(nuts["CNTR_CODE"] == alpha_2) & (nuts["LEVL_CODE"] == 0), :]
         return clip_shape
 
-    def clip_to_nuts(self, region, merged_name=None, inplace=True):
-        """
-        Clips all Atlas datasets to the specified NUTS region
-        :param merged_name: name string for union of merged shapes
-        :param region: latin name of a NUTS region.
-        :param inplace: boolean flag indicating whether clipped data should be updated inplace. Default is True
-        :return:
-        """
-        self._require_materialized()
-        clip_shape = self.get_nuts_region(region, merged_name)
-        # clip both Datasets to clip_shape
-        wind_dataset, _ = clip_to_geometry(self.wind, clip_shape)
-        landscape_dataset, _ = clip_to_geometry(self.landscape, clip_shape)
-        if inplace:
-            # update Datasets in subclasses
-            self.wind.data = wind_dataset
-            self.landscape.data = landscape_dataset
-            # update attributes in Datasets
-            self.wind.data.attrs["country"] = self.country
-            self.wind.data.attrs['region'] = region
-            self.landscape.data.attrs["country"] = self.country
-            self.landscape.data.attrs['region'] = region
-            # update region property in Atlas class
-            self.region = region
-            logger.info(f"Atlas clipped to {region}")
-        else:
-            return wind_dataset, landscape_dataset
-
-    def save(self, scenario=None):
-        """
-        Save NetCDF files for WindAtlas and LandscapeAtlas, adding a timestamp for versioning.
-        """
-        self._require_materialized()
-        # Always ensure processed directory exists
-        processed_dir = self.path / "data" / "processed"
-        processed_dir.mkdir(parents=True, exist_ok=True)
-        if scenario:
-            savepath = self.path / 'data' / 'processed' / scenario
-            savepath.mkdir(parents=True, exist_ok=True)
-        else:
-            savepath = self.path / 'data' / 'processed'
-
-        # Get the current timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
-
-        # Define file paths with scenario and timestamp
-        scenario_name = scenario if scenario else "default"
-        region_token = _region_for_filename(self.region)
-        wind_file = savepath / f"WindAtlas_{self.country}_{region_token}_{scenario_name}_{timestamp}.nc"
-        landscape_file = savepath / f"LandscapeAtlas_{self.country}_{region_token}_{scenario_name}_{timestamp}.nc"
-
-        # Sanitize attrs to remove None values (NetCDF cannot serialize None)
-        _sanitize_netcdf_attrs(self.wind.data)
-        _sanitize_netcdf_attrs(self.landscape.data)
-
-        # Save datasets - only update index on success
-        try:
-            self.wind.data.to_netcdf(wind_file, format="NETCDF4", engine="netcdf4")
-            self.landscape.data.to_netcdf(landscape_file, format="NETCDF4", engine="netcdf4")
-            logger.info(f"Datasets saved successfully: {wind_file}, {landscape_file}")
-        except Exception as e:
-            logger.error(f"Failed to save dataset: {e}")
-            return  # Do not update index if save failed
-
-        # Log to index (JSONL format) - region=None serializes to JSON null
-        index_entries = [
-            {"subclass": "WindAtlas", "country": self.country, "region": self.region,
-             "scenario": scenario or "default", "path": str(wind_file), "timestamp": timestamp},
-            {"subclass": "LandscapeAtlas", "country": self.country, "region": self.region,
-             "scenario": scenario or "default", "path": str(landscape_file), "timestamp": timestamp},
-        ]
-        # Ensure index file parent directory exists
-        self.index_file.parent.mkdir(parents=True, exist_ok=True)
-        # write to index file
-        try:
-            with open(self.index_file, "a") as f:
-                for entry in index_entries:
-                    f.write(json.dumps(entry) + "\n")
-            logger.info(f"index updated with entries: {index_entries}")
-        except Exception as e:
-            logger.error(f"Failed to update index file: {e}")
-            raise
-
-    def _read_index(self):
-        """
-        Read the index file into a list of 6-tuples:
-        (subclass, country, region, scenario, path, timestamp)
-
-        Supports JSONL, tab-separated, and legacy colon-separated formats.
-        Malformed lines raise ValueError with context.
-        """
-        if not isinstance(self.index_file, Path):
-            self.index_file = Path(self.index_file)
-
-        # Also check for legacy index.txt if index.jsonl doesn't exist
-        if not self.index_file.is_file():
-            legacy_index = self.index_file.parent / "index.txt"
-            if legacy_index.is_file():
-                self.index_file = legacy_index
-            else:
-                logger.warning("index file not found.")
-                return []
-
-        entries = []
-        with open(self.index_file, "r") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line:
-                    continue
-                entries.append(_parse_index_line(line))
-        return entries
-
-    def _write_index(self, entries):
-        """Write entries to the index file in JSONL format."""
-        # Ensure we're writing to the jsonl file, not legacy txt
-        if self.index_file.suffix == ".txt":
-            self.index_file = self.index_file.parent / "index.jsonl"
-        with open(self.index_file, "w") as f:
-            for entry in entries:
-                if len(entry) != 6:
-                    raise ValueError(f"Index entry must have 6 fields, got {entry!r}")
-                subclass, country, region, scenario, path, ts = entry
-                obj = {
-                    "subclass": subclass,
-                    "country": country,
-                    "region": region,
-                    "scenario": scenario,
-                    "path": str(path),
-                    "timestamp": ts,
-                }
-                f.write(json.dumps(obj) + "\n")
-
-    def cleanup_datasets(self, scenario=None):
-        """
-        Retain only the most recent version of the dataset for the current country, region, and scenario.
-        """
-        entries = self._read_index()
-
-        # Filter entries for the current country, region, and scenario
-        # Note: entry[2] is already normalized to None via _parse_index_line
-        filtered_entries = [
-            entry for entry in entries
-            if entry[1] == self.country and entry[2] == self.region and
-               (scenario is None or entry[3] == scenario)
-        ]
-
-        # Group by subclass (WindAtlas, LandscapeAtlas) and keep the latest
-        latest_entries = {}
-        for entry in filtered_entries:
-            subclass = entry[0]
-            if (subclass not in latest_entries) or (_timestamp_key(entry[5]) > _timestamp_key(latest_entries[subclass][5])):
-                latest_entries[subclass] = entry
-
-        # Delete older versions
-        atlas_root = self.path.resolve()
-        def _resolve_under_root(p: Path) -> Path:
-            rp = p if p.is_absolute() else (self.path / p)
-            rp = rp.resolve()
-            try:
-                rp.relative_to(atlas_root)
-            except ValueError as e:
-                raise RuntimeError(f"Refusing to delete path outside of atlas dir: {rp}") from e
-            return rp
-
-        for entry in filtered_entries:
-            if entry not in latest_entries.values():
-                resolved = _resolve_under_root(Path(entry[4]))
-                if resolved.exists():
-                    resolved.unlink()
-
-        # Update the index
-        remaining_entries = [
-                                entry for entry in entries if entry not in filtered_entries
-                            ] + list(latest_entries.values())
-        self._write_index(remaining_entries)
-
-        region_desc = self.region if self.region is not None else "(whole country)"
-        logger.info(
-            f"Cleanup complete for {self.country}, region {region_desc}, scenario {scenario or 'all'}.")
-
-
-class _AtlasDataVarSetterMixin:
-    """
-    Mixin providing exact-grid enforcement for raster data variable assignments.
-
-    Contract:
-    - Template is stored as self.data["template"] with x/y dims.
-    - Any DataArray with both x and y dims must match template coords exactly.
-    - Non-raster DataArrays (without x/y dims) pass through unchanged.
-    """
-
-    @property
-    def crs(self) -> str:
-        """
-        Backward-compatible alias for Atlas CRS.
-
-        Canonical CRS is owned by parent Atlas (self.parent.crs). Sub-objects delegate.
-        """
-        if self.parent is None or getattr(self.parent, "crs", None) is None:
-            raise ValueError("Atlas parent CRS is missing (self.parent.crs is None).")
-        return self.parent.crs
-
-    def _set_var(self, name: str, da) -> None:
-        """
-        Set a data variable with exact-grid enforcement for rasters.
-
-        :param name: Variable name to set
-        :param da: DataArray to assign
-        :raises RuntimeError: If self.data is None
-        :raises ValueError: If template missing (except when setting template itself)
-        :raises ValueError: If raster x/y coords don't match template
-        """
-        if self.data is None:
-            raise RuntimeError(f"Cannot set '{name}': self.data is None")
-
-        # Special case: setting template itself
-        if name == "template":
-            if "x" not in da.dims or "y" not in da.dims:
-                raise ValueError("template must have both x and y dims")
-            self.data["template"] = da
-            return
-
-        # For all other vars, require template to exist
-        if "template" not in self.data.data_vars:
-            raise ValueError(
-                f"Cannot set '{name}': template not in self.data.data_vars. "
-                "Set template first via _set_var('template', ...)."
-            )
-
-        # Enforce exact grid for raster-like DataArrays
-        from cleo.spatial import enforce_exact_grid
-
-        da = enforce_exact_grid(da, self.data["template"], var_name=name)
-        self.data[name] = da
-
-
-class _WindAtlas(_AtlasDataVarSetterMixin):
-    def __init__(self, parent):
-        self.parent = parent
-        self.data = None
-        self._load_gwa()
-        self._build_netcdf("WindAtlas")
-        self._ensure_windatlas_schema()
-        self._set_attributes()
-
-    def __repr__(self) -> str:
-        """Audit-safe repr: no IO, no mutation, bounded length."""
-        try:
-            data = getattr(self, "data", None)
-            if data is None:
-                return "WindAtlas(data=None)"
-
-            schema = data.attrs.get("cleo_schema_version", "?")
-            grid = _fmt_grid(data)
-            h = data.sizes.get("height", 0)
-            u = data.sizes.get("wind_speed", 0)
-            t = data.sizes.get("turbine", 0)
-            vars_list = _cap_list(data.data_vars.keys(), max_items=5, max_len=40)
-
-            return f"WindAtlas(schema={schema}, grid={grid}, h={h}, u={u}, t={t}, vars={vars_list})"
-        except Exception:
-            return "WindAtlas(?)"
-
-    __str__ = __repr__
-
-    def _ensure_windatlas_schema(self):
-        """
-        Validate and migrate WindAtlas dataset to canonical schema (windatlas_v2).
-
-        Ensures:
-        - No stray 'band' coord/var/dim
-        - 'template' data_var exists with dims ('y', 'x')
-        - 'wind_speed' coord exists with canonical grid 0..40 step 0.5
-
-        If migration occurs and _netcdf_path is set, persists changes to disk.
-        """
-        changed = False
-
-        # Drop stray band coord/var (observed in real file: coords include 'band' but dims do not)
-        if "band" in self.data.coords or "band" in self.data.variables:
-            self.data = self.data.drop_vars("band", errors="ignore")
-            changed = True
-        if "band" in self.data.dims:
-            if self.data.sizes["band"] == 1:
-                self.data = self.data.isel(band=0, drop=True)
-                changed = True
-            else:
-                raise ValueError("Unexpected multi-band WindAtlas dataset.")
-
-        # Template presence and dims
-        if "template" not in self.data.data_vars:
-            raise ValueError("WindAtlas invalid: missing template.")
-        if tuple(self.data["template"].dims) != ("y", "x"):
-            raise ValueError("WindAtlas invalid: template must be dims ('y', 'x').")
-
-        # wind_speed coord
-        u = np.arange(0.0, 40.0 + 0.5, 0.5)
-        if "wind_speed" not in self.data.coords:
-            self.data = self.data.assign_coords(wind_speed=u)
-            changed = True
-        else:
-            ws = np.asarray(self.data.coords["wind_speed"].values)
-            if ws.shape != u.shape or not np.all(ws == u):
-                raise ValueError("WindAtlas invalid: wind_speed grid mismatch vs canonical 0..40 step 0.5.")
-
-        # Schema marker
-        if self.data.attrs.get("cleo_schema_version") != "windatlas_v2":
-            self.data.attrs["cleo_schema_version"] = "windatlas_v2"
-            changed = True
-
-        # Persist migration (schema changes only, not normal compute flow)
-        if changed and getattr(self, "_netcdf_path", None) is not None:
-            logger.info(f"Migrated WindAtlas schema; writing back to {self._netcdf_path}")
-            # [MIGRATION ONLY] Load all data into memory to close file handle before overwriting.
-            # This .load() is intentional for file I/O safety, not invoked in normal compute paths.
-            self.data = self.data.load()
-            self.data.close()
-            # Write to temp file then rename (avoids file handle conflicts)
-            import tempfile
-            import shutil
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".nc", dir=self._netcdf_path.parent)
-            os.close(tmp_fd)
-            self.data.to_netcdf(tmp_path)
-            shutil.move(tmp_path, self._netcdf_path)
-
-    def add_turbine_data(self, yaml_file):
-        """
-        Add wind turbine data to the xarray Dataset wrapped by the _WindAtlas class.
-
-        The turbine coordinate value is the YAML file stem (config id), NOT derived
-        from manufacturer/model/capacity. This allows the same turbine model with
-        different hub heights to coexist.
-
-        All turbine metadata is stored in the dataset; no runtime YAML reads required.
-
-        Parameters:
-        yaml_file: Path to the YAML file containing the wind turbine data.
-        Returns:
-        None
-        """
-        from pathlib import Path
-
-        # Strict preconditions (no self-heal - _ensure_windatlas_schema should have run)
-        if "wind_speed" not in self.data.coords:
-            raise ValueError("WindAtlas invalid: missing wind_speed coord.")
-        if "band" in self.data.coords or "band" in self.data.dims:
-            raise ValueError("WindAtlas invalid: unexpected band.")
-        if "template" not in self.data.data_vars:
-            raise ValueError("WindAtlas invalid: missing template.")
-
-        # Turbine ID is the YAML file stem (allows same model with different configs)
-        turbine_id = Path(yaml_file).stem
-
-        # Validate uniqueness
-        if "turbine" in self.data.coords:
-            existing = list(self.data.coords["turbine"].values)
-            if turbine_id in existing:
-                raise ValueError(f"Duplicate turbine_id: {turbine_id!r}")
-
-        # Load the YAML file
-        with yaml_file.open('r') as f:
-            turbine_data = yaml.safe_load(f)
-
-        # Extract required turbine metadata
-        manufacturer = str(turbine_data['manufacturer'])
-        model = str(turbine_data['model'])
-        capacity = float(turbine_data['capacity'])
-        hub_height = float(turbine_data['hub_height'])
-        rotor_diameter = float(turbine_data['rotor_diameter'])
-        commissioning_year = int(turbine_data['commissioning_year'])
-        turbine_model_key = f"{manufacturer}.{model}.{capacity}"
-
-        # Extract power curve data
-        old_u = np.array(list(map(float, turbine_data['V'])))
-        old_p = np.array(list(map(float, turbine_data['cf'])))
-
-        # Resample power curve to atlas wind_speed grid
-        u = self.data.coords["wind_speed"].values
-        new_p = np.interp(u, old_u, old_p, left=0.0, right=0.0)
-
-        # Initialize wind turbine power curves on atlas grid
-        power_curve = xr.DataArray(data=new_p, coords={'wind_speed': u}, dims=['wind_speed'])
-        power_curve = power_curve.assign_coords(turbine=turbine_id).expand_dims('turbine')
-        power_curve.name = "power_curve"
-
-        # Create metadata DataArrays (1D on turbine dim)
-        meta_vars = {
-            "turbine_manufacturer": xr.DataArray([manufacturer], dims=["turbine"], coords={"turbine": [turbine_id]}),
-            "turbine_model": xr.DataArray([model], dims=["turbine"], coords={"turbine": [turbine_id]}),
-            "turbine_capacity": xr.DataArray([capacity], dims=["turbine"], coords={"turbine": [turbine_id]}),
-            "turbine_hub_height": xr.DataArray([hub_height], dims=["turbine"], coords={"turbine": [turbine_id]}),
-            "turbine_rotor_diameter": xr.DataArray([rotor_diameter], dims=["turbine"], coords={"turbine": [turbine_id]}),
-            "turbine_commissioning_year": xr.DataArray([commissioning_year], dims=["turbine"], coords={"turbine": [turbine_id]}),
-            "turbine_model_key": xr.DataArray([turbine_model_key], dims=["turbine"], coords={"turbine": [turbine_id]}),
-        }
-
-        if "power_curve" not in self.data.data_vars:
-            # First turbine: establish Dataset coord turbine=[turbine_id], then assign
-            self.data = self.data.assign_coords(turbine=[turbine_id])
-            self.data["power_curve"] = power_curve
-            for name, da in meta_vars.items():
-                self.data[name] = da
-            return
-
-        # Append: concat power_curve and metadata, then replace in dataset
-        # First, collect existing data before dropping
-        old_pc = self.data["power_curve"]
-        old_meta = {name: self.data[name] for name in meta_vars if name in self.data.data_vars}
-
-        # Concat power curve
-        combined_pc = xr.concat([old_pc, power_curve], dim="turbine")
-
-        # Concat metadata
-        combined_meta = {}
-        for name, new_da in meta_vars.items():
-            if name in old_meta:
-                combined_meta[name] = xr.concat([old_meta[name], new_da], dim="turbine")
-            else:
-                combined_meta[name] = new_da
-
-        # Drop existing vars to avoid dimension conflict during coord update
-        vars_to_drop = ["power_curve"] + list(old_meta.keys())
-        self.data = self.data.drop_vars(vars_to_drop)
-        self.data = self.data.assign_coords(turbine=combined_pc.coords["turbine"].values)
-        self.data["power_curve"] = combined_pc
-        for name, da in combined_meta.items():
-            self.data[name] = da
-
-    _load_gwa = load_gwa
-    _build_netcdf = build_netcdf
-    _set_attributes = set_attributes
-
-    # loaders
-    load_weibull_parameters = load_weibull_parameters
-    load_air_density = load_air_density
-    get_turbine_attribute = get_turbine_attribute
-    get_cost_assumptions = get_cost_assumptions
-    get_overnight_cost = get_overnight_cost
-
-    # methods for resource assessment
-    compute_air_density_correction = compute_air_density_correction
-    compute_mean_wind_speed = compute_mean_wind_speed
-    compute_wind_shear_coefficient = compute_wind_shear_coefficient
-    compute_weibull_pdf = compute_weibull_pdf
-    simulate_capacity_factors = simulate_capacity_factors
-    compute_lcoe = compute_lcoe
-    compute_optimal_power_energy = compute_optimal_power_energy
-    minimum_lcoe = minimum_lcoe
-
-
-class _LandscapeAtlas(_AtlasDataVarSetterMixin):
-    def __init__(self, parent):
-        self.parent = parent
-        self.data = None
-        self._load_nuts()
-        self._build_netcdf("LandscapeAtlas")
-        self._set_attributes()
-
-    def __repr__(self) -> str:
-        """Audit-safe repr: no IO, no mutation, bounded length."""
-        try:
-            data = getattr(self, "data", None)
-            if data is None:
-                return "LandscapeAtlas(data=None)"
-
-            grid = _fmt_grid(data)
-            layers = _cap_list(data.data_vars.keys(), max_items=5, max_len=40)
-
-            return f"LandscapeAtlas(grid={grid}, layers={layers})"
-        except Exception:
-            return "LandscapeAtlas(?)"
-
-    __str__ = __repr__
-
-    _load_nuts = load_nuts
-    _build_netcdf = build_netcdf
-    _set_attributes = set_attributes
-    add = add
-    flatten = flatten
-    convert = convert
-    get_clc_codes = get_clc_codes
-    add_corine_land_cover = add_corine_land_cover
-
-    @staticmethod
-    def load_and_extract_from_dict(source_dict, proxy=None, proxy_user=None, proxy_pass=None):
-        """
-        Download files described by source_dict and extract archives safely.
-
-        source_dict format:
-            { filename: (directory, url), ... }
-
-        Security/UX:
-        - Never changes process CWD.
-        - Safe ZIP extraction (rejects absolute paths / '..' traversal).
-        """
-
-        def _safe_extract_zip(zip_ref, dest_dir: Path):
-            dest_dir = dest_dir.resolve()
-            for info in zip_ref.infolist():
-                name = info.filename
-                # Reject absolute paths and path traversal
-                target = (dest_dir / name).resolve()
-                try:
-                    target.relative_to(dest_dir)
-                except Exception:
-                    raise ValueError(f"Unsafe zip member path: {name!r}")
-                zip_ref.extract(info, path=dest_dir)
-
-        for file, (directory, url) in source_dict.items():
-            directory_path = Path(directory)
-            directory_path.mkdir(parents=True, exist_ok=True)
-
-            download_path = directory_path / file
-            dnld = download_file(
-                url,
-                download_path,
-                proxy=proxy,
-                proxy_user=proxy_user,
-                proxy_pass=proxy_pass,
-            )
-            logger.info(f"Download of {file} complete")
-
-            if dnld and file.endswith((".zip", ".kmz")):
-                # Validate archive before opening
-                if not zipfile.is_zipfile(download_path):
-                    size = download_path.stat().st_size
-                    head = download_path.read_bytes()[:200].decode("utf-8", "replace")
-                    raise ValueError(
-                        f"Invalid ZIP archive: {file!r}\n"
-                        f"  download_path: {download_path}\n"
-                        f"  url: {url}\n"
-                        f"  size: {size} bytes\n"
-                        f"  head: {head!r}"
-                    )
-
-                try:
-                    with zipfile.ZipFile(download_path) as zip_ref:
-                        zip_file_info = zip_ref.infolist()
-                        zip_extensions = [info.filename[-3:] for info in zip_file_info]
-
-                        if "shp" in zip_extensions:
-                            # Preserve prior behavior (renaming members), but extract safely into directory_path
-                            for info in zip_file_info:
-                                info.filename = f"{file[:-3]}{info.filename[-3:]}"
-                                # Validate renamed path before extraction
-                                dest_dir = directory_path.resolve()
-                                target = (dest_dir / info.filename).resolve()
-                                try:
-                                    target.relative_to(dest_dir)
-                                except Exception:
-                                    raise ValueError(f"Unsafe zip member path: {info.filename!r}")
-                                zip_ref.extract(info, path=directory_path)
-                        else:
-                            _safe_extract_zip(zip_ref, directory_path)
-                except zipfile.BadZipFile as e:
-                    size = download_path.stat().st_size
-                    head = download_path.read_bytes()[:200].decode("utf-8", "replace")
-                    raise ValueError(
-                        f"Corrupt ZIP archive: {file!r}\n"
-                        f"  download_path: {download_path}\n"
-                        f"  url: {url}\n"
-                        f"  size: {size} bytes\n"
-                        f"  head: {head!r}"
-                    ) from e
-
-                # Handle nested zips (as before), but safely and without chdir
-                for index, nested_zip_path in enumerate(directory_path.glob("*.zip")):
-                    # Validate nested archive before opening
-                    if not zipfile.is_zipfile(nested_zip_path):
-                        size = nested_zip_path.stat().st_size
-                        head = nested_zip_path.read_bytes()[:200].decode("utf-8", "replace")
-                        raise ValueError(
-                            f"Invalid nested ZIP archive: {nested_zip_path.name!r}\n"
-                            f"  nested_path: {nested_zip_path}\n"
-                            f"  parent_archive: {file!r}\n"
-                            f"  size: {size} bytes\n"
-                            f"  head: {head!r}"
-                        )
-
-                    try:
-                        with zipfile.ZipFile(nested_zip_path) as nested_zip:
-                            nested_zip_info = nested_zip.infolist()
-                            nested_extensions = [info.filename[-3:] for info in nested_zip_info]
-
-                            if "shp" in nested_extensions:
-                                for info in nested_zip_info:
-                                    info.filename = f"{info.filename[:-4]}_{index}.{info.filename[-3:]}"
-                                    dest_dir = directory_path.resolve()
-                                    target = (dest_dir / info.filename).resolve()
-                                    try:
-                                        target.relative_to(dest_dir)
-                                    except Exception:
-                                        raise ValueError(f"Unsafe zip member path: {info.filename!r}")
-                                    nested_zip.extract(info, path=directory_path)
-                            else:
-                                _safe_extract_zip(nested_zip, directory_path)
-                    except zipfile.BadZipFile as e:
-                        size = nested_zip_path.stat().st_size
-                        head = nested_zip_path.read_bytes()[:200].decode("utf-8", "replace")
-                        raise ValueError(
-                            f"Corrupt nested ZIP archive: {nested_zip_path.name!r}\n"
-                            f"  nested_path: {nested_zip_path}\n"
-                            f"  parent_archive: {file!r}\n"
-                            f"  size: {size} bytes\n"
-                            f"  head: {head!r}"
-                        ) from e
-
-    def rasterize(self, *args, column=None, name=None, all_touched=False, inplace=True):
-        """
-        Rasterize vector geometries onto a template grid.
-
-        Supported call styles (backward compatible):
-          A) rasterize(template_da, shape, column=None, all_touched=False)
-          B) rasterize(shape, column=None, name=None, all_touched=False)  # uses self.data["template"]
-
-        shape can be a GeoDataFrame or a path (str/Path) to a vector file.
-        If column is None, burns 1.0 inside geometries and leaves template values elsewhere.
-        If column is provided, burns that numeric value per-geometry (last wins on overlap) and leaves template elsewhere.
-        """
-        # Backward compatibility: older call sites pass inplace=False to return the raster
-        # without assigning it into self.data.
-        # New behavior: if name is provided and inplace=True -> assign to self.data[name_to_assign].
-        # If inplace=False -> return the raster and do not assign, regardless of name.
-        if not inplace:
-            name_to_assign = None
-        else:
-            name_to_assign = name
-
-        # Parse args to support both conventions
-        template = None
-        shape = None
-
-        if len(args) == 0:
-            # rasterize(shape=..., ...) not provided positionally; require shape via keyword? (we don't support)
-            raise TypeError("rasterize() missing required positional argument: 'shape'")
-
-        if len(args) == 1:
-            # New style: rasterize(shape, ...)
-            shape = args[0]
-            try:
-                template = self.data["template"]
-            except Exception as e:
-                raise RuntimeError(
-                    "No template available. Provide template as first argument or set self.data['template'].") from e
-
-        elif len(args) == 2:
-            # Old style: rasterize(template, shape, ...)
-            template = args[0]
-            shape = args[1]
-        else:
-            raise TypeError(f"rasterize() takes 2 positional arguments at most ({len(args)} given)")
-
-        # Validate template
-        if not isinstance(template, xr.DataArray):
-            raise TypeError("template must be an xarray.DataArray")
-
-        # Load shape
-        if isinstance(shape, (str, Path)):
-            shape = gpd.read_file(shape)
-        elif not hasattr(shape, "geometry"):
-            raise TypeError("shape must be a GeoDataFrame or a path to a vector file")
-
-        if shape.empty:
-            # Nothing to rasterize: return template unchanged
-            out = template.copy()
-            if name_to_assign is not None:
-                self._set_var(name_to_assign, out)
-            return out
-
-        # Ensure CRS: shapes must match template CRS
-        tmpl_crs = template.rio.crs
-        if tmpl_crs is None:
-            # fall back to parent.crs contract
-            tmpl_crs = getattr(self.parent, "crs", None)
-            if tmpl_crs is None:
-                raise ValueError("Template CRS missing and parent.crs is not set.")
-            template = template.rio.write_crs(tmpl_crs)
-
-        if shape.crs is None:
-            raise ValueError("Input shape has no CRS; cannot rasterize safely.")
-        # Reproject to template CRS if needed (semantic comparison)
-        shape = to_crs_if_needed(shape, tmpl_crs)
-
-        # Raster grid spec
-        transform = template.rio.transform(recalc=True)
-        out_shape = (template.sizes["y"], template.sizes["x"])
-
-        # Prepare (geometry, value) tuples
-        if column is None:
-            shapes = [(geom, 1.0) for geom in shape.geometry]
-            burned = rio_rasterize(
-                shapes=shapes,
-                out_shape=out_shape,
-                transform=transform,
-                fill=0.0,
-                all_touched=all_touched,
-                merge_alg=MergeAlg.replace,
-                dtype="float32",
-            )
-            burned_da = xr.DataArray(
-                burned,
-                dims=("y", "x"),
-                coords={"y": template["y"].values, "x": template["x"].values},
-            ).rio.write_transform(transform).rio.write_crs(tmpl_crs)
-
-            out = xr.where(burned_da != 0.0, 1.0, template)
-
-        else:
-            if column not in shape.columns:
-                available = [c for c in shape.columns if c != "geometry"]
-                raise ValueError(
-                    f"Column {column!r} not found in shape. Available columns: {available!r}"
-                )
-            # Require numeric (close to old behavior; avoids burning strings)
-            vals = shape[column].to_numpy()
-            if not np.issubdtype(vals.dtype, np.number):
-                raise TypeError(f"Column {column!r} must be numeric, got dtype={vals.dtype!r}.")
-
-            shapes = [(geom, float(val)) for geom, val in zip(shape.geometry, vals, strict=True)]
-            burned = rio_rasterize(
-                shapes=shapes,
-                out_shape=out_shape,
-                transform=transform,
-                fill=np.nan,
-                all_touched=all_touched,
-                merge_alg=MergeAlg.replace,
-                dtype="float32",
-            )
-            burned_da = xr.DataArray(
-                burned,
-                dims=("y", "x"),
-                coords={"y": template["y"].values, "x": template["x"].values},
-            ).rio.write_transform(transform).rio.write_crs(tmpl_crs)
-
-            out = xr.where(~np.isnan(burned_da), burned_da, template)
-
-        if name_to_assign is not None:
-            self._set_var(name_to_assign, out)
-        return out
-
-    def compute_distance(self, data_var, inplace=False):
-        """
-        Compute distance from non-zero values in data_var to closest non-zero value in data_var
-        :param data_var: name of a data variable in self.data
-        :type data_var: str
-        :param inplace: adds distance to `self.data` if True. Default is True.
-        :type inplace: bool
-        :return: DataArray with distances
-        :rtype: xarray.DataArray
-        """
-        if isinstance(data_var, str):
-            data_var = [data_var]
-        elif not isinstance(data_var, list):
-            raise TypeError("'data_var' must be a string or a list of strings.")
-
-        for var in data_var:
-            if not isinstance(var, str):
-                raise TypeError("'data_var' must be a string or a list of strings.")
-
-            if var not in self.data:
-                raise ValueError(f"'{data_var}' is not a data variable in self.data")
-
-        # check whether coordinate reference system is suitable for computing distance in meters
-        if isinstance(self.data.rio.crs, rasterio.crs.CRS):
-            if self.data.rio.crs.linear_units != 'metre':
-                raise ValueError(f"Coordinate reference system with metric units must be used. "
-                                 f"Got {str(self.data.rio.crs.linear_units)}")
-        else:
-            raise ValueError(f"Coordinate reference system not recognized. Must be an instance of rasterio.crs.CRS")
-
-        distances = {}
-        for var in data_var:
-            # ensure xrraster is same as template
-            xrraster = self.data[var]  # xrraster.interp_like(self.data["template"])
-
-            if len(xrraster.dims) == 2:
-                distance = proximity(xr.where(xrraster > 0, 1, 0), x="x", y="y")
-                # re-introduce np.nan-values where template has no data
-                distance = xr.where(self.data["template"].isnull(), np.nan, distance)
-                # set crs of distance dataarray
-                distance = distance.rio.write_crs(self.data.rio.crs)
-            elif len(xrraster.dims) == 3:
-                non_spatial_dim = [dim for dim in list(xrraster.dims) if dim not in ["x", "y"]]
-                if len(non_spatial_dim) != 1:
-                    raise ValueError(f"Expected exactly one non-spatial dim, got {non_spatial_dim!r}")
-                dim = non_spatial_dim[0]
-
-                slices = []
-                for coord in xrraster[dim].values:
-                    raster_slice = xrraster.sel({dim: coord}).squeeze(drop=True)
-                    distance_slice = proximity(xr.where(raster_slice > 0, 1, 0), x="x", y="y")
-                    distance_slice = xr.where(self.data["template"].isnull(), np.nan, distance_slice)
-                    distance_slice = distance_slice.rio.write_crs(self.data.rio.crs)
-                    slices.append(distance_slice.expand_dims({dim: [coord]}))
-
-                distance = xr.concat(slices, dim=dim, join="exact")
-                distance = distance.assign_coords({dim: xrraster[dim].values})
-            else:
-                raise ValueError('More than 3 dimensions are not supported.')
-
-            distance.name = f"distance_{xrraster.name}"
-            distance.attrs["unit"] = distance.rio.crs.linear_units
-
-            distances[distance.name] = distance
-
-        if inplace:
-            self.data.update({var: data for var, data in distances.items()})
-        else:
-            return distances

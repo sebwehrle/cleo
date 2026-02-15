@@ -83,12 +83,17 @@ def test_atlas_materialize_deferred(tmp_path, monkeypatch):
 
     atlas = Atlas(tmp_path, "AUT", "EPSG:3035")
 
-    # Without materialize, accessing wind/landscape should raise
-    with pytest.raises(RuntimeError, match="materialize"):
-        _ = atlas.wind
+    # v1 API: wind/landscape return domain objects without error
+    # But accessing .data raises FileNotFoundError since store doesn't exist
+    assert atlas.wind is not None  # WindDomain object
+    assert atlas.landscape is not None  # LandscapeDomain object
 
-    with pytest.raises(RuntimeError, match="materialize"):
-        _ = atlas.landscape
+    # Accessing data without canonical stores raises
+    with pytest.raises(FileNotFoundError, match="Wind store missing"):
+        _ = atlas.wind.data
+
+    with pytest.raises(FileNotFoundError, match="Landscape store missing"):
+        _ = atlas.landscape.data
 
 
 # --- merged from tests/_staging/test_no_gwa_elevation_download.py ---

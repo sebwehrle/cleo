@@ -4,7 +4,6 @@ import re
 import json
 import yaml
 import zipfile
-import requests
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -100,11 +99,13 @@ def fetch_gwa_crs(iso3):
         "User-Agent": "Mozilla/5.0",
     }
 
+    from cleo.net import http_get, RequestException
+
     try:
-        response = requests.get(url, headers=headers, timeout=(10, 60))
+        response = http_get(url, headers=headers, timeout=(10, 60), stream=False)
         response.raise_for_status()
         payload = response.json()
-    except requests.RequestException as e:
+    except RequestException as e:
         raise RuntimeError(f"Failed to fetch GWA CRS for {iso3} from {url}: {e}") from e
 
     # Handle double-encoded JSON (response.json() returns a string containing JSON)

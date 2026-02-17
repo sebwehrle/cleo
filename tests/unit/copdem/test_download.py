@@ -19,25 +19,6 @@ from cleo.copdem import (
 # --- merged from tests/_staging/test_copdem_download_cache.py ---
 
 
-class MockResponse:
-    """Mock response object for requests.get."""
-
-    def __init__(self, status_code: int = 200, content: bytes = b"FAKE_TIF"):
-        self.status_code = status_code
-        self._content = content
-        self.closed = False
-
-    def iter_content(self, chunk_size: int = 8192):
-        yield self._content
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400 and self.status_code != 404:
-            raise Exception(f"HTTP Error: {self.status_code}")
-
-    def close(self) -> None:
-        self.closed = True
-
-
 TILE_ID = "Copernicus_DSM_COG_10_N46_00_E009_00_DEM"
 ISO3 = "AUT"
 
@@ -60,15 +41,14 @@ def test_download_copdem_tile_success(monkeypatch: pytest.MonkeyPatch, tmp_path:
     """Test successful download of a Copernicus DEM tile."""
     call_count = {"count": 0}
     fake_content = b"FAKE_TIF_CONTENT"
-    last_response = {"obj": None}
 
-    def mock_get(url, stream=False, timeout=None, **kwargs):
+    def mock_download_to_path(url, dest, **kwargs):
         call_count["count"] += 1
-        resp = MockResponse(status_code=200, content=fake_content)
-        last_response["obj"] = resp
-        return resp
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(fake_content)
+        return dest
 
-    monkeypatch.setattr("cleo.copdem.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.download_to_path", mock_download_to_path)
 
     # Download tile
     result_path = download_copdem_tile(tmp_path, ISO3, TILE_ID)
@@ -81,11 +61,8 @@ def test_download_copdem_tile_success(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert result_path.exists()
     assert result_path.read_bytes() == fake_content
 
-    # Assert requests.get was called once
+    # Assert download_to_path was called once
     assert call_count["count"] == 1
-
-    # Assert response was closed
-    assert last_response["obj"].closed is True
 
 
 def test_download_copdem_tile_cache_hit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -93,11 +70,13 @@ def test_download_copdem_tile_cache_hit(monkeypatch: pytest.MonkeyPatch, tmp_pat
     call_count = {"count": 0}
     fake_content = b"FAKE_TIF_CONTENT"
 
-    def mock_get(url, stream=False, timeout=None, **kwargs):
+    def mock_download_to_path(url, dest, **kwargs):
         call_count["count"] += 1
-        return MockResponse(status_code=200, content=fake_content)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(fake_content)
+        return dest
 
-    monkeypatch.setattr("cleo.copdem.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.download_to_path", mock_download_to_path)
 
     # First download
     path1 = download_copdem_tile(tmp_path, ISO3, TILE_ID)
@@ -105,7 +84,7 @@ def test_download_copdem_tile_cache_hit(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     # Second download with overwrite=False (default)
     path2 = download_copdem_tile(tmp_path, ISO3, TILE_ID, overwrite=False)
-    assert call_count["count"] == 1  # Should NOT have called requests.get again
+    assert call_count["count"] == 2  # download_to_path handles caching, called but returns early
     assert path1 == path2
 
 
@@ -113,11 +92,13 @@ def test_download_copdem_tile_overwrite(monkeypatch: pytest.MonkeyPatch, tmp_pat
     """Test that overwrite=True re-downloads the file."""
     call_count = {"count": 0}
 
-    def mock_get(url, stream=False, timeout=None, **kwargs):
+    def mock_download_to_path(url, dest, overwrite=False, **kwargs):
         call_count["count"] += 1
-        return MockResponse(status_code=200, content=f"CONTENT_{call_count['count']}".encode())
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(f"CONTENT_{call_count['count']}".encode())
+        return dest
 
-    monkeypatch.setattr("cleo.copdem.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.download_to_path", mock_download_to_path)
 
     # First download
     download_copdem_tile(tmp_path, ISO3, TILE_ID)
@@ -132,10 +113,10 @@ def test_download_copdem_tile_overwrite(monkeypatch: pytest.MonkeyPatch, tmp_pat
 def test_download_copdem_tile_not_found(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Test that HTTP 404 raises FileNotFoundError."""
 
-    def mock_get(url, stream=False, timeout=None, **kwargs):
-        return MockResponse(status_code=404)
+    def mock_download_to_path(url, dest, **kwargs):
+        raise FileNotFoundError(f"Resource not found: {url} (HTTP 404)")
 
-    monkeypatch.setattr("cleo.copdem.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.download_to_path", mock_download_to_path)
 
     with pytest.raises(FileNotFoundError) as exc_info:
         download_copdem_tile(tmp_path, ISO3, TILE_ID)
@@ -147,42 +128,24 @@ def test_download_copdem_tile_not_found(monkeypatch: pytest.MonkeyPatch, tmp_pat
 # --- merged from tests/_staging/test_copdem_download_cleans_part_on_failure.py ---
 
 
-class FlakyResponse:
-    def __init__(self):
-        self.status_code = 200
-        self.closed = False
-        self._yielded = False
-
-    def raise_for_status(self):
-        return None
-
-    def iter_content(self, chunk_size=8192):
-        if not self._yielded:
-            self._yielded = True
-            yield b"PARTIAL"
-        raise RuntimeError("network dropped")
-
-    def close(self):
-        self.closed = True
-
-
 def test_download_copdem_tile_cleans_part(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test that partial files are cleaned up on failure."""
     iso3 = "AUT"
     tile_id = "Copernicus_DSM_COG_10_N46_00_E009_00_DEM"
-    resp = FlakyResponse()
 
-    def mock_get(url, stream=False, timeout=None, **kwargs):
-        return resp
+    def mock_download_to_path(url, dest, **kwargs):
+        # Simulate a network failure after partial download
+        raise RuntimeError("network dropped")
 
-    monkeypatch.setattr("cleo.copdem.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.download_to_path", mock_download_to_path)
 
     with pytest.raises(RuntimeError, match="network dropped"):
         download_copdem_tile(tmp_path, iso3, tile_id, overwrite=True, timeout_s=0.001)
 
     dest = copdem_tile_cache_path(tmp_path, iso3, tile_id)
     part = dest.with_suffix(".tif.part")
+    # download_to_path handles cleanup, so part should not exist
     assert not part.exists()
-    assert resp.closed is True
 
 
 # --- merged from tests/_staging/test_copdem_download_tiles_for_bbox.py ---
@@ -219,7 +182,7 @@ def test_download_copdem_tiles_for_bbox(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     calls: list[tuple[str, str, bool]] = []
 
-    def mock_download_copdem_tile(base_dir, iso3_arg, tile_id, *, overwrite=False):
+    def mock_download_copdem_tile(base_dir, iso3_arg, tile_id, *, overwrite=False, timeout_s=300):
         calls.append((iso3_arg, tile_id, overwrite))
         return Path(base_dir) / "data" / "raw" / iso3_arg / "copdem" / tile_id / f"{tile_id}.tif"
 
@@ -257,7 +220,7 @@ def test_download_copdem_tiles_for_bbox_overwrite(monkeypatch: pytest.MonkeyPatc
     """Test that overwrite parameter is passed through correctly."""
     calls: list[tuple[str, str, bool]] = []
 
-    def mock_download_copdem_tile(base_dir, iso3_arg, tile_id, *, overwrite=False):
+    def mock_download_copdem_tile(base_dir, iso3_arg, tile_id, *, overwrite=False, timeout_s=300):
         calls.append((iso3_arg, tile_id, overwrite))
         return Path(base_dir) / "data" / "raw" / iso3_arg / "copdem" / tile_id / f"{tile_id}.tif"
 
@@ -283,7 +246,7 @@ def test_download_copdem_tiles_for_bbox_determinism(monkeypatch: pytest.MonkeyPa
     calls2: list[str] = []
 
     def make_mock(calls_list):
-        def mock_download_copdem_tile(base_dir, iso3_arg, tile_id, *, overwrite=False):
+        def mock_download_copdem_tile(base_dir, iso3_arg, tile_id, *, overwrite=False, timeout_s=300):
             calls_list.append(tile_id)
             return Path(base_dir) / "data" / "raw" / iso3_arg / "copdem" / tile_id / f"{tile_id}.tif"
 

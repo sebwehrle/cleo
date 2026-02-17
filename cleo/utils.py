@@ -1,6 +1,4 @@
 # %% imports
-import requests
-from requests.auth import HTTPProxyAuth
 import logging
 import logging.config
 import numpy as np
@@ -225,6 +223,8 @@ def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=Non
     - If overwrite=False and target exists: return True (status quo).
     - On HTTP errors: return False and do not leave partial target file behind.
     """
+    from cleo.net import http_get, HTTPProxyAuth
+
     if not save_to:
         save_to = url.split("/")[-1]
 
@@ -241,7 +241,7 @@ def download_file(url, save_to=None, proxy=None, proxy_user=None, proxy_pass=Non
     tmp_path = save_to.with_suffix(save_to.suffix + ".tmp")
 
     try:
-        response = requests.get(url, stream=True, proxies=proxies, auth=auth, headers=headers, timeout=timeout)
+        response = http_get(url, stream=True, proxies=proxies, auth=auth, headers=headers, timeout=timeout)
         response.raise_for_status()
 
         tmp_path.parent.mkdir(parents=True, exist_ok=True)

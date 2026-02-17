@@ -19,7 +19,7 @@ def test_atlas_init_creates_expected_dirs_offline(tmp_path, monkeypatch):
         raise AssertionError("Network call attempted during Atlas.__init__")
 
     monkeypatch.setattr("cleo.utils.download_file", _block_network)
-    monkeypatch.setattr("cleo.loaders.requests.get", _block_network)
+    monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     # Create Atlas - this should NOT trigger network calls
     atlas = Atlas(tmp_path, "AUT", "EPSG:3035")
@@ -50,7 +50,7 @@ def test_atlas_init_does_not_modify_root_logger(tmp_path, monkeypatch):
         raise AssertionError("Network call attempted")
 
     monkeypatch.setattr("cleo.utils.download_file", _block_network)
-    monkeypatch.setattr("cleo.loaders.requests.get", _block_network)
+    monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     # Capture root logger state before
     root_logger = logging.getLogger()
@@ -79,7 +79,7 @@ def test_atlas_materialize_deferred(tmp_path, monkeypatch):
         raise AssertionError("Network call attempted during __init__")
 
     monkeypatch.setattr("cleo.utils.download_file", _block_network)
-    monkeypatch.setattr("cleo.loaders.requests.get", _block_network)
+    monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     atlas = Atlas(tmp_path, "AUT", "EPSG:3035")
 

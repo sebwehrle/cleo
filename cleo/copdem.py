@@ -5,8 +5,6 @@
 import math
 from pathlib import Path
 
-import requests
-
 
 def copdem_tile_id(lat_deg: int, lon_deg: int, resolution_arcsec: int = 10) -> str:
     """
@@ -108,9 +106,8 @@ def download_copdem_tile(
     Download a Copernicus DEM tile to the local cache.
 
     Atomicity/cleanup contract:
-    - Write to a temporary *.part file and rename on success.
-    - On any failure, delete the *.part file (no stale partial artifacts).
-    - Always close the HTTP response.
+    - Write to a temporary file and rename on success.
+    - On any failure, delete the temp file (no stale partial artifacts).
 
     :param base_dir: Base directory for the cache
     :param iso3: ISO 3166-1 alpha-3 country code
@@ -120,52 +117,25 @@ def download_copdem_tile(
     :return: Path to the downloaded tile file
     :rtype: Path
     :raises FileNotFoundError: If tile does not exist (HTTP status == 404)
-    :raises requests.RequestException: For other request failures
+    :raises RequestException: For other request failures
     """
+    from cleo.net import download_to_path
+
     dest = copdem_tile_cache_path(base_dir, iso3, tile_id)
-
-    if dest.exists() and not overwrite:
-        return dest
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-
     url = copdem_tile_url(tile_id)
-    response = None
-    part_path = dest.with_suffix(".tif.part")
 
     try:
-        response = requests.get(url, stream=True, timeout=timeout_s)
-
-        if response.status_code == 404:
-            raise FileNotFoundError(
-                f"Copernicus DEM tile not found: {tile_id} (HTTP 404)"
-            )
-        response.raise_for_status()
-
-        with open(part_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if not chunk:
-                    continue
-                f.write(chunk)
-
-        part_path.replace(dest)
-        return dest
-
-    except Exception:
-        # Best-effort cleanup of partial file
-        try:
-            if part_path.exists():
-                part_path.unlink()
-        except Exception:
-            pass
-        raise
-
-    finally:
-        if response is not None and hasattr(response, "close"):
-            try:
-                response.close()
-            except Exception:
-                pass
+        return download_to_path(
+            url,
+            dest,
+            timeout=timeout_s,
+            overwrite=overwrite,
+        )
+    except FileNotFoundError:
+        # Re-raise with tile-specific message
+        raise FileNotFoundError(
+            f"Copernicus DEM tile not found: {tile_id} (HTTP 404)"
+        )
 
 
 def download_copdem_tiles_for_bbox(

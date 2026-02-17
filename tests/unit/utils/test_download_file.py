@@ -25,8 +25,7 @@ def test_download_file_atomic_no_partial_left(tmp_path, monkeypatch):
     def fake_get(*args, **kwargs):
         return _Resp()
 
-    import cleo.utils as ut
-    monkeypatch.setattr(ut.requests, "get", fake_get)
+    monkeypatch.setattr("cleo.net.http_get", fake_get)
 
     target = tmp_path / "x.bin"
     ok = download_file("https://example.com/x.bin", save_to=target, overwrite=True)
@@ -61,7 +60,7 @@ def test_download_file_http_403_no_file_written(tmp_path, monkeypatch):
     def mock_get(url, **kwargs):
         return MockResponse(status_code=403, content_chunks=[b"error body"])
 
-    monkeypatch.setattr("cleo.utils.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.http_get", mock_get)
 
     result = download_file("http://example.com/file.tif", save_to=save_path, overwrite=True)
 
@@ -76,7 +75,7 @@ def test_download_file_http_200_writes_file(tmp_path, monkeypatch):
     def mock_get(url, **kwargs):
         return MockResponse(status_code=200, content_chunks=[b"OK"])
 
-    monkeypatch.setattr("cleo.utils.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.http_get", mock_get)
 
     result = download_file("http://example.com/file.tif", save_to=save_path, overwrite=True)
 
@@ -86,7 +85,7 @@ def test_download_file_http_200_writes_file(tmp_path, monkeypatch):
 
 
 def test_download_file_passes_default_timeout(tmp_path):
-    """download_file should pass default timeout (10, 60) to requests.get."""
+    """download_file should pass default timeout (10, 60) to http_get."""
     captured_kwargs = {}
 
     def mock_get(url, **kwargs):
@@ -96,15 +95,15 @@ def test_download_file_passes_default_timeout(tmp_path):
         mock_response.iter_content = MagicMock(return_value=[b"test"])
         return mock_response
 
-    with patch("cleo.utils.requests.get", side_effect=mock_get):
+    with patch("cleo.net.http_get", side_effect=mock_get):
         download_file("http://example.com/file.txt", save_to=tmp_path / "x", overwrite=True)
 
-    assert "timeout" in captured_kwargs, "timeout should be passed to requests.get"
+    assert "timeout" in captured_kwargs, "timeout should be passed to http_get"
     assert captured_kwargs["timeout"] == (10, 60), f"Expected (10, 60), got {captured_kwargs['timeout']}"
 
 
 def test_download_file_passes_custom_timeout(tmp_path):
-    """download_file should pass custom timeout to requests.get."""
+    """download_file should pass custom timeout to http_get."""
     captured_kwargs = {}
 
     def mock_get(url, **kwargs):
@@ -114,7 +113,7 @@ def test_download_file_passes_custom_timeout(tmp_path):
         mock_response.iter_content = MagicMock(return_value=[b"test"])
         return mock_response
 
-    with patch("cleo.utils.requests.get", side_effect=mock_get):
+    with patch("cleo.net.http_get", side_effect=mock_get):
         download_file(
             "http://example.com/file.txt",
             save_to=tmp_path / "x",

@@ -17,7 +17,7 @@ from cleo.loaders import fetch_gwa_crs, ensure_crs_from_gwa
 
 
 class MockResponse:
-    """Mock response object for requests.get."""
+    """Mock response object for http_get."""
 
     def __init__(self, json_data, status_code=200):
         self.json_data = json_data
@@ -39,7 +39,7 @@ def test_fetch_gwa_crs_parses_response(monkeypatch):
         assert timeout == (10, 60)
         return MockResponse(mock_json)
 
-    monkeypatch.setattr("cleo.loaders.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.http_get", mock_get)
 
     result = fetch_gwa_crs("AUT")
     assert result == "urn:ogc:def:crs:OGC:1.3:CRS84"
@@ -53,7 +53,7 @@ def test_ensure_crs_sets_crs_when_missing(monkeypatch, tmp_path):
         assert timeout == (10, 60)
         return MockResponse(mock_json)
 
-    monkeypatch.setattr("cleo.loaders.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.http_get", mock_get)
 
     tiff_path = tmp_path / "no_crs.tif"
     data = np.array([[1, 2], [3, 4]], dtype=np.float32)
@@ -86,7 +86,7 @@ def test_ensure_crs_does_not_call_api_when_crs_present(monkeypatch, tmp_path):
         call_count["count"] += 1
         return MockResponse({"crs": {"properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}}})
 
-    monkeypatch.setattr("cleo.loaders.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.http_get", mock_get)
 
     tiff_path = tmp_path / "with_crs.tif"
     data = np.array([[1, 2], [3, 4]], dtype=np.float32)
@@ -121,7 +121,7 @@ def test_fetch_gwa_crs_raises_on_missing_crs(monkeypatch):
         assert timeout == (10, 60)
         return MockResponse(mock_json)
 
-    monkeypatch.setattr("cleo.loaders.requests.get", mock_get)
+    monkeypatch.setattr("cleo.net.http_get", mock_get)
 
     with pytest.raises(ValueError, match="CRS missing"):
         fetch_gwa_crs("AUT")

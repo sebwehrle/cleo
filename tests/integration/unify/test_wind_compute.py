@@ -54,8 +54,9 @@ class MockAtlas:
         self.path = path
         self.country = country
         self.crs = crs
-        self.region = region
+        self._region = region  # Region selection state
         self._turbines_configured = tuple(turbines) if turbines else None
+        self._wind_selected_turbines: tuple[str, ...] | None = None
 
         self.chunk_policy = {"y": 64, "x": 64}
         self.fingerprint_method = "path_mtime_size"
@@ -79,6 +80,18 @@ class MockAtlas:
     @property
     def turbines_configured(self):
         return self._turbines_configured
+
+    @property
+    def region(self):
+        return self._region
+
+    def _active_wind_store_path(self) -> Path:
+        """Return active wind store path (no region support in mock)."""
+        return self.wind_store_path
+
+    def _active_landscape_store_path(self) -> Path:
+        """Return active landscape store path (no region support in mock)."""
+        return self.landscape_store_path
 
     def get_nuts_region(self, region: str):
         """Mock - would return GeoDataFrame."""
@@ -222,8 +235,8 @@ class TestWindDomainCompute:
         ok = wind[var_A].sel(height=100).notnull() & land["valid_mask"]
         assert bool(ok.any().compute()) is True, "Fixture must have valid cells"
 
-        # Compute mean wind speed
-        da = atlas.wind.compute("mean_wind_speed", height=100)
+        # Compute mean wind speed (compute() returns MetricResult, use .data for DataArray)
+        da = atlas.wind.compute("mean_wind_speed", height=100).data
 
         # Assert not all NaN
         assert bool(da.notnull().any().compute()) is True, (
@@ -279,8 +292,8 @@ class TestCapacityFactorsEnforcement:
         # Get turbine IDs
         tids = atlas.wind.turbines[:1]
 
-        # Compute capacity factors
-        da = atlas.wind.compute("capacity_factors", turbines=tids, height=100)
+        # Compute capacity factors (compute() returns MetricResult, use .data for DataArray)
+        da = atlas.wind.compute("capacity_factors", turbines=tids, height=100).data
 
         # Assert not all NaN
         assert bool(da.notnull().any().compute()) is True, (
@@ -304,7 +317,7 @@ class TestCapacityFactorsEnforcement:
         tids = atlas.wind.turbines[:1]
 
         # Compute capacity factors with air density correction
-        da = atlas.wind.compute("capacity_factors", turbines=tids, height=100, air_density=True)
+        da = atlas.wind.compute("capacity_factors", turbines=tids, height=100, air_density=True).data
 
         # Assert not all NaN
         assert bool(da.notnull().any().compute()) is True, (
@@ -324,11 +337,11 @@ class TestCapacityFactorsEnforcement:
         unifier.materialize_wind(atlas)
         unifier.materialize_landscape(atlas)
 
-        # Select first turbine
-        w = atlas.wind.select(turbines=[turbine_names[0]])
+        # Select first turbine (persistent selection on Atlas)
+        atlas.wind.select(turbines=[turbine_names[0]])
 
-        # Compute without passing turbines - should use selected
-        da = w.compute("capacity_factors", height=100)
+        # Compute without passing turbines - should use selected (use .data for DataArray)
+        da = atlas.wind.compute("capacity_factors", height=100).data
 
         # Should have only one turbine in result
         assert "turbine" in da.dims

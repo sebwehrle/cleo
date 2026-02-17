@@ -371,3 +371,68 @@ class TestMaterializeWindCrsHandling:
 
         # CRS is stored in spatial_ref variable (rioxarray convention)
         assert "spatial_ref" in ds.data_vars or ds["template"].rio.crs is not None
+
+
+class TestZarrV3Compatibility:
+    """Tests for Zarr v3 compatibility (no string arrays, no consolidated metadata)."""
+
+    def test_wind_store_no_string_arrays(self, tmp_path: Path) -> None:
+        """wind.zarr must not contain string/unicode/object dtype arrays.
+
+        Regression test for Zarr v3 compatibility. String arrays trigger
+        UnstableSpecificationWarning because they have no stable Zarr v3 spec.
+        Turbine metadata must be stored as JSON in attrs, not as string arrays.
+        """
+        atlas = MockAtlas(tmp_path)
+        _create_all_required_gwa_files(atlas)
+
+        unifier = Unifier()
+        unifier.materialize_wind(atlas)
+
+        ds = xr.open_zarr(tmp_path / "wind.zarr", consolidated=False)
+
+        # Check all data variables
+        for name, var in ds.data_vars.items():
+            dtype_kind = getattr(var.dtype, "kind", None)
+            assert dtype_kind not in ("U", "S", "O"), (
+                f"Data variable {name!r} has string/object dtype {var.dtype}, "
+                f"which is not Zarr v3 compatible. Use JSON attrs instead."
+            )
+
+        # Check all coordinates (except spatial_ref which is special)
+        for name, coord in ds.coords.items():
+            if name == "spatial_ref":
+                # spatial_ref may have string CRS data, that's expected
+                continue
+            dtype_kind = getattr(coord.dtype, "kind", None)
+            assert dtype_kind not in ("U", "S", "O"), (
+                f"Coordinate {name!r} has string/object dtype {coord.dtype}, "
+                f"which is not Zarr v3 compatible. Use integer indices + JSON attrs."
+            )
+
+        # Verify turbine metadata is in JSON attrs, not as arrays
+        assert "cleo_turbines_json" in ds.attrs, (
+            "Turbine metadata must be stored in cleo_turbines_json attr"
+        )
+
+        # Verify turbine coordinate is integer-indexed
+        if "turbine" in ds.coords:
+            assert ds.coords["turbine"].dtype.kind in ("i", "u"), (
+                f"turbine coordinate must be integer, got {ds.coords['turbine'].dtype}"
+            )
+
+    def test_wind_store_no_consolidated_metadata(self, tmp_path: Path) -> None:
+        """wind.zarr must be readable with consolidated=False.
+
+        Stores must NOT depend on consolidated metadata (.zmetadata) for reading.
+        """
+        atlas = MockAtlas(tmp_path)
+        _create_all_required_gwa_files(atlas)
+
+        unifier = Unifier()
+        unifier.materialize_wind(atlas)
+
+        # Should open successfully without consolidated metadata
+        ds = xr.open_zarr(tmp_path / "wind.zarr", consolidated=False)
+        assert "weibull_A" in ds.data_vars or "weibull_a" in ds.data_vars
+        assert "weibull_k" in ds.data_vars

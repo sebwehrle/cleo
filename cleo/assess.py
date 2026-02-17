@@ -497,121 +497,261 @@ def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
 #     * Monotonic sanity: if A(z) increases with z (k constant), then f > 1.
 # - Integration test: rotor_mode changes CF relative to hub_mode in expected direction on a toy case.
 
-def simulate_capacity_factors(
-    self,
-    chunk_size=None,
-    loss_factor=1,
-    force: bool = False,
-    weibull_height_mode: str = "hub",
-    air_density_mode: str = "none",
-):
+def simulate_capacity_factors(self, chunk_size=None, loss_factor=1, force: bool = False,
+                             weibull_height_mode: str = "hub", air_density_mode: str = "gwa"):
     """
-    Simulate capacity factors for specified wind turbine models.
+    Simulate wind turbine capacity factors for all configured turbines.
 
-    :param self: An instance of the Atlas-class
-    :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
+    Modes:
+      - weibull_height_mode="hub" (default):
+          Interpolate Weibull A/k to hub height and integrate the power curve against the hub-height PDF.
+
+      - weibull_height_mode="hub_rews" (opt-in):
+          Computes the standard hub-height capacity factors (stored as self.data["capacity_factors"]) AND
+          additionally computes rotor-equivalent (REWS) capacity factors (stored as self.data["capacity_factors_rews"]).
+          REWS is computed via a cubic-moment rotor-area average using multi-height Weibull A/k.
+
+      - weibull_height_mode="100m_shear" (legacy):
+          Uses the 100m Weibull PDF plus a wind-shear exponent alpha to scale wind speeds to hub height.
+
+    Air density:
+      - air_density_mode="none": no density correction
+      - air_density_mode="gwa": apply density correction inside the power curve via u_eq = u * (rho/rho0)^(1/3)
+        (only supported for hub / hub_rews modes)
+
+    Contract:
+      - Function signature and return (None) are stable.
+      - Existing variable self.data["capacity_factors"] retains its meaning (hub-height CF or legacy 100m_shear CF).
+      - In hub_rews mode, an additional variable self.data["capacity_factors_rews"] is created/updated.
+
+    :param chunk_size: Size of chunk in pixels. If None, computation is not chunked.
     :type chunk_size: int
-    :param loss_factor: Loss correction factor for simulated capacity factors.
+    :param loss_factor: multiplicative loss / correction factor applied to CF (use 1.0 for gross CF)
     :type loss_factor: float
     :param force: if True, always recompute even if cached result exists
-    :param weibull_height_mode: Method for computing Weibull PDF at hub height.
-        - "hub": (default) Interpolate Weibull A,k to hub height using GWA multi-height data,
-          then compute PDF directly at hub height. No shear scaling needed.
-        - "100m_shear": Fallback mode. Uses Weibull PDF at 100m and applies wind shear
-          coefficient scaling to adjust power curve for hub height.
-    :type weibull_height_mode: str
-    :param air_density_mode: Method for air density correction (hub mode only).
-        - "none": (default) No air density correction.
-        - "gwa": Use GWA air density rasters. Applies equivalent wind speed correction:
-          u_eq = u * (rho/rho0)^(1/3) where rho0=1.225 kg/m³.
-    :type air_density_mode: str
-    :raises ValueError: If weibull_height_mode or air_density_mode has invalid value
+    :param weibull_height_mode: "hub", "hub_rews", or "100m_shear"
+    :param air_density_mode: "none" or "gwa"
     """
-    if weibull_height_mode not in ("hub", "100m_shear"):
+    if weibull_height_mode not in ("hub", "hub_rews", "100m_shear"):
         raise ValueError(
-            f"weibull_height_mode must be 'hub' or '100m_shear', got {weibull_height_mode!r}"
+            "weibull_height_mode must be 'hub', 'hub_rews' or '100m_shear', "
+            f"got {weibull_height_mode!r}"
         )
     if air_density_mode not in ("none", "gwa"):
-        raise ValueError(
-            f"air_density_mode must be 'none' or 'gwa', got {air_density_mode!r}"
-        )
-    if air_density_mode == "gwa" and weibull_height_mode != "hub":
-        raise ValueError(
-            "air_density_mode='gwa' is only supported with weibull_height_mode='hub'"
-        )
+        raise ValueError(f"air_density_mode must be 'none' or 'gwa', got {air_density_mode!r}")
 
-    # Semantic cache check
-    algo = "simulate_capacity_factors"
-    ver = "3"  # Version bump for air_density_mode parameter
+    # Density correction is only supported for hub-based modes
+    hub_like_mode = weibull_height_mode in ("hub", "hub_rews")
+    if air_density_mode == "gwa" and not hub_like_mode:
+        raise ValueError("air_density_mode='gwa' is only supported with weibull_height_mode='hub' or 'hub_rews'")
+
     turbines = sorted(str(t) for t in self.data.coords["turbine"].values)
-    params = _base_params(self)
-    params["loss_factor"] = loss_factor
-    params["turbines"] = turbines
-    params["weibull_height_mode"] = weibull_height_mode
-    params["air_density_mode"] = air_density_mode
-    expected_sig = _sig(algo, ver, params)
 
-    if not force and _matches(self.data, "capacity_factors", expected_sig):
-        logger.info(f"Capacity factors already computed (sig match), skipping.")
+    # --- semantic cache checks (hub CF) ---
+    algo_hub = "simulate_capacity_factors"
+    ver_hub = "4"  # bump: hub mode now reuses stacked A/k and supports hub_rews without changing hub-CF meaning
+
+    params_hub = _base_params(self)
+    params_hub["loss_factor"] = float(loss_factor)
+    params_hub["turbines"] = turbines
+    params_hub["weibull_height_mode"] = "hub" if hub_like_mode else "100m_shear"
+    params_hub["air_density_mode"] = air_density_mode
+    expected_sig_hub = _sig(algo_hub, ver_hub, params_hub)
+
+    hub_cached = (not force) and _matches(self.data, "capacity_factors", expected_sig_hub)
+
+    # --- semantic cache checks (REWS CF) ---
+    do_rews = (weibull_height_mode == "hub_rews")
+    algo_rews = "simulate_capacity_factors_rews"
+    ver_rews = "1"
+    rews_n = 9  # Chebyshev-2 quadrature nodes (performance/accuracy sweet spot)
+
+    if do_rews:
+        params_rews = _base_params(self)
+        params_rews["loss_factor"] = float(loss_factor)
+        params_rews["turbines"] = turbines
+        params_rews["weibull_height_mode"] = "hub_rews"
+        params_rews["air_density_mode"] = air_density_mode
+        params_rews["rews_quadrature_n"] = int(rews_n)
+        expected_sig_rews = _sig(algo_rews, ver_rews, params_rews)
+        rews_cached = (not force) and _matches(self.data, "capacity_factors_rews", expected_sig_rews)
+    else:
+        rews_cached = True
+
+    if hub_cached and rews_cached:
+        logger.info("Capacity factors already computed (sig match), skipping.")
         return
 
-    # For 100m_shear mode, ensure wind_shear and weibull_pdf are computed
-    if weibull_height_mode == "100m_shear":
+    # --- dependencies for legacy 100m_shear ---
+    if not hub_like_mode and not hub_cached:
         if hasattr(self, "compute_wind_shear_coefficient") and "wind_shear" not in self.data.data_vars:
             self.compute_wind_shear_coefficient(chunk_size, force=force)
         if hasattr(self, "compute_weibull_pdf") and "weibull_pdf" not in self.data.data_vars:
             self.compute_weibull_pdf(chunk_size, force=force)
 
-    cap_factor = []
+    # --- hub-like modes: load Weibull stacks once ---
+    if hub_like_mode and (not hub_cached or (do_rews and not rews_cached)):
+        A_stack, k_stack, _available_heights = _load_weibull_param_stacks(self)
 
-    # Cache PDFs and air density per unique hub height to avoid redundant computation
-    pdf_cache = {}  # {hub_height: pdf_da}
-    rho_cache = {}  # {hub_height: rho_da}
-    dummy_shear = None  # Will be computed once if needed
+    # Lazy caches within this call
+    ak_cache: dict[float, tuple[xr.DataArray, xr.DataArray]] = {}
+    pdf_cache: dict[float, xr.DataArray] = {}
+    rho_cache: dict[float, xr.DataArray] = {}
+    rews_cache: dict[tuple[float, float, int], xr.DataArray] = {}
 
-    for turbine_id in self.data.coords["turbine"].values:
-        h_turbine = self.get_turbine_attribute(turbine_id, "hub_height")
-        p_power_curve = self.data.power_curve.sel(turbine=turbine_id).values  # 1D curve
-        u_power_curve = self.data.coords["wind_speed"].values
+    dummy_shear = None
 
-        if weibull_height_mode == "hub":
-            # Hub-height mode: compute PDF at turbine hub height via interpolation
-            # Use cache to avoid recomputing PDF for same hub height
-            if h_turbine not in pdf_cache:
-                pdf_cache[h_turbine] = compute_weibull_pdf_at_height(
-                    self, h_turbine, chunk_size=chunk_size, method="log_height_linear"
-                )
-            pdf_hub = pdf_cache[h_turbine]
+    cap_factor_hub: list[xr.DataArray] = []
+    cap_factor_rews: list[xr.DataArray] = []
 
-            # Air density correction (if enabled)
-            if air_density_mode == "gwa":
-                # Cache air density per hub height
-                if h_turbine not in rho_cache:
-                    rho_cache[h_turbine] = compute_air_density_at_height(
-                        self, h_turbine, chunk_size=chunk_size
+    for turbine_id in turbines:
+        u_power_curve = self.data.coords["wind_speed"].data
+        p_power_curve = self.data["power_curve"].sel(turbine=turbine_id).data
+
+        h_turbine = float(self.get_turbine_attribute(turbine_id, "hub_height"))
+
+        # --- HUB CF (standard) ---
+        if not hub_cached:
+            if hub_like_mode:
+                h_key = float(h_turbine)
+
+                # Interpolate A/k at hub and build hub PDF (cached per height)
+                if h_key not in ak_cache:
+                    A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, h_key)
+                    # Align to template if available
+                    if "template" in self.data.data_vars:
+                        tpl = self.data["template"]
+                        A_hub = _match_to_template(A_hub, tpl)
+                        k_hub = _match_to_template(k_hub, tpl)
+                    ak_cache[h_key] = (A_hub, k_hub)
+                else:
+                    A_hub, k_hub = ak_cache[h_key]
+
+                if h_key not in pdf_cache:
+                    u = self.data.coords["wind_speed"].values
+                    pdf_hub = weibull_probability_density(u_power_curve=u, weibull_k=k_hub, weibull_a=A_hub)
+                    if "template" in self.data.data_vars:
+                        pdf_hub = _match_to_template(pdf_hub, self.data["template"])
+                    pdf_cache[h_key] = pdf_hub
+                else:
+                    pdf_hub = pdf_cache[h_key]
+
+                if air_density_mode == "gwa":
+                    if h_key not in rho_cache:
+                        rho_hub = compute_air_density_at_height(self, h_key)
+                        rho_cache[h_key] = rho_hub
+                    else:
+                        rho_hub = rho_cache[h_key]
+
+                    c = (rho_hub / RHO_0) ** (1 / 3)
+                    cf = _integrate_cf_with_density_correction(
+                        pdf=pdf_hub,
+                        u_grid=u_power_curve,
+                        p_curve=p_power_curve,
+                        c=c,
+                        loss_factor=loss_factor,
                     )
-                rho_hub = rho_cache[h_turbine]
+                else:
+                    # No density correction: reuse capacity_factor with a dummy shear array (s == 1)
+                    if dummy_shear is None:
+                        template = self.data["template"] if "template" in self.data.data_vars else pdf_hub.isel(wind_speed=0)
+                        dummy_shear = xr.zeros_like(template).rename("wind_shear")
 
-                # Compute density correction factor: c = (rho/rho0)^(1/3)
-                c = (rho_hub / RHO_0) ** (1.0 / 3.0)
+                    inputs = {
+                        "weibull_pdf": pdf_hub,
+                        "wind_shear": dummy_shear,
+                        "u_power_curve": u_power_curve,
+                        "p_power_curve": p_power_curve,
+                        "h_turbine": h_turbine,
+                        "h_reference": h_turbine,
+                        "correction_factor": loss_factor,
+                    }
+                    if chunk_size is None or _is_dask_backed(pdf_hub):
+                        cf = capacity_factor(**inputs)
+                    else:
+                        cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
 
-                # Integrate with density-corrected power curve evaluation
-                # CF = ∫ PC(u * c) * pdf(u) du
-                cf = _integrate_cf_with_density_correction(
-                    pdf=pdf_hub,
+            else:
+                # Legacy 100m_shear mode
+                inputs = {
+                    "weibull_pdf": self.data["weibull_pdf"],
+                    "wind_shear": self.data["wind_shear"],
+                    "u_power_curve": u_power_curve,
+                    "p_power_curve": p_power_curve,
+                    "h_turbine": h_turbine,
+                    "correction_factor": loss_factor,
+                }
+                if chunk_size is None or _is_dask_backed(self.data["weibull_pdf"]):
+                    cf = capacity_factor(**inputs)
+                else:
+                    cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
+
+            cf = cf.expand_dims(turbine=[turbine_id])
+            cap_factor_hub.append(cf)
+
+        # --- REWS CF (opt-in) ---
+        if do_rews and not rews_cached:
+            rotor_diameter = self.get_turbine_attribute(turbine_id, "rotor_diameter")
+            if rotor_diameter is None:
+                raise ValueError(
+                    f"hub_rews requested but turbine {turbine_id!r} has no 'rotor_diameter' attribute."
+                )
+            rotor_diameter = float(rotor_diameter)
+
+            h_key = float(h_turbine)
+            if h_key not in ak_cache:
+                A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, h_key)
+                if "template" in self.data.data_vars:
+                    tpl = self.data["template"]
+                    A_hub = _match_to_template(A_hub, tpl)
+                    k_hub = _match_to_template(k_hub, tpl)
+                ak_cache[h_key] = (A_hub, k_hub)
+            else:
+                A_hub, k_hub = ak_cache[h_key]
+
+            rews_key = (h_key, float(rotor_diameter), int(rews_n))
+            if rews_key not in rews_cache:
+                f_rews = _rews_moment_factor(
+                    A_stack=A_stack,
+                    k_stack=k_stack,
+                    hub_height=h_key,
+                    rotor_diameter=rotor_diameter,
+                    n=rews_n,
+                )
+                if "template" in self.data.data_vars:
+                    f_rews = _match_to_template(f_rews, self.data["template"])
+                rews_cache[rews_key] = f_rews
+            else:
+                f_rews = rews_cache[rews_key]
+
+            A_eff = (A_hub * f_rews).rename("weibull_A_rews")
+
+            u = self.data.coords["wind_speed"].values
+            pdf_rews = weibull_probability_density(u_power_curve=u, weibull_k=k_hub, weibull_a=A_eff)
+            if "template" in self.data.data_vars:
+                pdf_rews = _match_to_template(pdf_rews, self.data["template"])
+
+            if air_density_mode == "gwa":
+                if h_key not in rho_cache:
+                    rho_hub = compute_air_density_at_height(self, h_key)
+                    rho_cache[h_key] = rho_hub
+                else:
+                    rho_hub = rho_cache[h_key]
+                c = (rho_hub / RHO_0) ** (1 / 3)
+                cf_rews = _integrate_cf_with_density_correction(
+                    pdf=pdf_rews,
                     u_grid=u_power_curve,
                     p_curve=p_power_curve,
                     c=c,
                     loss_factor=loss_factor,
                 )
             else:
-                # No density correction - use standard capacity_factor
                 if dummy_shear is None:
-                    template = self.data["template"] if "template" in self.data.data_vars else pdf_hub.isel(wind_speed=0)
+                    template = self.data["template"] if "template" in self.data.data_vars else pdf_rews.isel(wind_speed=0)
                     dummy_shear = xr.zeros_like(template).rename("wind_shear")
 
-                inputs = {
-                    "weibull_pdf": pdf_hub,
+                inputs_rews = {
+                    "weibull_pdf": pdf_rews,
                     "wind_shear": dummy_shear,
                     "u_power_curve": u_power_curve,
                     "p_power_curve": p_power_curve,
@@ -619,38 +759,27 @@ def simulate_capacity_factors(
                     "h_reference": h_turbine,
                     "correction_factor": loss_factor,
                 }
-                if chunk_size is None or _is_dask_backed(pdf_hub):
-                    # Dask-backed: execute directly (dask handles chunking internally)
-                    cf = capacity_factor(**inputs)
+                if chunk_size is None or _is_dask_backed(pdf_rews):
+                    cf_rews = capacity_factor(**inputs_rews)
                 else:
-                    cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
-        else:
-            # Fallback 100m_shear mode: use 100m PDF + wind shear scaling
-            inputs = {
-                "weibull_pdf": self.data["weibull_pdf"],
-                "wind_shear": self.data["wind_shear"],
-                "u_power_curve": u_power_curve,
-                "p_power_curve": p_power_curve,
-                "h_turbine": h_turbine,
-                "correction_factor": loss_factor,
-            }
-            if chunk_size is None or _is_dask_backed(self.data["weibull_pdf"]):
-                # Dask-backed: execute directly (dask handles chunking internally)
-                cf = capacity_factor(**inputs)
-            else:
-                cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
+                    cf_rews = compute_chunked(self, capacity_factor, chunk_size, **inputs_rews)
 
-        cf = cf.expand_dims(turbine=[turbine_id])
-        logger.info(f"Capacity factors for {turbine_id} in {self.data.attrs['country']} computed.")
-        cap_factor.append(cf)
+            cf_rews = cf_rews.expand_dims(turbine=[turbine_id])
+            cap_factor_rews.append(cf_rews)
 
-    cap_factor = xr.concat(cap_factor, dim="turbine")
-    cap_factor = cap_factor.rename("capacity_factor")
+    # --- store hub CF if computed ---
+    if not hub_cached:
+        cap_factor = xr.concat(cap_factor_hub, dim="turbine").rename("capacity_factor")
+        cap_factor = _set_prov(cap_factor, algo_hub, ver_hub, params_hub)
+        self._set_var("capacity_factors", cap_factor)
+        logger.info(f"Capacity factors in {self.data.attrs.get('country', '?')} computed.")
 
-    # Set provenance and store (overwrite existing)
-    cap_factor = _set_prov(cap_factor, algo, ver, params)
-    self._set_var("capacity_factors", cap_factor)
-
+    # --- store REWS CF if computed ---
+    if do_rews and not rews_cached:
+        cap_factor_r = xr.concat(cap_factor_rews, dim="turbine").rename("capacity_factor_rews")
+        cap_factor_r = _set_prov(cap_factor_r, algo_rews, ver_rews, params_rews)
+        self._set_var("capacity_factors_rews", cap_factor_r)
+        logger.info(f"REWS capacity factors in {self.data.attrs.get('country', '?')} computed.")
 
 def _interp_power_curve(u_eq: xr.DataArray, u: np.ndarray, p: np.ndarray) -> xr.DataArray:
     """
@@ -1001,10 +1130,185 @@ def interpolate_weibull_params_to_height(
 
 
 # Standard GWA heights for multi-height Weibull data
-GWA_HEIGHTS = (50, 100, 150, 200)
+GWA_HEIGHTS = (10, 50, 100, 150, 200)
 
 # Reference air density at sea level (kg/m³)
 RHO_0 = 1.225
+
+
+def _load_weibull_param_stacks(
+    self,
+    *,
+    heights: tuple[int, ...] = GWA_HEIGHTS,
+) -> tuple[xr.DataArray, xr.DataArray, list[float]]:
+    """
+    Load Weibull A/k rasters at multiple heights and stack them into (height, y, x) arrays.
+
+    - Skips heights whose rasters are missing (FileNotFoundError).
+    - Aligns each slice to the dataset template if present.
+    - Requires at least 2 heights for interpolation.
+
+    Returns:
+      (A_stack, k_stack, available_heights)
+    """
+    A_list: list[xr.DataArray] = []
+    k_list: list[xr.DataArray] = []
+    available: list[float] = []
+
+    tpl = self.data["template"] if "template" in self.data.data_vars else None
+
+    for h in heights:
+        try:
+            a_h, k_h = self.load_weibull_parameters(h)
+        except FileNotFoundError:
+            continue
+
+        # Align to template grid if available
+        if tpl is not None:
+            a_h = _match_to_template(a_h, tpl)
+            k_h = _match_to_template(k_h, tpl)
+
+        A_list.append(a_h)
+        k_list.append(k_h)
+        available.append(float(h))
+
+    if len(available) < 2:
+        raise ValueError(
+            f"At least 2 Weibull height levels required, but only found: {available}"
+        )
+
+    # Stack into (height, ...) arrays
+    A_stack = xr.concat(A_list, dim="height").assign_coords(height=available)
+    k_stack = xr.concat(k_list, dim="height").assign_coords(height=available)
+    A_stack.name = "weibull_A"
+    k_stack.name = "weibull_k"
+    return A_stack, k_stack, available
+
+
+def _interp_da_to_heights_log(
+    da: xr.DataArray,
+    target_heights: np.ndarray,
+    *,
+    dim_name: str = "sample",
+) -> xr.DataArray:
+    """
+    Log-height-linear interpolation for multiple target heights in one xarray-native call.
+
+    Returns a DataArray with a new dimension `dim_name` (length = len(target_heights)).
+    No extrapolation: all target heights must lie within the available height range.
+    """
+    if "height" not in da.dims:
+        raise ValueError("DataArray must have a 'height' dimension")
+
+    heights = np.asarray(da.coords["height"].values, dtype=np.float64)
+    if heights.size < 2:
+        raise ValueError(f"At least 2 heights required for interpolation, got {heights.size}")
+
+    th = np.asarray(target_heights, dtype=np.float64)
+    h_min, h_max = float(np.min(heights)), float(np.max(heights))
+    if float(np.min(th)) < h_min or float(np.max(th)) > h_max:
+        raise ValueError(
+            f"target_heights outside available height range [{h_min}, {h_max}]. "
+            "Extrapolation is not supported."
+        )
+
+    ln_heights = np.log(heights)
+    da_log = da.assign_coords(ln_height=("height", ln_heights)).swap_dims({"height": "ln_height"}).sortby("ln_height")
+
+    ln_targets = np.log(th)
+    out = da_log.interp(ln_height=ln_targets, method="linear")
+
+    # Rename the interpolation dimension and attach the physical heights as a coordinate.
+    out = out.rename({"ln_height": dim_name})
+    out = out.assign_coords({dim_name: np.arange(th.size, dtype=np.int64), f"{dim_name}_height": (dim_name, th)})
+    return out
+
+
+def _weibull_moment(
+    *,
+    A: xr.DataArray,
+    k: xr.DataArray,
+    p: int,
+) -> xr.DataArray:
+    """
+    Compute the p-th raw moment of a Weibull(A, k) distribution:
+
+        E[U^p] = A^p * Gamma(1 + p/k)
+
+    This is vectorized and dask-friendly.
+    """
+    return (A ** p) * gamma(1 + (p / k))
+
+
+def _rews_moment_factor(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    hub_height: float,
+    rotor_diameter: float,
+    method: str = "log_height_linear",
+    n: int = 9,
+) -> xr.DataArray:
+    """
+    Rotor-Equivalent Wind Speed (REWS) factor based on the cubic moment.
+
+    Let U(z) ~ Weibull(A(z), k(z)).
+    Define the rotor-area-averaged cubic moment:
+
+        m3_rotor = (2/pi) * ∫_{-1}^{1} m3(H + R*t) * sqrt(1 - t^2) dt,
+        where m3(z) = E[U(z)^3] = A(z)^3 * Gamma(1 + 3/k(z)),
+              H is hub height, R = rotor_diameter/2.
+
+    The REWS factor is:
+        f = (m3_rotor / m3_hub)^(1/3)
+
+    Numerical integration:
+    Uses Gauss-Chebyshev quadrature of the second kind with `n` nodes, which is efficient
+    for the weight sqrt(1 - t^2) and needs only `n` interpolations of A/k.
+
+    Contract:
+    - No extrapolation: rotor top/bottom must lie within available Weibull height range.
+    - Returns a dask-friendly DataArray on the spatial grid (y, x).
+    """
+    if method != "log_height_linear":
+        raise ValueError(f"Unsupported interpolation method: {method!r}. Only 'log_height_linear' is supported.")
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}")
+
+    R = float(rotor_diameter) / 2.0
+    if R <= 0:
+        raise ValueError(f"rotor_diameter must be > 0, got {rotor_diameter!r}")
+
+    # Quadrature nodes for Chebyshev (2nd kind): t_i = cos(i*pi/(n+1)), weights ∝ sin^2(...)
+    i = np.arange(1, n + 1, dtype=np.float64)
+    theta = i * np.pi / (n + 1.0)
+    t = np.cos(theta)  # in [-1, 1]
+    w = np.sin(theta) ** 2  # positive weights
+
+    # Physical sample heights along the rotor
+    z = hub_height + R * t  # meters
+
+    # Interpolate A(z), k(z) for all samples in one go
+    A_s = _interp_da_to_heights_log(A_stack, z, dim_name="sample")
+    k_s = _interp_da_to_heights_log(k_stack, z, dim_name="sample")
+
+    # Cubic moment at samples and hub
+    m3_s = _weibull_moment(A=A_s, k=k_s, p=3)
+    A_hub = _interp_da_to_height_log(A_stack, hub_height)
+    k_hub = _interp_da_to_height_log(k_stack, hub_height)
+    m3_hub = _weibull_moment(A=A_hub, k=k_hub, p=3)
+
+    # Weighted quadrature for (2/pi)∫ f(t) sqrt(1-t^2) dt
+    # Using the identity: (2/pi)∫ ≈ 2/(n+1) * Σ sin^2(theta_i) * f(cos(theta_i))
+    w_da = xr.DataArray(w, dims=("sample",), coords={"sample": np.arange(n, dtype=np.int64)})
+    m3_rotor = (2.0 / (n + 1.0)) * (m3_s * w_da).sum(dim="sample")
+
+    # REWS factor
+    f = (m3_rotor / m3_hub) ** (1.0 / 3.0)
+    f = f.rename("rews_factor")
+    return f
+
+
 
 
 def _validate_air_density(arr: np.ndarray, context: str) -> None:

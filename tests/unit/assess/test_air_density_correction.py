@@ -145,7 +145,7 @@ def test_step_curve_with_density_correction_oracle():
 
     Oracle: CF = P(U >= u_0/c) = \exp\left(-\left(\frac{u_0}{c \cdot A}\right)^k\right)
     """
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(2)  # 2x2 grid with different densities
     wind_speed = wind_speed_axis()
@@ -153,8 +153,8 @@ def test_step_curve_with_density_correction_oracle():
     # Constant Weibull params across heights (trivial interpolation)
     A = 8.0
     k = 2.0
-    weibull_A = np.full((4, 2, 2), A)
-    weibull_k = np.full((4, 2, 2), k)
+    weibull_A = np.full((5, 2, 2), A)
+    weibull_k = np.full((5, 2, 2), k)
 
     # Spatially varying air density (constant over height)
     # Pixel [0,0]: rho = rho0 * 0.9 (low density)
@@ -164,7 +164,7 @@ def test_step_curve_with_density_correction_oracle():
     rho_vals = np.array([
         [[RHO_0 * 0.9, RHO_0 * 1.1], [RHO_0, RHO_0 * 0.8]],
     ])
-    air_density = np.broadcast_to(rho_vals, (4, 2, 2)).copy()
+    air_density = np.broadcast_to(rho_vals, (5, 2, 2)).copy()
 
     # Step power curve at u_0 = 6.0
     u_0 = 6.0
@@ -218,21 +218,21 @@ def test_tophat_curve_with_density_correction_oracle():
     Oracle: CF = \exp\left(-\left(\frac{u_{in}}{c \cdot A}\right)^k\right)
                 - \exp\left(-\left(\frac{u_{out}}{c \cdot A}\right)^k\right)
     """
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(2)
     wind_speed = wind_speed_axis()
 
     A = 8.0
     k = 2.0
-    weibull_A = np.full((4, 2, 2), A)
-    weibull_k = np.full((4, 2, 2), k)
+    weibull_A = np.full((5, 2, 2), A)
+    weibull_k = np.full((5, 2, 2), k)
 
     # Spatially varying density
     rho_vals = np.array([
         [[RHO_0 * 0.85, RHO_0 * 1.15], [RHO_0 * 0.95, RHO_0 * 1.05]],
     ])
-    air_density = np.broadcast_to(rho_vals, (4, 2, 2)).copy()
+    air_density = np.broadcast_to(rho_vals, (5, 2, 2)).copy()
 
     # Top-hat power curve: 1 for u_in <= u < u_out
     u_in = 6.0
@@ -282,18 +282,18 @@ def test_density_correction_identity_at_reference():
     When air_density == rho0 everywhere, density correction has no effect.
     CF with air_density_mode="gwa" should equal CF with air_density_mode="none".
     """
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(3)
     wind_speed = wind_speed_axis()
 
     A = 8.0
     k = 2.0
-    weibull_A = np.full((4, 2, 3), A)
-    weibull_k = np.full((4, 2, 3), k)
+    weibull_A = np.full((5, 2, 3), A)
+    weibull_k = np.full((5, 2, 3), k)
 
     # Air density = rho0 everywhere
-    air_density = np.full((4, 2, 3), RHO_0)
+    air_density = np.full((5, 2, 3), RHO_0)
 
     # Step power curve
     u_0 = 6.0
@@ -349,7 +349,7 @@ def test_air_density_interpolation_uses_linear_in_height():
     Build air_density(height) exactly linear: rho(h) = p0 + p1 * h
     Assert interpolated value matches oracle with tight tolerance.
     """
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(3)
     wind_speed = wind_speed_axis()
@@ -416,16 +416,16 @@ def test_air_density_mode_validation():
     """Test that invalid air_density_mode raises ValueError."""
     import pytest
 
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(2)
     wind_speed = wind_speed_axis()
 
     A = 8.0
     k = 2.0
-    weibull_A = np.full((4, 2, 2), A)
-    weibull_k = np.full((4, 2, 2), k)
-    air_density = np.full((4, 2, 2), RHO_0)
+    weibull_A = np.full((5, 2, 2), A)
+    weibull_k = np.full((5, 2, 2), k)
+    air_density = np.full((5, 2, 2), RHO_0)
     p_step = np.where(wind_speed >= 6.0, 1.0, 0.0)
 
     atlas = create_mock_atlas_with_density(
@@ -457,7 +457,7 @@ def test_missing_air_density_and_raw_files_raises():
     Test that air_density_mode='gwa' without air_density data AND without raw GWA files
     raises an actionable FileNotFoundError mentioning materialize/_load_gwa.
     """
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(2)
     wind_speed = wind_speed_axis()
@@ -467,12 +467,12 @@ def test_missing_air_density_and_raw_files_raises():
 
     # Create atlas WITHOUT air_density
     A_da = xr.DataArray(
-        np.full((4, 2, 2), A),
+        np.full((5, 2, 2), A),
         dims=("height", "y", "x"),
         coords={"height": heights, "y": y, "x": x},
     )
     k_da = xr.DataArray(
-        np.full((4, 2, 2), k),
+        np.full((5, 2, 2), k),
         dims=("height", "y", "x"),
         coords={"height": heights, "y": y, "x": x},
     )
@@ -541,7 +541,7 @@ def test_lazy_load_air_density_success_path():
     """
     from cleo.assess import compute_air_density_at_height
 
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(3)
     wind_speed = wind_speed_axis()
@@ -651,17 +651,17 @@ def test_density_corrected_power_curve_out_of_range_is_zero():
     y = np.arange(2)
     x = np.arange(2)
     wind_speed = wind_speed_axis()
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
 
     # Weibull params: A=20, k=10 => PDF concentrated near 20 m/s
     A = 20.0
     k = 10.0
-    weibull_A = np.full((4, 2, 2), A)
-    weibull_k = np.full((4, 2, 2), k)
+    weibull_A = np.full((5, 2, 2), A)
+    weibull_k = np.full((5, 2, 2), k)
 
     # High air density in valid range: c = (2.0/1.225)^(1/3) ≈ 1.178
     rho_high = 2.0  # kg/m³, at upper bound of valid range
-    air_density = np.full((4, 2, 2), rho_high)
+    air_density = np.full((5, 2, 2), rho_high)
 
     # Power curve: ramps from 0 to 1 over [0, 20], undefined beyond
     pc_u = np.array([0.0, 20.0])
@@ -737,18 +737,18 @@ def test_air_density_nonpositive_raises():
     Setting air_density to 0 or negative should trigger validation error
     with message mentioning "> 0".
     """
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(2)
     wind_speed = wind_speed_axis()
 
     A = 8.0
     k = 2.0
-    weibull_A = np.full((4, 2, 2), A)
-    weibull_k = np.full((4, 2, 2), k)
+    weibull_A = np.full((5, 2, 2), A)
+    weibull_k = np.full((5, 2, 2), k)
 
     # Invalid: set air_density to 0
-    air_density = np.zeros((4, 2, 2))
+    air_density = np.zeros((5, 2, 2))
 
     power_curve = np.where(wind_speed >= 6.0, 1.0, 0.0)
 
@@ -766,7 +766,7 @@ def test_air_density_nonpositive_raises():
         )
 
     # Also test negative values
-    air_density_neg = np.full((4, 2, 2), -1.0)
+    air_density_neg = np.full((5, 2, 2), -1.0)
     atlas_neg = create_mock_atlas_with_density(
         y=y, x=x, wind_speed=wind_speed,
         weibull_A=weibull_A, weibull_k=weibull_k,
@@ -792,18 +792,18 @@ def test_air_density_units_median_out_of_range_raises():
     This catches unit errors (e.g., g/m³ instead of kg/m³).
     Setting air_density = 10.0 everywhere should fail median check.
     """
-    heights = np.array([50.0, 100.0, 150.0, 200.0])
+    heights = np.array([10.0, 50.0, 100.0, 150.0, 200.0])
     y = np.arange(2)
     x = np.arange(2)
     wind_speed = wind_speed_axis()
 
     A = 8.0
     k = 2.0
-    weibull_A = np.full((4, 2, 2), A)
-    weibull_k = np.full((4, 2, 2), k)
+    weibull_A = np.full((5, 2, 2), A)
+    weibull_k = np.full((5, 2, 2), k)
 
     # Invalid: air_density = 10 kg/m³ (physically implausible, suggests unit error)
-    air_density = np.full((4, 2, 2), 10.0)
+    air_density = np.full((5, 2, 2), 10.0)
 
     power_curve = np.where(wind_speed >= 6.0, 1.0, 0.0)
 
@@ -821,7 +821,7 @@ def test_air_density_units_median_out_of_range_raises():
         )
 
     # Also test too low (e.g., 0.1 kg/m³)
-    air_density_low = np.full((4, 2, 2), 0.1)
+    air_density_low = np.full((5, 2, 2), 0.1)
     atlas_low = create_mock_atlas_with_density(
         y=y, x=x, wind_speed=wind_speed,
         weibull_A=weibull_A, weibull_k=weibull_k,

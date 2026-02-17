@@ -3,24 +3,24 @@ import os
 import re
 import json
 import shutil
-import warnings
-import yaml
+# import warnings
+# import yaml
 import pyproj
 import logging
-import zipfile
+# import zipfile
 import datetime
-import rasterio.crs
+# import rasterio.crs
 import zarr
 from collections.abc import Sequence
 from uuid import uuid4
 import numpy as np
 import xarray as xr
-import geopandas as gpd
+# import geopandas as gpd
 import pycountry as pct
 from pathlib import Path
-from xrspatial import proximity
-from rasterio.enums import MergeAlg
-from rasterio.features import rasterize as rio_rasterize
+# from xrspatial import proximity
+# from rasterio.enums import MergeAlg
+# from rasterio.features import rasterize as rio_rasterize
 
 from cleo.class_helpers import (
     deploy_resources,
@@ -288,6 +288,117 @@ _WIND_METRICS = {
 }
 
 
+# %% MetricResult wrapper for compute(...).cache() pattern
+class MetricResult:
+    """
+    Wrapper for computed metric results supporting .cache() pattern.
+
+    Allows chaining: atlas.wind.compute(...).cache()
+    """
+
+    def __init__(self, domain: "WindDomain", metric: str, data: xr.DataArray, params: dict):
+        self._domain = domain
+        self._metric = metric
+        self._data = data
+        self._params = params
+
+    @property
+    def data(self) -> xr.DataArray:
+        """Access the computed DataArray (lazy)."""
+        return self._data
+
+    def cache(self, *, overwrite: bool = True) -> xr.DataArray:
+        """
+        Cache the metric into the active wind store and surface in atlas.wind.data.
+
+        Per contract A8: writes the result into the derived region store for the
+        current region selection (or base store if no region), and surfaces it
+        immediately as atlas.wind.data[metric_name].
+
+        Args:
+            overwrite: If True (default), overwrite existing variable.
+
+        Returns:
+            The cached DataArray.
+
+        Raises:
+            ValueError: If variable exists and overwrite=False.
+        """
+        atlas = self._domain._atlas
+        # Route to active store (region or base) per contract B1
+        store_path = atlas._active_wind_store_path()
+
+        # Open existing store to check and align
+        existing_ds = xr.open_zarr(store_path, consolidated=False)
+
+        if self._metric in existing_ds.data_vars and not overwrite:
+            existing_ds.close()
+            raise ValueError(
+                f"Variable {self._metric!r} already exists in wind.zarr; "
+                f"use overwrite=True to replace."
+            )
+
+        # Get turbine metadata for ID to index mapping
+        turbines_meta = json.loads(existing_ds.attrs["cleo_turbines_json"])
+        turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
+        n_turbines = len(turbines_meta)
+        full_turbine_indices = list(range(n_turbines))
+
+        da = self._data.copy()
+
+        # Handle turbine dimension: expand to full turbine set with NaN for uncomputed
+        if "turbine" in da.dims:
+            # Get computed turbine IDs/indices
+            if da.coords["turbine"].dtype.kind in ("U", "O", "S"):
+                # String turbine IDs - convert to indices
+                computed_ids = list(da.coords["turbine"].values)
+                computed_indices = [turbine_id_to_idx[tid] for tid in computed_ids]
+            else:
+                # Already integer indices
+                computed_indices = list(da.coords["turbine"].values)
+
+            # Create full-sized array with NaN for uncomputed turbines
+            # and reindex to match existing store's turbine dimension
+            da = da.assign_coords(turbine=computed_indices)
+            da = da.reindex(turbine=full_turbine_indices, fill_value=np.nan)
+
+        # Drop scalar/non-dimensional coordinates that conflict with existing dims
+        # (e.g., capacity_factors may have height=100 as scalar coord, but wind.zarr
+        # has height as a dimension with multiple values)
+        existing_dims = set(existing_ds.sizes.keys())
+        coords_to_drop = []
+        for coord_name in da.coords:
+            if coord_name in existing_dims and coord_name not in da.dims:
+                # This coordinate exists as a dimension in existing store
+                # but is a scalar/non-dim coord in da - must drop it
+                coords_to_drop.append(coord_name)
+
+        if coords_to_drop:
+            da = da.drop_vars(coords_to_drop)
+
+        # Preserve existing store attributes before writing
+        existing_attrs = dict(existing_ds.attrs)
+        existing_ds.close()
+
+        # Write metric to wind.zarr (append mode to preserve existing vars)
+        ds_to_write = xr.Dataset({self._metric: da})
+        ds_to_write.to_zarr(
+            store_path,
+            mode="a",  # Append to existing store
+            consolidated=False,
+        )
+
+        # Restore preserved attributes (to_zarr may overwrite them)
+        root = zarr.open_group(store_path, mode="a")
+        for key, val in existing_attrs.items():
+            root.attrs[key] = val
+
+        # Invalidate cached data so .data reloads with new variable
+        self._domain._data = None
+
+        return self._data
+
+
 # %% Domain objects for v1 API
 class WindDomain:
     """
@@ -295,18 +406,20 @@ class WindDomain:
 
     Provides lazy, cached access to the canonical wind.zarr store.
     The .data property opens the store once and caches the result.
+
+    Turbine selection is persistent on the Atlas instance, not on this domain.
     """
 
-    def __init__(self, atlas, *, selected_turbines=None):
+    def __init__(self, atlas):
         self._atlas = atlas
-        self._selected_turbines = selected_turbines
         self._data = None
 
     @property
     def data(self) -> xr.Dataset:
         """
-        Lazy access to the wind zarr store as xr.Dataset.
+        Lazy access to the active wind zarr store as xr.Dataset.
 
+        Routes to region store when region is selected, otherwise base store.
         Opens the store once and caches it. Validates store_state == "complete".
 
         Raises:
@@ -316,13 +429,18 @@ class WindDomain:
         if self._data is not None:
             return self._data
 
-        store_path = getattr(self._atlas, "wind_store_path", None)
-        if store_path is None:
-            store_path = Path(self._atlas.path) / "wind.zarr"
+        # Route to active store (region or base) per contract B1
+        store_path = self._atlas._active_wind_store_path()
 
         if not store_path.exists():
+            # Provide helpful message based on whether region is selected
+            if self._atlas._region is not None:
+                raise FileNotFoundError(
+                    f"Region wind store missing at {store_path}; "
+                    f"call atlas.materialize() after selecting region."
+                )
             raise FileNotFoundError(
-                f"Wind store missing at {store_path}; call atlas.materialize_canonical()."
+                f"Wind store missing at {store_path}; call atlas.materialize()."
             )
 
         ds = xr.open_zarr(store_path, consolidated=False)
@@ -331,7 +449,7 @@ class WindDomain:
         if state != "complete":
             raise RuntimeError(
                 f"Wind store incomplete (store_state={state!r}); "
-                f"call atlas.materialize_canonical()."
+                f"call atlas.materialize()."
             )
 
         self._data = ds
@@ -366,10 +484,12 @@ class WindDomain:
         """
         Currently selected turbine IDs, or None if no selection (all turbines).
 
+        Selection is persistent on the Atlas instance.
+
         Returns:
             Tuple of selected turbine IDs, or None for all turbines.
         """
-        return self._selected_turbines
+        return self._atlas._wind_selected_turbines
 
     def _validate_turbines(self, turbines: list[str]) -> tuple[str, ...]:
         """Validate turbine IDs against available turbines.
@@ -392,49 +512,79 @@ class WindDomain:
             )
         return tuple(turbines)
 
-    def select(self, *, turbines: list[str] | tuple[str, ...] | None = None) -> "WindDomain":
+    def select(self, *, turbines: list[str] | tuple[str, ...]) -> "WindDomain":
         """
-        Return a new WindDomain with selected turbines.
+        Set persistent turbine selection on the Atlas.
 
-        This is immutable: the original WindDomain is unchanged.
+        Selection persists even if atlas.wind creates new WindDomain objects.
+        Use clear_selection() to remove selection.
 
         Args:
-            turbines: Turbine IDs to select, or None to clear selection (all turbines).
-                     Empty list is not allowed.
+            turbines: Turbine IDs to select (non-empty list/tuple of strings).
+                     Each ID is stripped; empty/whitespace-only IDs rejected.
+                     Duplicates rejected; order preserved.
 
         Returns:
-            New WindDomain with the turbine selection applied.
+            self (for chaining).
 
         Raises:
-            ValueError: If turbines is empty list or contains unknown IDs.
+            ValueError: If turbines is empty, contains non-strings, empty IDs,
+                       duplicates, or unknown turbine IDs.
         """
-        if turbines is None:
-            # Clear selection
-            return WindDomain(self._atlas, selected_turbines=None)
-
-        if len(turbines) == 0:
+        if not turbines:
             raise ValueError(
-                "turbines must be non-empty or None to clear; see atlas.wind.turbines"
+                "turbines must be non-empty; use clear_selection() to clear"
             )
 
-        # Validate and create new domain with selection
-        validated = self._validate_turbines(list(turbines))
-        return WindDomain(self._atlas, selected_turbines=validated)
+        # Validate: non-empty, strings, strip, reject empty, reject duplicates
+        cleaned = []
+        seen = set()
+        for item in turbines:
+            if not isinstance(item, str):
+                raise ValueError(f"Each turbine ID must be a string, got {type(item).__name__}")
+            stripped = item.strip()
+            if not stripped:
+                raise ValueError("Turbine ID cannot be empty or whitespace-only")
+            if stripped in seen:
+                raise ValueError(f"Duplicate turbine ID: {stripped!r}")
+            seen.add(stripped)
+            cleaned.append(stripped)
 
-    def compute(self, metric: str, **kwargs) -> xr.DataArray:
+        # Validate against available turbines
+        validated = self._validate_turbines(cleaned)
+
+        # Persist on Atlas
+        self._atlas._wind_selected_turbines = validated
+        return self
+
+    def clear_selection(self) -> "WindDomain":
+        """
+        Clear persistent turbine selection.
+
+        Returns:
+            self (for chaining).
+        """
+        self._atlas._wind_selected_turbines = None
+        return self
+
+    def compute(self, metric: str, **kwargs) -> MetricResult:
         """
         Compute a wind metric from canonical data.
+
+        Returns a MetricResult wrapper supporting .data and .cache() pattern.
 
         Args:
             metric: Metric name (see supported metrics below).
             **kwargs: Metric-specific parameters.
+                For metrics requiring turbines: if not provided, uses
+                persistent selection from atlas.wind.select().
 
         Supported metrics:
             - "mean_wind_speed": requires height (int)
-            - "capacity_factors": requires turbines (via select() or kwargs)
+            - "capacity_factors": uses turbines from select() or explicit kwarg
 
         Returns:
-            DataArray with computed metric.
+            MetricResult with .data (DataArray) and .cache() method.
 
         Raises:
             ValueError: If metric unknown, required params missing, or turbine validation fails.
@@ -457,19 +607,19 @@ class WindDomain:
                 f"Missing required parameters for {metric}: {sorted(missing)}"
             )
 
-        # Turbine enforcement
+        # Turbine enforcement: inject from persistent selection if not provided
         if requires_turbines:
             turbines = kwargs.get("turbines", None)
             if turbines is None:
-                # Check if domain has selection
+                # Check if Atlas has persistent selection
                 if self.selected_turbines is not None:
                     turbines = self.selected_turbines
                 else:
                     raise ValueError(
-                        "turbines required; use atlas.wind.turbines or atlas.wind.select(...)."
+                        "turbines required; use atlas.wind.select(...) or pass turbines=."
                     )
             else:
-                # Validate provided turbines
+                # Validate provided turbines (explicit override for this call only)
                 if len(turbines) == 0:
                     raise ValueError(
                         "turbines must be non-empty; see atlas.wind.turbines"
@@ -484,20 +634,27 @@ class WindDomain:
         except (FileNotFoundError, RuntimeError):
             land = None
 
-        return fn(wind, land, **kwargs)
+        # Compute the metric
+        da = fn(wind, land, **kwargs)
 
-    def mean_wind_speed(self, height: int, **kwargs) -> xr.DataArray:
+        # Build params dict for MetricResult (exclude turbines from kwargs copy)
+        params = {k: v for k, v in kwargs.items()}
+
+        return MetricResult(self, metric, da, params)
+
+    def mean_wind_speed(self, height: int, **kwargs) -> MetricResult:
         """
         Compute mean wind speed at specified height.
 
         Thin wrapper around compute("mean_wind_speed", ...).
+        Returns MetricResult supporting .data and .cache() pattern.
 
         Args:
             height: Height level (must exist in wind store).
             **kwargs: Additional parameters passed to compute.
 
         Returns:
-            DataArray with mean wind speed (m/s).
+            MetricResult with .data (DataArray) and .cache() method.
         """
         return self.compute("mean_wind_speed", height=height, **kwargs)
 
@@ -509,30 +666,34 @@ class WindDomain:
         air_density: bool = False,
         loss_factor: float = 1.0,
         **kwargs,
-    ) -> xr.DataArray:
+    ) -> MetricResult:
         """
         Compute capacity factors for selected turbines.
 
         Thin wrapper around compute("capacity_factors", ...).
+        Returns MetricResult supporting .data and .cache() pattern.
 
         Args:
-            turbines: Turbine IDs (uses selected_turbines if None).
+            turbines: Turbine IDs (uses persistent selection if None).
             height: Reference height for Weibull interpolation (default 100).
             air_density: If True, apply air density correction.
             loss_factor: Loss correction factor (default 1.0).
             **kwargs: Additional parameters passed to compute.
 
         Returns:
-            DataArray with capacity factors, dims (turbine, y, x).
+            MetricResult with .data (DataArray) and .cache() method.
         """
-        return self.compute(
-            "capacity_factors",
-            turbines=turbines,
-            height=height,
-            air_density=air_density,
-            loss_factor=loss_factor,
+        # Only pass turbines if explicitly provided (let compute() inject from selection)
+        compute_kwargs = {
+            "height": height,
+            "air_density": air_density,
+            "loss_factor": loss_factor,
             **kwargs,
-        )
+        }
+        if turbines is not None:
+            compute_kwargs["turbines"] = turbines
+
+        return self.compute("capacity_factors", **compute_kwargs)
 
 
 class LandscapeDomain:
@@ -622,8 +783,9 @@ class LandscapeDomain:
     @property
     def data(self) -> xr.Dataset:
         """
-        Lazy access to the landscape zarr store as xr.Dataset.
+        Lazy access to the active landscape zarr store as xr.Dataset.
 
+        Routes to region store when region is selected, otherwise base store.
         Opens the store once and caches it. Validates store_state == "complete"
         and presence of valid_mask variable.
 
@@ -634,13 +796,18 @@ class LandscapeDomain:
         if self._data is not None:
             return self._data
 
-        store_path = getattr(self._atlas, "landscape_store_path", None)
-        if store_path is None:
-            store_path = Path(self._atlas.path) / "landscape.zarr"
+        # Route to active store (region or base) per contract B1
+        store_path = self._atlas._active_landscape_store_path()
 
         if not store_path.exists():
+            # Provide helpful message based on whether region is selected
+            if self._atlas._region is not None:
+                raise FileNotFoundError(
+                    f"Region landscape store missing at {store_path}; "
+                    f"call atlas.materialize() after selecting region."
+                )
             raise FileNotFoundError(
-                f"Landscape store missing at {store_path}; call atlas.materialize_canonical()."
+                f"Landscape store missing at {store_path}; call atlas.materialize()."
             )
 
         ds = xr.open_zarr(store_path, consolidated=False)
@@ -649,12 +816,12 @@ class LandscapeDomain:
         if state != "complete":
             raise RuntimeError(
                 f"Landscape store incomplete (store_state={state!r}); "
-                f"call atlas.materialize_canonical()."
+                f"call atlas.materialize()."
             )
 
         if "valid_mask" not in ds.data_vars:
             raise RuntimeError(
-                "Landscape store missing valid_mask; call atlas.materialize_canonical()."
+                "Landscape store missing valid_mask; call atlas.materialize()."
             )
 
         self._data = ds
@@ -670,14 +837,16 @@ class Atlas:
         crs,
         *,
         chunk_policy: dict[str, int] | None = None,
+        region: str | None = None,
         results_root: Path | None = None,
         fingerprint_method: str = "path_mtime_size",
     ):
         self.path = path
         self.country = country
-        self.region = None
+        self._region: str | None = None  # Region selection state (use select() to set)
         self.crs = crs
         self._turbines_configured: tuple[str, ...] | None = None
+        self._wind_selected_turbines: tuple[str, ...] | None = None
         self._setup_directories()
         self._setup_logging()
         self._deploy_resources()
@@ -690,7 +859,7 @@ class Atlas:
         self.chunk_policy = chunk_policy if chunk_policy is not None else {"y": 1024, "x": 1024}
         self.fingerprint_method = fingerprint_method
 
-        # Canonical store paths
+        # Base (country-wide) store paths
         self.wind_store_path = self.path / "wind.zarr"
         self.landscape_store_path = self.path / "landscape.zarr"
         self.results_root = results_root if results_root is not None else (self.path / "results")
@@ -698,6 +867,10 @@ class Atlas:
 
         # Canonical store readiness flag
         self._canonical_ready = False
+
+        # Apply initial region selection if provided (equivalent to calling select(region=...))
+        if region is not None:
+            self.select(region=region)
 
     def __repr__(self) -> str:
         """Audit-safe repr: no IO, no mutation, bounded length."""
@@ -716,16 +889,21 @@ class Atlas:
     __str__ = __repr__
 
     def materialize(self):
-        """Materialize canonical wind.zarr and landscape.zarr stores.
+        """Materialize stores: base (country-wide) and region (if selected).
 
-        Creates both canonical stores using the Unifier. Must be called before
-        accessing wind/landscape data.
+        Per contract A5:
+        - Always creates/updates base stores (wind.zarr, landscape.zarr)
+        - If region selected, also creates region stores (contract B1, B4)
 
-        Idempotent: does nothing if already materialized.
+        Must be called before accessing wind/landscape data.
         """
-        if self._canonical_ready:
-            return
-        self.materialize_canonical()
+        # Always ensure base stores exist
+        if not self._canonical_ready:
+            self.materialize_canonical()
+
+        # If region selected, ensure region stores exist
+        if self._region is not None:
+            self._ensure_region_stores()
 
     @property
     def wind(self) -> WindDomain:
@@ -782,6 +960,116 @@ class Atlas:
                 "Canonical stores not ready. Call atlas.materialize() first."
             )
         return xr.open_zarr(self.landscape_store_path, consolidated=False, chunks=self.chunk_policy)
+
+    # -------------------------------------------------------------------------
+    # Region selection (contract A4, B1)
+    # -------------------------------------------------------------------------
+
+    @property
+    def region(self) -> str | None:
+        """Current region selection (NUTS ID or None for full-country)."""
+        return self._region
+
+    @region.setter
+    def region(self, value: str | None) -> None:
+        """Set region selection (equivalent to select(region=value))."""
+        self.select(region=value)
+
+    def select(self, *, region: str | None = None) -> "Atlas":
+        """
+        Set the active region selection (persistent).
+
+        Per contract A4:
+        - Region selection is changeable at any time after construction.
+        - Region selection affects what computations operate on and where
+          derived outputs are written (region-scoped stores).
+        - Region selection does NOT rewrite base stores.
+
+        Args:
+            region: NUTS region ID (e.g. "AT13") or None to clear selection.
+                   String is stripped; empty/whitespace-only raises ValueError.
+
+        Returns:
+            self (for chaining).
+
+        Raises:
+            ValueError: If region is empty or whitespace-only string.
+        """
+        if region is not None:
+            if not isinstance(region, str):
+                raise ValueError(f"region must be a string or None, got {type(region).__name__}")
+            stripped = region.strip()
+            if not stripped:
+                raise ValueError("region cannot be empty or whitespace-only")
+            region = stripped
+
+        # Update region selection
+        self._region = region
+
+        # Invalidate domain caches so .data reloads from correct store
+        if self._wind_domain is not None:
+            self._wind_domain._data = None
+        if self._landscape_domain is not None:
+            self._landscape_domain._data = None
+
+        return self
+
+    @property
+    def _effective_region_id(self) -> str:
+        """
+        Effective region ID for store paths (contract B1).
+
+        Returns "__all__" when no region selected, otherwise the region ID.
+        """
+        return self._region if self._region is not None else "__all__"
+
+    def _region_store_root(self) -> Path:
+        """
+        Root directory for region stores (contract B1).
+
+        Layout: <ROOT>/regions/<region_id>/
+        """
+        return self.path / "regions" / self._effective_region_id
+
+    def _active_wind_store_path(self) -> Path:
+        """
+        Path to the active wind store (base or region).
+
+        When region selected: <ROOT>/regions/<region_id>/wind.zarr
+        When no region: <ROOT>/wind.zarr (base store)
+        """
+        if self._region is not None:
+            return self._region_store_root() / "wind.zarr"
+        return self.wind_store_path
+
+    def _active_landscape_store_path(self) -> Path:
+        """
+        Path to the active landscape store (base or region).
+
+        When region selected: <ROOT>/regions/<region_id>/landscape.zarr
+        When no region: <ROOT>/landscape.zarr (base store)
+        """
+        if self._region is not None:
+            return self._region_store_root() / "landscape.zarr"
+        return self.landscape_store_path
+
+    def _ensure_region_stores(self) -> None:
+        """
+        Ensure region stores exist for current region selection.
+
+        Creates region stores by subsetting from country stores if needed.
+        Does nothing if no region selected.
+        """
+        if self._region is None:
+            return
+
+        from cleo.unify import Unifier
+
+        u = Unifier(
+            chunk_policy=self.chunk_policy,
+            fingerprint_method=self.fingerprint_method,
+        )
+        u.materialize_region(self, self._region)
 
     def materialize_canonical(self) -> None:
         """Materialize both wind.zarr and landscape.zarr canonical stores.

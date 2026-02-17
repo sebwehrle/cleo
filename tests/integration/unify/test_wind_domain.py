@@ -54,8 +54,9 @@ class MockAtlas:
         self.path = path
         self.country = country
         self.crs = crs
-        self.region = region
+        self._region = region  # Region selection state
         self._turbines_configured = tuple(turbines) if turbines else None
+        self._wind_selected_turbines: tuple[str, ...] | None = None
 
         self.chunk_policy = {"y": 64, "x": 64}
         self.fingerprint_method = "path_mtime_size"
@@ -75,6 +76,18 @@ class MockAtlas:
     @property
     def turbines_configured(self):
         return self._turbines_configured
+
+    @property
+    def region(self):
+        return self._region
+
+    def _active_wind_store_path(self) -> Path:
+        """Return active wind store path (no region support in mock)."""
+        return self.wind_store_path
+
+    def _active_landscape_store_path(self) -> Path:
+        """Return active landscape store path (no region support in mock)."""
+        return self.landscape_store_path
 
     def get_nuts_region(self, region: str):
         """Mock - would return GeoDataFrame."""
@@ -159,8 +172,8 @@ def _create_elevation_raster(atlas: MockAtlas, **kwargs) -> Path:
 class TestWindDomainTurbineSelection:
     """Tests for WindDomain.turbines, selected_turbines, and select()."""
 
-    def test_wind_select_is_immutable_and_validates(self, tmp_path: Path) -> None:
-        """WindDomain.select() is immutable and validates turbine IDs."""
+    def test_wind_select_is_persistent_and_validates(self, tmp_path: Path) -> None:
+        """WindDomain.select() is persistent on Atlas and validates turbine IDs."""
         turbine_names = ["Enercon.E40.500", "Enercon.E82.3000"]
 
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
@@ -181,22 +194,21 @@ class TestWindDomainTurbineSelection:
         assert turbine_names[0] in tids
         assert turbine_names[1] in tids
 
-        # Test immutable select: original unchanged
-        w1 = w0.select(turbines=[tids[0]])
-        assert w0.selected_turbines is None, "Original should be unchanged"
-        assert w1.selected_turbines == (tids[0],), "New domain should have selection"
-        assert w0 is not w1, "select() should return a new instance"
+        # Test persistent select: selection persists on Atlas
+        result = w0.select(turbines=[tids[0]])
+        assert result is w0, "select() must return self for chaining"
+        assert w0.selected_turbines == (tids[0],), "Selection must persist"
 
         # Test selecting multiple turbines
-        w2 = w0.select(turbines=list(tids))
-        assert w2.selected_turbines == tuple(tids)
+        w0.select(turbines=list(tids))
+        assert w0.selected_turbines == tuple(tids)
 
-        # Test clearing selection
-        w3 = w1.select(turbines=None)
-        assert w3.selected_turbines is None
+        # Test clearing selection via clear_selection()
+        w0.clear_selection()
+        assert w0.selected_turbines is None
 
         # Test empty list raises
-        with pytest.raises(ValueError, match="non-empty or None"):
+        with pytest.raises(ValueError, match="non-empty"):
             w0.select(turbines=[])
 
         # Test unknown turbine raises with hint

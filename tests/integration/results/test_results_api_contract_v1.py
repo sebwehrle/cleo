@@ -193,14 +193,14 @@ class TestPersistAndOpenResult:
         ds = atlas.open_result(run_id, "auto")
         assert "b" in ds
 
-    def test_open_result_uses_consolidated(self, atlas: Atlas) -> None:
-        """open_result uses consolidated=True for metadata."""
+    def test_open_result_works(self, atlas: Atlas) -> None:
+        """open_result reads result store without consolidated metadata."""
         run = atlas.new_run_id("cons")
         ds_in = xr.Dataset({"c": ("z", [1, 2])})
 
         atlas.persist("check", ds_in, run_id=run)
 
-        # Should open without error using consolidated metadata
+        # Should open without error (uses consolidated=False internally)
         ds = atlas.open_result(run, "check")
         assert "c" in ds
 

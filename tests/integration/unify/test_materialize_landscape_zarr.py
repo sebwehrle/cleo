@@ -462,3 +462,60 @@ class TestMaterializeCanonical:
 
         assert wind_root.attrs["store_state"] == "complete"
         assert landscape_root.attrs["store_state"] == "complete"
+
+
+class TestZarrV3Compatibility:
+    """Tests for Zarr v3 compatibility (no string arrays, no consolidated metadata)."""
+
+    def test_landscape_store_no_string_arrays(self, tmp_path: Path) -> None:
+        """landscape.zarr must not contain string/unicode/object dtype arrays.
+
+        Regression test for Zarr v3 compatibility. String arrays trigger
+        UnstableSpecificationWarning because they have no stable Zarr v3 spec.
+        """
+        atlas = MockAtlas(tmp_path)
+
+        _create_all_gwa_rasters(tmp_path)
+        elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
+        _create_elevation_raster(elev_path)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        ds = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
+
+        # Check all data variables
+        for name, var in ds.data_vars.items():
+            dtype_kind = getattr(var.dtype, "kind", None)
+            assert dtype_kind not in ("U", "S", "O"), (
+                f"Data variable {name!r} has string/object dtype {var.dtype}, "
+                f"which is not Zarr v3 compatible."
+            )
+
+        # Check all coordinates (except spatial_ref which is special)
+        for name, coord in ds.coords.items():
+            if name == "spatial_ref":
+                continue
+            dtype_kind = getattr(coord.dtype, "kind", None)
+            assert dtype_kind not in ("U", "S", "O"), (
+                f"Coordinate {name!r} has string/object dtype {coord.dtype}, "
+                f"which is not Zarr v3 compatible."
+            )
+
+    def test_landscape_store_no_consolidated_metadata(self, tmp_path: Path) -> None:
+        """landscape.zarr must be readable with consolidated=False."""
+        atlas = MockAtlas(tmp_path)
+
+        _create_all_gwa_rasters(tmp_path)
+        elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
+        _create_elevation_raster(elev_path)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        # Should open successfully without consolidated metadata
+        ds = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
+        assert "valid_mask" in ds.data_vars
+        assert "elevation" in ds.data_vars

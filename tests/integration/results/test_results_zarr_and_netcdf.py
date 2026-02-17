@@ -3,7 +3,7 @@
 Tests are offline-only: no network calls, uses local test fixtures.
 
 These tests verify that:
-- persist creates atomic Zarr stores with consolidated metadata
+- persist creates atomic Zarr stores
 - export_result_netcdf exports to atomic NetCDF files
 - clean_results deletes Zarr stores correctly
 """
@@ -129,9 +129,6 @@ class MockAtlas:
         # Atomic write
         with atomic_dir(store_path) as tmp:
             ds.to_zarr(tmp, mode="w", consolidated=False)
-
-            # Consolidate metadata for efficient reads
-            zarr.consolidate_metadata(tmp)
 
             g = zarr.open_group(tmp, mode="a")
             g.attrs["store_state"] = "complete"
@@ -383,11 +380,11 @@ class TestPersist:
 
         p = atlas.persist("metric1", ds, run_id="run1", params={"a": 1})
 
-        # Check consolidated metadata exists (zarr v2 or v3)
-        assert (p / ".zmetadata").exists() or (p / "zarr.json").exists()
+        # Check store is valid zarr (zarr.json for v3 or .zarray files for v2)
+        assert (p / "zarr.json").exists() or (p / "metric" / ".zarray").exists()
 
-    def test_persist_readable_consolidated(self, tmp_path: Path) -> None:
-        """Result store is readable with consolidated=True."""
+    def test_persist_readable(self, tmp_path: Path) -> None:
+        """Result store is readable with consolidated=False."""
         atlas = MockAtlas(tmp_path)
 
         _create_all_gwa_rasters(tmp_path)
@@ -406,8 +403,8 @@ class TestPersist:
 
         p = atlas.persist("metric1", ds, run_id="run1", params={"a": 1})
 
-        # Open with consolidated=True
-        ds_r = xr.open_zarr(p, consolidated=True)
+        # Open with consolidated=False (Zarr v3 compatible)
+        ds_r = xr.open_zarr(p, consolidated=False)
         assert "metric" in ds_r
         assert ds_r["metric"].shape == (4, 4)
 
@@ -433,7 +430,7 @@ class TestPersist:
 
         p = atlas.persist("metric2", da, run_id="run1")
 
-        ds_r = xr.open_zarr(p, consolidated=True)
+        ds_r = xr.open_zarr(p, consolidated=False)
         # Should be renamed to metric_name
         assert "metric2" in ds_r
 

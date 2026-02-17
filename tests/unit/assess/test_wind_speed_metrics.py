@@ -97,8 +97,8 @@ def test_compute_mean_wind_speed_preserves_dataset_coords() -> None:
     self = Self(ds)
 
     coords_before = set(self.data.coords)
-    compute_mean_wind_speed(self, height=50, chunk_size=None, inplace=True)
-    compute_mean_wind_speed(self, height=100, chunk_size=None, inplace=True)
+    compute_mean_wind_speed(self, height=50, inplace=True)
+    compute_mean_wind_speed(self, height=100, inplace=True)
     coords_after = set(self.data.coords)
 
     assert "wind_speed" in coords_after
@@ -136,7 +136,7 @@ def test_wind_atlas_has_wind_speed_without_turbine_and_compute_weibull_pdf_works
     assert "wind_speed" in self.data.coords
     assert np.array_equal(self.data.coords["wind_speed"].values, DEFAULT_WIND_SPEED)
 
-    compute_weibull_pdf(self, chunk_size=None)
+    compute_weibull_pdf(self)
 
     assert "weibull_pdf" in self.data.data_vars
     pdf = self.data["weibull_pdf"]
@@ -204,8 +204,8 @@ def test_compute_mean_wind_speed_idempotent_no_recompute(monkeypatch: pytest.Mon
             return xr.DataArray(np.ones((4, 4)) * 8.0, dims=("y", "x")), xr.DataArray(np.ones((4, 4)) * 2.0, dims=("y", "x"))
 
     self = Self()
-    compute_mean_wind_speed(self, 100.0, chunk_size=None, inplace=True)
-    compute_mean_wind_speed(self, 100.0, chunk_size=None, inplace=True)
+    compute_mean_wind_speed(self, 100.0, inplace=True)
+    compute_mean_wind_speed(self, 100.0, inplace=True)
 
     assert self.calls == 0
     heights = list(self.data["mean_wind_speed"].coords["height"].values)
@@ -232,7 +232,7 @@ def test_compute_mean_wind_speed_adds_new_height() -> None:
             return a, k
 
     self = Self()
-    compute_mean_wind_speed(self, 100.0, chunk_size=None, inplace=True)
+    compute_mean_wind_speed(self, 100.0, inplace=True)
 
     assert self.calls == 1
     heights = sorted(self.data["mean_wind_speed"].coords["height"].values.tolist())
@@ -256,7 +256,7 @@ def test_compute_mean_wind_speed_no_duplicates_after_multiple_calls() -> None:
 
     self = Self()
     for _ in range(5):
-        compute_mean_wind_speed(self, 100.0, chunk_size=None, inplace=True)
+        compute_mean_wind_speed(self, 100.0, inplace=True)
 
     heights = list(self.data["mean_wind_speed"].coords["height"].values)
     assert heights == [100.0]

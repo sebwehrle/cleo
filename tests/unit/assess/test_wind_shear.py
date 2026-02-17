@@ -81,7 +81,7 @@ def test_wind_shear_accepts_dask_arrays() -> None:
     self = _Self(data=xr.Dataset({"mean_wind_speed": mean}), parent=_Parent(country="AUT"))
 
     # Should NOT raise - dask is now supported
-    compute_wind_shear_coefficient(self, chunk_size=None)
+    compute_wind_shear_coefficient(self)
 
     # Output should be dask-backed (lazy)
     assert _is_dask_backed(self.data["wind_shear"]), "wind_shear should remain dask-backed"
@@ -94,7 +94,7 @@ def test_wind_shear_accepts_dask_arrays() -> None:
 
 def test_wind_shear_masks_zero_wind_speed() -> None:
     self = _make_self(u50=[0.0, 1.0, 2.0], u100=[2.0, 2.0, 2.0])
-    compute_wind_shear_coefficient(self, chunk_size=None)
+    compute_wind_shear_coefficient(self)
 
     out = self.data["wind_shear"].values
     assert np.isnan(out[0])
@@ -104,7 +104,7 @@ def test_wind_shear_masks_zero_wind_speed() -> None:
 
 def test_wind_shear_masks_negative_wind_speed() -> None:
     self = _make_self(u50=[-1.0, 1.0], u100=[2.0, 2.0])
-    compute_wind_shear_coefficient(self, chunk_size=None)
+    compute_wind_shear_coefficient(self)
 
     out = self.data["wind_shear"].values
     assert np.isnan(out[0])
@@ -113,7 +113,7 @@ def test_wind_shear_masks_negative_wind_speed() -> None:
 
 def test_wind_shear_masks_nan_input() -> None:
     self = _make_self(u50=[np.nan, 1.0], u100=[2.0, 2.0])
-    compute_wind_shear_coefficient(self, chunk_size=None)
+    compute_wind_shear_coefficient(self)
 
     out = self.data["wind_shear"].values
     assert np.isnan(out[0])
@@ -122,7 +122,7 @@ def test_wind_shear_masks_nan_input() -> None:
 
 def test_wind_shear_never_contains_inf() -> None:
     self = _make_self(u50=[0.0, -1.0, np.nan, 1.0, 5.0], u100=[2.0, 2.0, 2.0, 2.0, 10.0])
-    compute_wind_shear_coefficient(self, chunk_size=None)
+    compute_wind_shear_coefficient(self)
 
     out = self.data["wind_shear"].values
     assert not np.any(np.isinf(out))
@@ -135,7 +135,7 @@ def test_wind_shear_valid_cells_match_oracle() -> None:
             = log(u100/u50) / log(2)
     """
     self = _make_self(u50=[5.0, 5.0], u100=[10.0, 10.0])
-    compute_wind_shear_coefficient(self, chunk_size=None)
+    compute_wind_shear_coefficient(self)
 
     got = self.data["wind_shear"].values
     expected = float(np.log(10.0 / 5.0) / np.log(100.0 / 50.0))  # = 1.0
@@ -151,7 +151,7 @@ def test_wind_shear_no_runtime_warnings_from_log_on_invalid_cells() -> None:
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        compute_wind_shear_coefficient(self, chunk_size=None)
+        compute_wind_shear_coefficient(self)
 
     runtime_log_warnings = [
         ww
@@ -167,7 +167,7 @@ def test_wind_shear_nan_on_invalid_cells_even_when_warnings_are_errors() -> None
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        compute_wind_shear_coefficient(self, chunk_size=None)
+        compute_wind_shear_coefficient(self)
 
     out = self.data["wind_shear"].values
     assert np.isnan(out[0])

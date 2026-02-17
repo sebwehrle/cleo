@@ -3,12 +3,10 @@ import hashlib
 import json
 import numpy as np
 import xarray as xr
-# rioxarray not imported here - assess.py is pure compute (no raw I/O)
 import logging
 
 from scipy.special import gamma
 from cleo.utils import _match_to_template
-from cleo.chunk import compute_chunked
 from cleo.spatial import _validate_values
 
 logger = logging.getLogger(__name__)
@@ -234,7 +232,7 @@ def mean_wind_speed_from_weibull(
     return mean_ws.rename("mean_wind_speed").assign_attrs(units="m/s")
 
 
-def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True, force: bool = False):
+def compute_mean_wind_speed(self, height, inplace=True, force: bool = False):
     """
     Compute mean wind speed for a given height.
 
@@ -247,8 +245,6 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True, force: 
     :param self: An instance of the Atlas-class
     :param height: Height for which to compute mean wind speed
     :type height: int
-    :param chunk_size: number of chunks for chunked computation. If None, computation is not chunked.
-    :type chunk_size: int
     :param inplace: If True, add mean wind speed to Dataset (kept for backward compatibility; function always updates self.data)
     :param force: if True, always recompute even if cached result exists
     """
@@ -274,11 +270,7 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True, force: 
         return mean_wind_speed.rename("mean_wind_speed").assign_attrs(units="m/s").squeeze()
 
     weibull_a, weibull_k = self.load_weibull_parameters(height)
-    if chunk_size is None or _is_dask_backed(weibull_a):
-        # Dask-backed: execute directly (dask handles chunking internally)
-        mean_wind_speed_data = calculate_mean_wind_speed(weibull_a=weibull_a, weibull_k=weibull_k)
-    else:
-        mean_wind_speed_data = compute_chunked(self, calculate_mean_wind_speed, chunk_size, weibull_a=weibull_a, weibull_k=weibull_k)
+    mean_wind_speed_data = calculate_mean_wind_speed(weibull_a=weibull_a, weibull_k=weibull_k)
 
     # Align new slice to template grid if available
     has_template = "template" in self.data.data_vars
@@ -345,13 +337,11 @@ def compute_mean_wind_speed(self, height, chunk_size=None, inplace=True, force: 
     self.data = ds
 
 
-def compute_wind_shear_coefficient(self, chunk_size=None, force: bool = False):
+def compute_wind_shear_coefficient(self, force: bool = False):
     """
     Compute wind shear coefficient
 
     :param self: An instance of the Atlas-class
-    :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
-    :type chunk_size: int
     :param force: if True, always recompute even if cached result exists
     """
     # Semantic cache check
@@ -367,9 +357,9 @@ def compute_wind_shear_coefficient(self, chunk_size=None, force: bool = False):
     # Ensure dependencies are computed (only call if method exists and data missing/invalid)
     if hasattr(self, "compute_mean_wind_speed"):
         if "mean_wind_speed" not in self.data.data_vars or 50 not in self.data["mean_wind_speed"].coords.get("height", []):
-            self.compute_mean_wind_speed(50, chunk_size, force=force)
+            self.compute_mean_wind_speed(50, force=force)
         if "mean_wind_speed" not in self.data.data_vars or 100 not in self.data["mean_wind_speed"].coords.get("height", []):
-            self.compute_mean_wind_speed(100, chunk_size, force=force)
+            self.compute_mean_wind_speed(100, force=force)
 
     u_mean_50 = self.data.mean_wind_speed.sel(height=50)
     u_mean_100 = self.data.mean_wind_speed.sel(height=100)
@@ -404,13 +394,11 @@ def compute_wind_shear_coefficient(self, chunk_size=None, force: bool = False):
     logger.info(f'Wind shear coefficient for {self.parent.country} computed.')
 
 
-def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
+def compute_weibull_pdf(self, force: bool = False):
     """
     Compute weibull probability density function for reference wind speeds
 
     :param self: wind atlas instance with data property
-    :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
-    :type chunk_size: int
     :param force: if True, always recompute even if cached result exists
     """
     # Semantic cache check
@@ -439,11 +427,7 @@ def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
         "u_power_curve": u
     }
 
-    if chunk_size is None or _is_dask_backed(a100):
-        # Dask-backed: execute directly (dask handles chunking internally)
-        p = weibull_probability_density(**inputs)
-    else:
-        p = compute_chunked(self, weibull_probability_density, chunk_size, **inputs)
+    p = weibull_probability_density(**inputs)
 
     # Align result to template if available
     if "template" in self.data.data_vars:
@@ -497,7 +481,7 @@ def compute_weibull_pdf(self, chunk_size=None, force: bool = False):
 #     * Monotonic sanity: if A(z) increases with z (k constant), then f > 1.
 # - Integration test: rotor_mode changes CF relative to hub_mode in expected direction on a toy case.
 
-def simulate_capacity_factors(self, chunk_size=None, loss_factor=1, force: bool = False,
+def simulate_capacity_factors(self, loss_factor=1, force: bool = False,
                              weibull_height_mode: str = "hub", air_density_mode: str = "gwa"):
     """
     Simulate wind turbine capacity factors for all configured turbines.
@@ -524,8 +508,6 @@ def simulate_capacity_factors(self, chunk_size=None, loss_factor=1, force: bool 
       - Existing variable self.data["capacity_factors"] retains its meaning (hub-height CF or legacy 100m_shear CF).
       - In hub_rews mode, an additional variable self.data["capacity_factors_rews"] is created/updated.
 
-    :param chunk_size: Size of chunk in pixels. If None, computation is not chunked.
-    :type chunk_size: int
     :param loss_factor: multiplicative loss / correction factor applied to CF (use 1.0 for gross CF)
     :type loss_factor: float
     :param force: if True, always recompute even if cached result exists
@@ -585,9 +567,9 @@ def simulate_capacity_factors(self, chunk_size=None, loss_factor=1, force: bool 
     # --- dependencies for legacy 100m_shear ---
     if not hub_like_mode and not hub_cached:
         if hasattr(self, "compute_wind_shear_coefficient") and "wind_shear" not in self.data.data_vars:
-            self.compute_wind_shear_coefficient(chunk_size, force=force)
+            self.compute_wind_shear_coefficient(force=force)
         if hasattr(self, "compute_weibull_pdf") and "weibull_pdf" not in self.data.data_vars:
-            self.compute_weibull_pdf(chunk_size, force=force)
+            self.compute_weibull_pdf(force=force)
 
     # --- hub-like modes: load Weibull stacks once ---
     if hub_like_mode and (not hub_cached or (do_rews and not rews_cached)):
@@ -666,10 +648,7 @@ def simulate_capacity_factors(self, chunk_size=None, loss_factor=1, force: bool 
                         "h_reference": h_turbine,
                         "correction_factor": loss_factor,
                     }
-                    if chunk_size is None or _is_dask_backed(pdf_hub):
-                        cf = capacity_factor(**inputs)
-                    else:
-                        cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
+                    cf = capacity_factor(**inputs)
 
             else:
                 # Legacy 100m_shear mode
@@ -681,10 +660,7 @@ def simulate_capacity_factors(self, chunk_size=None, loss_factor=1, force: bool 
                     "h_turbine": h_turbine,
                     "correction_factor": loss_factor,
                 }
-                if chunk_size is None or _is_dask_backed(self.data["weibull_pdf"]):
-                    cf = capacity_factor(**inputs)
-                else:
-                    cf = compute_chunked(self, capacity_factor, chunk_size, **inputs)
+                cf = capacity_factor(**inputs)
 
             cf = cf.expand_dims(turbine=[turbine_id])
             cap_factor_hub.append(cf)
@@ -759,10 +735,7 @@ def simulate_capacity_factors(self, chunk_size=None, loss_factor=1, force: bool 
                     "h_reference": h_turbine,
                     "correction_factor": loss_factor,
                 }
-                if chunk_size is None or _is_dask_backed(pdf_rews):
-                    cf_rews = capacity_factor(**inputs_rews)
-                else:
-                    cf_rews = compute_chunked(self, capacity_factor, chunk_size, **inputs_rews)
+                cf_rews = capacity_factor(**inputs_rews)
 
             cf_rews = cf_rews.expand_dims(turbine=[turbine_id])
             cap_factor_rews.append(cf_rews)
@@ -879,13 +852,11 @@ def _integrate_cf_with_density_correction(
     return result
 
 
-def compute_lcoe(self, chunk_size=None, turbine_cost_share=1, force: bool = False):
+def compute_lcoe(self, turbine_cost_share=1, force: bool = False):
     """
     Compute levelized cost of electricity (LCOE) for specified wind turbine models
 
     :param self: an instance of the Atlas-class
-    :param chunk_size: Size of chunk in pixels. If None, computation is not chunked.
-    :type chunk_size: int
     :param turbine_cost_share: Share of location-independent investment cost to compute pseudo-LCOE (see
     Wehrle et al. 2023, Inferring Local Social Cost of Wind Power. Evidence from Lower Austria)
     :type turbine_cost_share: float
@@ -906,7 +877,7 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1, force: bool = Fals
 
     # Ensure dependencies are computed (only call if method exists and data missing)
     if hasattr(self, "simulate_capacity_factors") and "capacity_factors" not in self.data.data_vars:
-        self.simulate_capacity_factors(chunk_size, force=force)
+        self.simulate_capacity_factors(force=force)
 
     lcoe_list = []
     for turbine_id in self.data.coords["turbine"].values:
@@ -923,12 +894,7 @@ def compute_lcoe(self, chunk_size=None, turbine_cost_share=1, force: bool = Fals
             "lifetime": self.get_cost_assumptions("turbine_lifetime")
         }
 
-        if chunk_size is None or _is_dask_backed(self.data["capacity_factors"]):
-            # Dask-backed: execute directly (dask handles chunking internally)
-            lcoe = levelized_cost(**inputs)
-        else:
-            lcoe = compute_chunked(self, levelized_cost, chunk_size, **inputs)
-
+        lcoe = levelized_cost(**inputs)
         lcoe = lcoe.expand_dims(turbine=[turbine_id])
         lcoe_list.append(lcoe)
 
@@ -1354,8 +1320,6 @@ def _validate_air_density(arr: np.ndarray, context: str) -> None:
 def compute_air_density_at_height(
     self,
     height: float | int,
-    *,
-    chunk_size: int | None = None,
 ) -> xr.DataArray:
     """
     Compute air density at a specific hub height using GWA air_density data.
@@ -1371,7 +1335,6 @@ def compute_air_density_at_height(
 
     :param self: wind atlas instance with data property
     :param height: Target height (e.g., turbine hub height)
-    :param chunk_size: Unused, kept for API consistency
     :return: DataArray with spatial dims (y, x) containing air density at target height
     :raises ValueError: If height out of range or values are invalid
     :raises FileNotFoundError: If air_density not in dataset and raw GWA rasters missing
@@ -1459,7 +1422,6 @@ def compute_weibull_pdf_at_height(
     self,
     height: float | int,
     *,
-    chunk_size: int | None = None,
     method: str = "log_height_linear",
 ) -> xr.DataArray:
     """
@@ -1470,7 +1432,6 @@ def compute_weibull_pdf_at_height(
 
     :param self: wind atlas instance with data property containing weibull parameters
     :param height: Target height (e.g., turbine hub height)
-    :param chunk_size: Size of chunks in pixels. If None, computation is not chunked.
     :param method: Interpolation method for Weibull parameters. Only "log_height_linear" supported.
     :return: DataArray with dims (wind_speed, y, x) containing PDF at target height
     :raises ValueError: If height is outside available range or method not supported
@@ -1519,12 +1480,7 @@ def compute_weibull_pdf_at_height(
         "u_power_curve": u,
     }
 
-    if chunk_size is None or _is_dask_backed(A_hub):
-        # Dask-backed: execute directly (dask handles chunking internally)
-        pdf = weibull_probability_density(**inputs)
-    else:
-        pdf = compute_chunked(self, weibull_probability_density, chunk_size, **inputs)
-
+    pdf = weibull_probability_density(**inputs)
     # Align result to template if available
     if "template" in self.data.data_vars:
         pdf = _match_to_template(pdf, self.data["template"])

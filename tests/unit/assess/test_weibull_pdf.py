@@ -144,7 +144,7 @@ def test_compute_weibull_pdf_aligns_to_template_grid() -> None:
 
     dummy = _DummySelf(ds, weibull_a=weibull_a, weibull_k=weibull_k)
 
-    compute_weibull_pdf(dummy, chunk_size=None)
+    compute_weibull_pdf(dummy)
 
     assert "weibull_pdf" in dummy.data.data_vars
     pdf = dummy.data["weibull_pdf"]

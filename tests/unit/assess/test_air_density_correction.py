@@ -183,7 +183,7 @@ def test_step_curve_with_density_correction_oracle():
 
     # Run with density correction
     simulate_capacity_factors(
-        atlas, chunk_size=None, loss_factor=1.0,
+        atlas, loss_factor=1.0,
         force=True, weibull_height_mode="hub", air_density_mode="gwa"
     )
 
@@ -251,7 +251,7 @@ def test_tophat_curve_with_density_correction_oracle():
     )
 
     simulate_capacity_factors(
-        atlas, chunk_size=None, loss_factor=1.0,
+        atlas, loss_factor=1.0,
         force=True, weibull_height_mode="hub", air_density_mode="gwa"
     )
 
@@ -311,7 +311,7 @@ def test_density_correction_identity_at_reference():
         hub_height=hub_height,
     )
     simulate_capacity_factors(
-        atlas_gwa, chunk_size=None, loss_factor=1.0,
+        atlas_gwa, loss_factor=1.0,
         force=True, weibull_height_mode="hub", air_density_mode="gwa"
     )
     cf_gwa = atlas_gwa.data["capacity_factors"].sel(turbine=turbine_name).values
@@ -325,7 +325,7 @@ def test_density_correction_identity_at_reference():
         hub_height=hub_height,
     )
     simulate_capacity_factors(
-        atlas_none, chunk_size=None, loss_factor=1.0,
+        atlas_none, loss_factor=1.0,
         force=True, weibull_height_mode="hub", air_density_mode="none"
     )
     cf_none = atlas_none.data["capacity_factors"].sel(turbine=turbine_name).values

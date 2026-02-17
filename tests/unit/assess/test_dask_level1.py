@@ -91,39 +91,6 @@ class TestDaskLevel1:
         assert _is_dask_backed(cf), "Output should remain dask-backed"
         assert cf.dims == ("y", "x"), f"Unexpected dims: {cf.dims}"
 
-    def test_compute_chunked_bypassed_for_dask_inputs(self, monkeypatch):
-        """
-        Verify compute_chunked is NOT called when inputs are dask-backed.
-
-        Monkeypatches compute_chunked to raise RuntimeError, then calls
-        weibull_probability_density wrapper to ensure it takes the direct path.
-        """
-        from cleo.assess import weibull_probability_density, _is_dask_backed
-        import cleo.assess
-
-        # Monkeypatch compute_chunked to raise if called
-        def raise_if_called(*args, **kwargs):
-            raise RuntimeError("compute_chunked should NOT be called for dask inputs")
-
-        monkeypatch.setattr(cleo.assess, "compute_chunked", raise_if_called)
-
-        # Create dask-backed inputs
-        weibull_a = xr.DataArray(
-            da.ones((8, 8), chunks=(4, 4)) * 8.0,
-            dims=("y", "x"),
-        )
-        weibull_k = xr.DataArray(
-            da.ones((8, 8), chunks=(4, 4)) * 2.0,
-            dims=("y", "x"),
-        )
-        u = np.arange(0.0, 25.5, 0.5)
-
-        # This should NOT raise because dask path bypasses compute_chunked
-        pdf = weibull_probability_density(u, weibull_k, weibull_a)
-
-        # Verify it's still dask-backed
-        assert _is_dask_backed(pdf), "Output should be dask-backed"
-
     def test_trapz_integration_stays_lazy(self):
         """Verify _trapz_over_wind_speed keeps output dask-backed."""
         from cleo.assess import _trapz_over_wind_speed, _is_dask_backed

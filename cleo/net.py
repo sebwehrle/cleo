@@ -39,21 +39,14 @@ def http_get(
 
     This is the central entry point for all HTTP GET requests in Cleo.
 
-    Args:
-        url: The URL to fetch.
-        headers: Optional HTTP headers dict.
-        timeout: Connection/read timeout as (connect, read) tuple or single int.
-        stream: If True, stream the response body (default True for large files).
-        proxies: Optional proxy configuration dict ({"http": ..., "https": ...}).
-        auth: Optional authentication object.
-
-    Returns:
-        requests.Response object. Caller is responsible for:
-        - Calling response.raise_for_status() if needed
-        - Closing the response when done (especially with stream=True)
-
-    Raises:
-        requests.RequestException: On network errors.
+    :param url: URL to fetch.
+    :param headers: Optional HTTP headers dictionary.
+    :param timeout: Connection/read timeout as ``(connect, read)`` tuple or single int.
+    :param stream: If ``True``, stream response body.
+    :param proxies: Optional proxy mapping (for example ``{"http": ..., "https": ...}``).
+    :param auth: Optional proxy authentication object.
+    :returns: ``requests.Response`` object.
+    :raises requests.RequestException: On network errors.
     """
     return requests.get(
         url,
@@ -81,23 +74,18 @@ def download_to_path(
     Downloads to a temporary file (.tmp suffix) then atomically renames
     to the final destination on success. On failure, cleans up partial files.
 
-    Args:
-        url: The URL to download from.
-        dest: Destination file path.
-        headers: Optional HTTP headers dict.
-        timeout: Connection/read timeout as (connect, read) tuple or single int.
-        proxies: Optional proxy configuration dict.
-        auth: Optional authentication object.
-        overwrite: If False and dest exists, return dest without downloading.
-        chunk_size: Size of chunks to read at a time (default 8192).
-
-    Returns:
-        Path to the downloaded file (same as dest).
-
-    Raises:
-        requests.RequestException: On network errors.
-        requests.HTTPError: On HTTP error responses (4xx, 5xx).
-        FileNotFoundError: If server returns 404.
+    :param url: URL to download from.
+    :param dest: Destination file path.
+    :param headers: Optional HTTP headers dictionary.
+    :param timeout: Connection/read timeout as ``(connect, read)`` tuple or single int.
+    :param proxies: Optional proxy configuration dictionary.
+    :param auth: Optional proxy authentication object.
+    :param overwrite: If ``False`` and destination exists, skip download.
+    :param chunk_size: Streaming chunk size in bytes.
+    :returns: Path to the downloaded file (same as ``dest``).
+    :raises requests.RequestException: On network errors.
+    :raises requests.HTTPError: On non-404 HTTP error responses.
+    :raises FileNotFoundError: If server returns HTTP 404.
     """
     dest = Path(dest)
 

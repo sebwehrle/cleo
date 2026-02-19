@@ -265,6 +265,15 @@ def get_cost_assumptions(self, attribute_name):
 
 
 def get_overnight_cost(self, turbine_id):
+    """Compute turbine overnight cost in EUR/kW-equivalent terms.
+
+    Reads turbine attributes from atlas metadata and delegates the calculation
+    to :func:`cleo.assess.turbine_overnight_cost`.
+
+    :param turbine_id: Turbine identifier.
+    :type turbine_id: str
+    :returns: Overnight cost value for the turbine.
+    """
     power = self.get_turbine_attribute(turbine_id, "capacity") / 1000
     hub_height = self.get_turbine_attribute(turbine_id, "hub_height")
     rotor_diameter = self.get_turbine_attribute(turbine_id, "rotor_diameter")
@@ -525,6 +534,21 @@ def load_gwa(self):
 
 
 def load_nuts(self, resolution="03M", year=2021, crs=4326):
+    """Download and extract NUTS boundary data for configured atlas country.
+
+    Downloads the GISCO collection ZIP when needed, extracts the requested
+    inner ZIP for the selected resolution/year/CRS, then safely extracts
+    shapefile contents into ``<atlas.path>/data/nuts``.
+
+    :param resolution: NUTS geometry resolution (``"01M"``, ``"03M"``,
+        ``"10M"``, ``"20M"``, ``"60M"``).
+    :param year: NUTS reference year.
+    :param crs: EPSG code for delivered shapefile.
+    :returns: ``None``
+    :raises ValueError: If ``resolution``, ``year``, or ``crs`` is invalid.
+    :raises FileNotFoundError: If the requested inner ZIP is not present
+        in the downloaded collection.
+    """
     RESOLUTION = ["01M", "03M", "10M", "20M", "60M"]
     YEAR = [2021, 2016, 2013, 2010, 2006, 2003]
     CRS = [3035, 4326, 3857]
@@ -575,6 +599,12 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
 
 
 def get_clc_codes(self, reverse=False):
+    """Load Corine Land Cover code mapping from resources.
+
+    :param reverse: If ``True``, return reverse mapping.
+    :returns: CLC codes mapping dictionary.
+    :raises FileNotFoundError: If ``clc_codes.yml`` is missing.
+    """
     path = Path(self.parent.path) / "resources" / "clc_codes.yml"
     if not path.is_file():
         raise FileNotFoundError(
@@ -588,9 +618,14 @@ def get_clc_codes(self, reverse=False):
 
 
 def add_corine_land_cover(self, clc_class=None):
-    """
-    loads Corine Land Cover
-    :return:
+    """Load Corine Land Cover classes and add them to landscape data.
+
+    When ``clc_class`` is provided, only that class (or classes) is processed.
+    Otherwise, all configured CLC classes are rasterized and added.
+
+    :param clc_class: Optional CLC class code or list of class codes.
+    :type clc_class: int | list[int] | None
+    :returns: ``None``
     """
     # TODO: add corine land cover codes to resources
     # TODO: download corine land cover data for Europe

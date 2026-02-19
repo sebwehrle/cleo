@@ -28,6 +28,9 @@ import pycountry as pct
 import re as _re
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
+from rasterio import features
+from rasterio.transform import Affine
+from shapely.geometry import mapping
 
 from cleo.store import atomic_dir
 
@@ -46,15 +49,9 @@ GWA_HEIGHTS = [10, 50, 100, 150, 200]
 def get_git_info(repo_root: Path) -> dict[str, Any]:
     """Get git repository information for versioning.
 
-    Args:
-        repo_root: Path to the repository root.
-
-    Returns:
-        Dictionary with keys:
-        - unify_version: git hash if available else f"unknown+{package_version}"
-        - code_dirty: bool (False if git unavailable)
-        - git_diff_hash: optional string (only if dirty; hash of `git diff` bytes)
-        - package_version: package version if available else "unknown"
+    :param repo_root: Path to the repository root.
+    :returns: Dictionary containing ``unify_version``, ``code_dirty``,
+        optional ``git_diff_hash``, and ``package_version``.
     """
     # Get package version
     try:
@@ -129,16 +126,13 @@ def hash_grid_id(
 ) -> str:
     """Compute a stable hash identifying a grid configuration.
 
-    Args:
-        crs_wkt: CRS in WKT format.
-        transform: Affine transform tuple.
-        shape: Grid shape (height, width).
-        y: Y coordinate array.
-        x: X coordinate array.
-        mask_policy: Mask handling policy string.
-
-    Returns:
-        SHA256 hash string (first 16 chars).
+    :param crs_wkt: CRS in WKT format.
+    :param transform: Affine transform tuple.
+    :param shape: Grid shape ``(height, width)``.
+    :param y: Y coordinate array.
+    :param x: X coordinate array.
+    :param mask_policy: Mask handling policy string.
+    :returns: First 16 characters of SHA256 hash.
     """
     h = hashlib.sha256()
 
@@ -161,12 +155,9 @@ def hash_grid_id(
 def hash_inputs_id(items: list[tuple[str, str]], method: str) -> str:
     """Compute a stable hash identifying input sources.
 
-    Args:
-        items: List of (name, fingerprint) pairs.
-        method: Fingerprinting method used.
-
-    Returns:
-        SHA256 hash string (first 16 chars).
+    :param items: List of ``(name, fingerprint)`` pairs.
+    :param method: Fingerprinting method used.
+    :returns: First 16 characters of SHA256 hash.
     """
     h = hashlib.sha256()
 
@@ -188,11 +179,8 @@ def hash_inputs_id(items: list[tuple[str, str]], method: str) -> str:
 def fingerprint_path_mtime_size(path: Path) -> str:
     """Compute fingerprint from path, mtime, and size.
 
-    Args:
-        path: Path to file.
-
-    Returns:
-        Fingerprint string.
+    :param path: Path to file.
+    :returns: Fingerprint string.
     """
     stat = path.stat()
     return f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}"
@@ -201,12 +189,11 @@ def fingerprint_path_mtime_size(path: Path) -> str:
 def fingerprint_file(path: Path, method: str = "path_mtime_size") -> str:
     """Compute fingerprint for a file using specified method.
 
-    Args:
-        path: Path to file.
-        method: Fingerprinting method (currently only "path_mtime_size" supported).
-
-    Returns:
-        Fingerprint string.
+    :param path: Path to file.
+    :param method: Fingerprinting method. Currently supports
+        ``"path_mtime_size"``.
+    :returns: Fingerprint string.
+    :raises ValueError: If ``method`` is unknown.
     """
     if method == "path_mtime_size":
         return fingerprint_path_mtime_size(path)
@@ -269,10 +256,9 @@ def init_manifest(store_path: Path) -> None:
 def write_manifest_sources(store_path: Path, sources: list[dict]) -> None:
     """Write/replace sources in the manifest.
 
-    Args:
-        store_path: Path to the zarr store root.
-        sources: List of source dicts with keys:
-            source_id, name, kind, path, params_json, fingerprint
+    :param store_path: Path to the Zarr store root.
+    :param sources: Source dictionaries with keys including ``source_id``,
+        ``name``, ``kind``, ``path``, ``params_json``, and ``fingerprint``.
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     manifest = _read_manifest(store_path)
@@ -291,10 +277,10 @@ def write_manifest_sources(store_path: Path, sources: list[dict]) -> None:
 def write_manifest_variables(store_path: Path, variables: list[dict]) -> None:
     """Write/replace variables in the manifest.
 
-    Args:
-        store_path: Path to the zarr store root.
-        variables: List of variable dicts with keys:
-            variable_name, source_id, resampling_method, nodata_policy, dtype
+    :param store_path: Path to the Zarr store root.
+    :param variables: Variable dictionaries with keys including
+        ``variable_name``, ``source_id``, ``resampling_method``,
+        ``nodata_policy``, and ``dtype``.
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     manifest = _read_manifest(store_path)
@@ -781,9 +767,8 @@ class Unifier:
         - Version and code state information
         - __manifest__ group with source/variable tables
 
-        Args:
-            store_path: Path to the zarr store.
-            chunk_policy: Chunking policy for the store.
+        :param store_path: Path to the Zarr store.
+        :param chunk_policy: Chunking policy for the store.
         """
         if store_path.exists():
             # Ensure manifest JSON exists in existing store
@@ -818,12 +803,10 @@ class Unifier:
         and cost assumptions. The store is marked as store_state="complete"
         only after successful atomic write.
 
-        Args:
-            atlas: Atlas instance with path, country, crs, and region attributes.
-
-        Raises:
-            FileNotFoundError: If any required GWA files are missing.
-            RuntimeError: If CRS fetch fails.
+        :param atlas: Atlas instance with path, country, CRS, and region attributes.
+        :returns: ``None``
+        :raises FileNotFoundError: If required GWA files are missing.
+        :raises RuntimeError: If CRS fetch/assignment fails.
         """
         store_path = Path(atlas.path) / "wind.zarr"
         iso3 = atlas.country
@@ -1142,12 +1125,10 @@ class Unifier:
         Creates a unified landscape dataset with valid_mask (derived from wind)
         and elevation data. The store is aligned exactly to the wind grid.
 
-        Args:
-            atlas: Atlas instance with path, country, crs, and region attributes.
-
-        Raises:
-            RuntimeError: If wind.zarr is not complete or missing required attrs.
-            FileNotFoundError: If no elevation source is found.
+        :param atlas: Atlas instance with path, country, CRS, and region attributes.
+        :returns: ``None``
+        :raises RuntimeError: If ``wind.zarr`` is incomplete or missing required attrs.
+        :raises FileNotFoundError: If no elevation source can be resolved.
         """
         store_path = Path(atlas.path) / "landscape.zarr"
         wind_path = Path(atlas.path) / "wind.zarr"
@@ -1384,25 +1365,17 @@ class Unifier:
 
         Does NOT materialize the variable - only records metadata about the source.
 
-        Args:
-            atlas: Atlas instance.
-            name: Variable name (will be source_id suffix).
-            source_path: Path to the source raster file.
-            kind: Source kind (v1 only supports "raster").
-            params: Optional parameters dict (e.g., {"categorical": True}).
-            if_exists: Behavior when source already exists:
-                - "error" (default): raise ValueError if source exists with different config
-                - "replace": update existing source registration with new config
-                - "noop": skip only if existing registration exactly matches
-                  (kind, path, params_json, fingerprint); otherwise raise ValueError
-
-        Returns:
-            True if registration was performed, False if skipped (exact match with noop).
-
-        Raises:
-            ValueError: If kind != "raster", if_exists invalid, or source exists
-                with different config when if_exists="error" or "noop".
-            RuntimeError: If landscape.zarr is not complete.
+        :param atlas: Atlas instance.
+        :param name: Variable name (used as source ID suffix).
+        :param source_path: Path to source raster file.
+        :param kind: Source kind (v1 supports only ``"raster"``).
+        :param params: Optional source parameters dictionary.
+        :param if_exists: Existing-source policy: ``"error"``, ``"replace"``, or
+            ``"noop"``.
+        :returns: ``True`` if registration changed manifest, ``False`` if skipped.
+        :raises ValueError: If ``kind``/``if_exists`` is invalid or source config
+            conflicts under current policy.
+        :raises RuntimeError: If ``landscape.zarr`` is not complete.
         """
         if kind != "raster":
             raise ValueError(f"Only kind='raster' supported in v1; got {kind!r}")
@@ -1522,24 +1495,15 @@ class Unifier:
         Reads the registered source, aligns to wind grid, enforces valid_mask
         semantics, and appends to landscape.zarr. Updates inputs_id deterministically.
 
-        Args:
-            atlas: Atlas instance.
-            variable_name: Name of the variable to materialize.
-            if_exists: Behavior when variable already exists in the store:
-                - "error" (default): raise ValueError if variable exists
-                - "replace": atomically replace existing variable data
-                - "noop": skip only if existing materialization exactly matches
-                  the current source registration; otherwise raise ValueError
-
-        Returns:
-            True if materialization was performed, False if skipped (exact match with noop).
-
-        Raises:
-            ValueError: If if_exists invalid, variable exists when if_exists="error",
-                or variable exists with different config when if_exists="noop".
-            KeyError: If source not registered in __manifest__/sources.
-            RuntimeError: If wind.zarr or landscape.zarr not complete, CRS missing,
-                or y/x coords do not exactly match wind reference after materialize.
+        :param atlas: Atlas instance.
+        :param variable_name: Name of variable to materialize.
+        :param if_exists: Existing-variable policy: ``"error"``, ``"replace"``,
+            or ``"noop"``.
+        :returns: ``True`` if materialization occurred, ``False`` if skipped.
+        :raises ValueError: If ``if_exists`` is invalid or conflicts with existing data.
+        :raises KeyError: If source is not registered in manifest.
+        :raises RuntimeError: If canonical stores are incomplete, CRS is missing,
+            or resulting grid does not match wind reference.
         """
         valid_if_exists = {"error", "replace", "noop"}
         if if_exists not in valid_if_exists:
@@ -1795,17 +1759,12 @@ class Unifier:
         - Returns lazy DataArray (no .compute()/.load()).
         - Does NOT write to wind.zarr; caller handles persistence/caching.
 
-        Args:
-            atlas: Atlas instance with canonical stores.
-            chunk_size: Unused (kept for signature compatibility).
-            force: Unused (kept for signature compatibility).
-
-        Returns:
-            DataArray "air_density_correction" on canonical grid.
-
-        Raises:
-            FileNotFoundError: If canonical stores do not exist.
-            RuntimeError: If stores are not complete or grids are misaligned.
+        :param atlas: Atlas instance with canonical stores.
+        :param chunk_size: Unused; kept for signature compatibility.
+        :param force: Unused; kept for signature compatibility.
+        :returns: ``air_density_correction`` DataArray on canonical grid.
+        :raises FileNotFoundError: If canonical stores do not exist.
+        :raises RuntimeError: If stores are incomplete or grids are misaligned.
         """
         from cleo.assess import compute_air_density_correction_core
 
@@ -1899,13 +1858,11 @@ class Unifier:
         - Stored at <ROOT>/regions/<region_id>/wind.zarr and .../landscape.zarr
         - Region stores have reduced y/x dims (true subsetting)
 
-        Args:
-            atlas: Atlas instance with completed base stores.
-            region_id: NUTS region ID (e.g., "AT13", "Niederösterreich").
-
-        Raises:
-            RuntimeError: If base stores are not complete.
-            FileNotFoundError: If region geometry cannot be found.
+        :param atlas: Atlas instance with completed base stores.
+        :param region_id: NUTS region ID (for example ``"AT13"``).
+        :returns: ``None``
+        :raises RuntimeError: If base stores are not complete.
+        :raises FileNotFoundError: If region geometry cannot be found.
         """
         atlas_root = Path(atlas.path)
         wind_base_path = atlas_root / "wind.zarr"
@@ -1988,6 +1945,32 @@ class Unifier:
         wind_region_ds = wind_base.isel(y=y_slice, x=x_slice)
         land_region_ds = land_base.isel(y=y_slice, x=x_slice)
 
+        geom = region_gdf.geometry.iloc[0]  # dissolved polygon/multipolygon
+
+        # x/y are cell centers; build an affine transform for that grid
+        x = wind_region_ds.coords["x"].values
+        y = wind_region_ds.coords["y"].values
+
+        dx = float(x[1] - x[0])
+        dy = float(y[1] - y[0])  # can be negative if y decreases
+
+        x0 = float(x[0]) - dx / 2.0
+        y0 = float(y[0]) - dy / 2.0
+        transform = Affine(dx, 0.0, x0, 0.0, dy, y0)
+
+        mask = features.geometry_mask(
+            geometries=[mapping(geom)],
+            out_shape=(wind_region_ds.sizes["y"], wind_region_ds.sizes["x"]),
+            transform=transform,
+            invert=True,  # True inside geometry
+            all_touched=False,  # set True if you want edge pixels included
+        )
+
+        mask_da = xr.DataArray(mask, coords={"y": wind_region_ds["y"], "x": wind_region_ds["x"]}, dims=("y", "x"))
+
+        wind_region_ds = wind_region_ds.where(mask_da)
+        land_region_ds = land_region_ds.where(mask_da)
+
         # 5) Compute region inputs_id deterministically
         region_inputs_items = [
             ("region_id", region_id),
@@ -2021,6 +2004,11 @@ class Unifier:
 
         # Remove store_path if temp, add region-specific path
         wind_region_ds = wind_region_ds.assign_attrs(wind_region_attrs)
+        chunk_y = self.chunk_policy.get("y", 1024)
+        chunk_x = self.chunk_policy.get("x", 1024)
+        wind_region_ds = wind_region_ds.chunk({"y": chunk_y, "x": chunk_x})
+        for var in wind_region_ds.variables.values():
+            var.encoding.pop("chunks", None)
 
         # Write wind region store (compute to materialize)
         if wind_region_path.exists():
@@ -2031,6 +2019,7 @@ class Unifier:
             wind_region_path,
             mode="w",
             consolidated=False,
+            align_chunks=True,
         )
 
         logger.info(
@@ -2047,6 +2036,9 @@ class Unifier:
         land_region_attrs["base_land_inputs_id"] = base_land_inputs_id
 
         land_region_ds = land_region_ds.assign_attrs(land_region_attrs)
+        land_region_ds = land_region_ds.chunk({"y": chunk_y, "x": chunk_x})
+        for var in land_region_ds.variables.values():
+            var.encoding.pop("chunks", None)
 
         if land_region_path.exists():
             import shutil
@@ -2056,6 +2048,7 @@ class Unifier:
             land_region_path,
             mode="w",
             consolidated=False,
+            align_chunks=True,
         )
 
         logger.info(

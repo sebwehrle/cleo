@@ -40,12 +40,10 @@ def replace_dir_atomic(tmp_dir: Path, dst_dir: Path) -> None:
 
     If any step fails, best-effort cleanup is attempted.
 
-    Args:
-        tmp_dir: The temporary directory containing new content.
-        dst_dir: The destination directory to replace.
-
-    Raises:
-        OSError: If the replacement fails.
+    :param tmp_dir: Temporary directory containing new content.
+    :param dst_dir: Destination directory to replace.
+    :returns: ``None``
+    :raises OSError: If replacement fails.
     """
     backup_dir: Path | None = None
 
@@ -95,14 +93,9 @@ def atomic_dir(dst_dir: Path) -> Generator[Path, None, None]:
             (tmp / "data.txt").write_text("content")
         # On exit, tmp is atomically moved to /path/to/store
 
-    Args:
-        dst_dir: The destination directory path.
-
-    Yields:
-        Path to the temporary directory to populate.
-
-    Raises:
-        OSError: If directory creation or replacement fails.
+    :param dst_dir: Destination directory path.
+    :yields: Temporary directory path to populate.
+    :raises OSError: If directory creation or replacement fails.
     """
     tmp_dir = _unique_tmp_sibling(dst_dir)
 

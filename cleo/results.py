@@ -32,16 +32,12 @@ class MetricResult:
         current region selection (or base store if no region), and surfaces it
         immediately as atlas.wind.data[metric_name].
 
-        Args:
-            overwrite: If True (default), overwrite existing variable.
-            allow_mode_change: If True, allow changing capacity_factors mode.
-
-        Returns:
-            The cached DataArray.
-
-        Raises:
-            ValueError: If variable exists and overwrite=False.
-            ValueError: If capacity_factors mode would change without allow_mode_change.
+        :param overwrite: If ``True`` (default), overwrite existing variable.
+        :param allow_mode_change: If ``True``, allow changing ``capacity_factors`` mode.
+        :returns: Cached DataArray.
+        :raises ValueError: If variable exists and ``overwrite=False``.
+        :raises ValueError: If ``capacity_factors`` mode would change without
+            ``allow_mode_change=True``.
         """
         atlas = self._domain._atlas
         # Route to active store (region or base) per contract B1

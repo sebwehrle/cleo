@@ -1,5 +1,6 @@
 # %% imports
 import json
+import numpy as np
 import xarray as xr
 from pathlib import Path
 from cleo.results import MetricResult
@@ -28,9 +29,9 @@ class WindDomain:
         Routes to region store when region is selected, otherwise base store.
         Opens the store once and caches it. Validates store_state == "complete".
 
-        Raises:
-            FileNotFoundError: If wind.zarr store does not exist.
-            RuntimeError: If store_state != "complete".
+        :returns: Active wind store dataset.
+        :raises FileNotFoundError: If wind store does not exist.
+        :raises RuntimeError: If ``store_state`` is not ``"complete"``.
         """
         if self._data is not None:
             return self._data
@@ -57,7 +58,7 @@ class WindDomain:
                 f"Wind store incomplete (store_state={state!r}); "
                 f"call atlas.materialize()."
             )
-
+        ds = self._apply_public_turbine_index(ds)
         self._data = ds
         return self._data
 
@@ -66,11 +67,8 @@ class WindDomain:
         """
         Turbine IDs available in the wind store.
 
-        Returns:
-            Tuple of turbine ID strings (from cleo_turbines_json attr).
-
-        Raises:
-            RuntimeError: If no turbines in wind store (call Atlas.materialize()).
+        :returns: Tuple of turbine IDs from ``cleo_turbines_json``.
+        :raises RuntimeError: If no turbines are present in wind store metadata.
         """
         ds = self.data
         if "turbine" not in ds.dims:
@@ -92,8 +90,7 @@ class WindDomain:
 
         Selection is persistent on the Atlas instance.
 
-        Returns:
-            Tuple of selected turbine IDs, or None for all turbines.
+        :returns: Tuple of selected turbine IDs, or ``None`` for all turbines.
         """
         return self._atlas._wind_selected_turbines
 
@@ -118,6 +115,54 @@ class WindDomain:
             )
         return tuple(turbines)
 
+    def _apply_public_turbine_index(self, ds: xr.Dataset) -> xr.Dataset:
+        """
+        Make turbine selection user-facing by name, while keeping internal ids.
+
+        After this:
+          - ds.sel(turbine="Enercon.E101.3050") works
+          - the old integer ids remain available as coord 'turbine_id'
+          - integer-based selection remains possible via .isel(turbine=0)
+        """
+        if "turbine" not in ds.dims:
+            return ds
+
+        meta_json = ds.attrs.get("cleo_turbines_json")
+        if not meta_json:
+            # Keep current behavior; cannot label turbine axis without mapping
+            return ds
+
+        turbines_meta = json.loads(meta_json)
+        names = [t["id"] for t in turbines_meta]
+        n = ds.sizes["turbine"]
+
+        if len(names) != n:
+            raise RuntimeError(
+                f"Wind store turbine mapping mismatch: "
+                f"len(cleo_turbines_json)={len(names)} != turbine dim size={n}. "
+                f"Re-run atlas.materialize()."
+            )
+        if len(set(names)) != len(names):
+            raise RuntimeError(
+                "Wind store has duplicate turbine ids in cleo_turbines_json; "
+                "cannot build a unique turbine index."
+            )
+
+        # Preserve current integer labels as turbine_id (best effort)
+        if "turbine" in ds.coords and ds.coords["turbine"].dims == ("turbine",):
+            turbine_id = ds.coords["turbine"].values
+        else:
+            # fallback: positional ids
+            turbine_id = np.arange(n, dtype="int64")
+
+        # Attach both: turbine_id (ints) and turbine (names as index labels)
+        # Overwrite turbine coordinate labels to names (in-memory only)
+        ds = ds.assign_coords(
+            turbine_id=("turbine", turbine_id),
+            turbine=("turbine", np.asarray(names, dtype=object)),
+        )
+        return ds
+
     def select(self, *, turbines: list[str] | tuple[str, ...]) -> "WindDomain":
         """
         Set persistent turbine selection on the Atlas.
@@ -125,17 +170,11 @@ class WindDomain:
         Selection persists even if atlas.wind creates new WindDomain objects.
         Use clear_selection() to remove selection.
 
-        Args:
-            turbines: Turbine IDs to select (non-empty list/tuple of strings).
-                     Each ID is stripped; empty/whitespace-only IDs rejected.
-                     Duplicates rejected; order preserved.
-
-        Returns:
-            self (for chaining).
-
-        Raises:
-            ValueError: If turbines is empty, contains non-strings, empty IDs,
-                       duplicates, or unknown turbine IDs.
+        :param turbines: Turbine IDs to select (non-empty list/tuple of strings).
+            IDs are stripped, empty IDs are rejected, duplicates are rejected,
+            and order is preserved.
+        :returns: ``self`` for chaining.
+        :raises ValueError: If IDs are empty/invalid/duplicate/unknown.
         """
         if not turbines:
             raise ValueError(
@@ -167,8 +206,7 @@ class WindDomain:
         """
         Clear persistent turbine selection.
 
-        Returns:
-            self (for chaining).
+        :returns: ``self`` for chaining.
         """
         self._atlas._wind_selected_turbines = None
         return self
@@ -179,11 +217,10 @@ class WindDomain:
 
         Returns a MetricResult wrapper supporting .data and .cache() pattern.
 
-        Args:
-            metric: Metric name (see supported metrics below).
-            **kwargs: Metric-specific parameters.
-                For metrics requiring turbines: if not provided, uses
-                persistent selection from atlas.wind.select().
+        :param metric: Metric name (see supported metrics below).
+        :param kwargs: Metric-specific parameters. For metrics requiring
+            turbines, omitted ``turbines`` uses persistent selection from
+            :meth:`select`.
 
         Supported metrics:
             - "mean_wind_speed": requires height (int).
@@ -200,11 +237,9 @@ class WindDomain:
             - "optimal_energy": same params as lcoe. Returns annual energy (GWh/a)
               of the minimum-LCOE turbine at each pixel.
 
-        Returns:
-            MetricResult with .data (DataArray) and .cache() method.
-
-        Raises:
-            ValueError: If metric unknown, required params missing, or turbine validation fails.
+        :returns: :class:`cleo.results.MetricResult` with ``.data`` and ``.cache()``.
+        :raises ValueError: If metric is unknown, params are missing, or turbine
+            validation fails.
         """
         if metric not in _WIND_METRICS:
             supported = sorted(_WIND_METRICS.keys())
@@ -266,12 +301,9 @@ class WindDomain:
         Thin wrapper around compute("mean_wind_speed", ...).
         Returns MetricResult supporting .data and .cache() pattern.
 
-        Args:
-            height: Height level (must exist in wind store).
-            **kwargs: Additional parameters passed to compute.
-
-        Returns:
-            MetricResult with .data (DataArray) and .cache() method.
+        :param height: Height level that must exist in the wind store.
+        :param kwargs: Additional parameters forwarded to :meth:`compute`.
+        :returns: :class:`cleo.results.MetricResult`.
         """
         return self.compute("mean_wind_speed", height=height, **kwargs)
 
@@ -290,15 +322,12 @@ class WindDomain:
         Thin wrapper around compute("capacity_factors", ...).
         Returns MetricResult supporting .data and .cache() pattern.
 
-        Args:
-            turbines: Turbine IDs (uses persistent selection if None).
-            height: Reference height for Weibull interpolation (default 100).
-            air_density: If True, apply air density correction.
-            loss_factor: Loss correction factor (default 1.0).
-            **kwargs: Additional parameters passed to compute.
-
-        Returns:
-            MetricResult with .data (DataArray) and .cache() method.
+        :param turbines: Turbine IDs; if ``None``, uses persistent selection.
+        :param height: Reference height for Weibull interpolation.
+        :param air_density: If ``True``, apply air-density correction.
+        :param loss_factor: Multiplicative loss factor.
+        :param kwargs: Additional parameters forwarded to :meth:`compute`.
+        :returns: :class:`cleo.results.MetricResult`.
         """
         # Only pass turbines if explicitly provided (let compute() inject from selection)
         compute_kwargs = {
@@ -340,24 +369,16 @@ class LandscapeDomain:
         Registers the source in __manifest__ and optionally materializes
         the variable into landscape.zarr without recomputing existing variables.
 
-        Args:
-            name: Variable name for the new layer.
-            source_path: Path to the source raster file.
-            kind: Source kind (v1 only supports "raster").
-            params: Optional parameters dict (e.g., {"categorical": True}).
-            materialize: If True, materialize the variable immediately.
-            if_exists: Behavior when variable already exists:
-                - "error" (default): raise ValueError if variable exists
-                - "replace": atomically replace existing variable data
-                - "noop": silently skip if variable exists
-
-        Raises:
-            ValueError: If kind != "raster", if_exists invalid, or variable exists
-                when if_exists="error".
-            RuntimeError: If canonical stores not ready.
-
-        Returns:
-            None
+        :param name: Variable name for the new layer.
+        :param source_path: Path to source raster file.
+        :param kind: Source kind (v1 supports only ``"raster"``).
+        :param params: Optional source parameters (for example ``{"categorical": True}``).
+        :param materialize: If ``True``, materialize immediately.
+        :param if_exists: Conflict policy: ``"error"``, ``"replace"``, or ``"noop"``.
+        :returns: ``None``
+        :raises ValueError: If ``kind``/``if_exists`` is invalid or variable exists
+            with ``if_exists="error"``.
+        :raises RuntimeError: If canonical stores are not ready.
         """
         from cleo.unify import Unifier
 
@@ -406,9 +427,9 @@ class LandscapeDomain:
         Opens the store once and caches it. Validates store_state == "complete"
         and presence of valid_mask variable.
 
-        Raises:
-            FileNotFoundError: If landscape.zarr store does not exist.
-            RuntimeError: If store_state != "complete" or valid_mask missing.
+        :returns: Active landscape store dataset.
+        :raises FileNotFoundError: If landscape store does not exist.
+        :raises RuntimeError: If store is incomplete or ``valid_mask`` is missing.
         """
         if self._data is not None:
             return self._data

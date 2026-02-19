@@ -436,11 +436,10 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.Geo
         - Atlas invariant is enforced: self.parent.crs must equal self.data.rio.crs.
         - clip geometry is reprojected to self.data.rio.crs before clipping.
 
-    Args:
-        clip_shape: GeoDataFrame containing clipping geometry.
-
-    Returns:
-        Tuple of (clipped Dataset, reprojected clip_shape GeoDataFrame).
+    :param clip_shape: GeoDataFrame containing clipping geometry.
+    :returns: Tuple ``(clipped_dataset, reprojected_clip_shape)``.
+    :raises ValueError: If data/CRS/geometry is invalid or empty.
+    :raises TypeError: If ``clip_shape`` is not a GeoDataFrame.
     """
     # Ensure data is loaded
     if self.data is None:

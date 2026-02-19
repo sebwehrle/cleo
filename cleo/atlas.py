@@ -12,6 +12,9 @@ import pycountry as pct
 from uuid import uuid4
 from pathlib import Path
 from typing import Sequence
+
+from xarray.util.generate_ops import inplace
+
 from cleo.domains import WindDomain, LandscapeDomain
 from cleo.unify import _read_vector_file
 from cleo.spatial import to_crs_if_needed
@@ -26,6 +29,39 @@ def _safe_basename(path) -> str:
         return Path(path).name if path else "?"
     except Exception:
         return "?"
+
+
+def _slugify_region_dir(name: str) -> str:
+    """Best-effort filesystem-safe region directory name (ASCII-ish)."""
+    import unicodedata as _ud
+    import re as _re
+
+    # Normalize + drop diacritics
+    norm = _ud.normalize("NFKD", name)
+    asciiish = "".join(ch for ch in norm if not _ud.combining(ch))
+    # Keep reasonably portable characters
+    slug = _re.sub(r"[^A-Za-z0-9._-]+", "_", asciiish).strip("_")
+    return slug or "region"
+
+
+def _region_dir_candidates(region_name: str) -> list[str]:
+    """Candidate directory names a region might have been stored under."""
+    cand: list[str] = []
+    s = region_name.strip()
+    if not s:
+        return cand
+    cand.append(s)
+    cand.append(re.sub(r"\s+", " ", s).casefold())
+    cand.append(_slugify_region_dir(s))
+    cand.append(_slugify_region_dir(re.sub(r"\s+", " ", s).casefold()))
+    # Unique, stable order
+    out: list[str] = []
+    seen = set()
+    for c in cand:
+        if c not in seen:
+            out.append(c)
+            seen.add(c)
+    return out
 
 
 class Atlas:
@@ -103,7 +139,7 @@ class Atlas:
 
         # Apply pending region from constructor (now that stores exist)
         if self._pending_region is not None:
-            self.select(region=self._pending_region)
+            self.select(region=self._pending_region, inplace=True)
             self._pending_region = None  # Clear after applying
 
         # If region selected, ensure region stores exist
@@ -185,7 +221,7 @@ class Atlas:
     @region.setter
     def region(self, value: str | None) -> None:
         """Set region selection (equivalent to select(region=value))."""
-        self.select(region=value)
+        self.select(region=value, inplace=True)
 
     def _normalize_region_name(self, name: str) -> str:
         """Normalize region name: strip, collapse whitespace, casefold."""
@@ -250,26 +286,49 @@ class Atlas:
             f"Available regions: {available}{suffix}"
         )
 
-    def select(self, *, region: str | None = None) -> "Atlas":
+    def _clone_for_selection(self) -> "Atlas":
         """
-        Set the active region selection (persistent).
+        Create a new Atlas instance that shares the same on-disk stores.
 
-        Per contract A4:
-        - Region selection is changeable at any time after construction.
-        - Region selection affects what computations operate on and where
-          derived outputs are written (region-scoped stores).
-        - Region selection does NOT rewrite base stores.
-
-        Args:
-            region: Human-readable region name (e.g. "Niederösterreich") or None to clear.
-                   String is stripped; empty/whitespace-only raises ValueError.
-
-        Returns:
-            self (for chaining).
-
-        Raises:
-            ValueError: If region is empty or whitespace-only string.
+        This is intentionally a fresh instance (no domain caches), so the returned
+        object behaves like a normal Atlas created from scratch.
         """
+
+        clone = Atlas(
+            self.path,
+            country = self.country,
+            crs = self.crs,
+            chunk_policy = dict(self.chunk_policy) if self.chunk_policy is not None else None,
+            region = None,
+            results_root = self.results_root,
+            fingerprint_method = self.fingerprint_method
+        )
+
+        clone._canonical_ready = bool(getattr(self, "_canonical_ready", False))
+        clone._turbines_configured = getattr(self, "_turbines_configured", None)
+        clone._wind_selected_turbines = getattr(self, "_wind_selected_turbines", None)
+
+        return clone
+
+    def select(self, *, region: str | None = None, inplace: bool = False) -> "Atlas | None":
+        """
+        Select a subregion within the atlas-country.
+
+        Semantics mirror pandas' inplace=:
+            - inplace=False (default): return a new constrained Atlas; leave self unchanged
+            - inplace=True: constrain self in-place and return None
+
+        :param region: Human-readable region name (for example ``"Niederösterreich"``),
+            or ``None`` to clear the selection. Strings are stripped.
+        :param inplace: If ``True``, mutate ``self`` and return ``None``.
+        :returns: A new constrained :class:`Atlas` when ``inplace=False``, else ``None``.
+        :raises ValueError: If ``region`` is empty, whitespace-only, wrong type, or unknown.
+        """
+        if not inplace:
+            clone = self._clone_for_selection()
+            clone.select(region=region, inplace=True)
+            return clone
+
         if region is not None:
             if not isinstance(region, str):
                 raise ValueError(f"region must be a string or None, got {type(region).__name__}")
@@ -278,7 +337,7 @@ class Atlas:
                 raise ValueError("region cannot be empty or whitespace-only")
 
             # Resolve region name to (name_norm, region_id)
-            name_norm, region_id = self._resolve_region_name(stripped)
+            _name_norm, region_id = self._resolve_region_name(stripped)
             self._region_name = stripped  # Store original (stripped) name
             self._region_id = region_id
         else:
@@ -291,7 +350,7 @@ class Atlas:
         if self._landscape_domain is not None:
             self._landscape_domain._data = None
 
-        return self
+        return None
 
     @property
     def _effective_region_id(self) -> str:
@@ -338,9 +397,32 @@ class Atlas:
 
         Creates region stores by subsetting from country stores if needed.
         Does nothing if no region selected.
+
+        Robustness:
+        - materialize_region is called with region_id (NUTS) first to match store layout
+        - if a legacy directory exists under a different name, it is migrated to region_id
+        - if a stale / partial region directory exists, it is removed and rebuilt
         """
         if self._region_name is None:
             return
+
+        expected_root = self.path / "regions" / self._region_id
+        expected_wind = expected_root / "wind.zarr"
+        expected_land = expected_root / "landscape.zarr"
+
+
+        if expected_wind.exists() and expected_land.exists():
+            return
+
+        # If we have a stale/partial directory, remove it so Unifier can't mis-detect completeness.
+
+        if expected_root.exists() and (not expected_wind.exists() or not expected_land.exists()):
+            logger.warning(
+                f"Region store directory exists but is incomplete: "
+                f"{expected_root} (wind={expected_wind.exists()}, landscape={expected_land.exists()}). "
+                "Removing and rebuilding."
+            )
+            shutil.rmtree(expected_root)
 
         from cleo.unify import Unifier
 
@@ -348,7 +430,43 @@ class Atlas:
             chunk_policy=self.chunk_policy,
             fingerprint_method=self.fingerprint_method,
         )
-        u.materialize_region(self, self._region_name)
+        # u.materialize_region(self, self._region_name)
+        # Prefer region_id to avoid name-vs-id directory mismatches.
+        err_id: Exception | None = None
+        try:
+            u.materialize_region(self, self._region_id)
+        except Exception as e:
+            err_id = e
+            # Backwards-compat: older Unifier versions may expect region name.
+            u.materialize_region(self, self._region_name)
+
+        # If Unifier wrote into a legacy directory name, migrate to the canonical region_id layout.
+        if not (expected_wind.exists() and expected_land.exists()):
+            for cand in _region_dir_candidates(self._region_name):
+                alt_root = self.path / "regions" / cand
+                if alt_root == expected_root:
+                    continue
+                alt_wind = alt_root / "wind.zarr"
+                alt_land = alt_root / "landscape.zarr"
+                if alt_wind.exists() and alt_land.exists():
+                    logger.warning(f"Found region stores under legacy directory {alt_root}; moving to {expected_root}.")
+                    if expected_root.exists():
+                        shutil.rmtree(expected_root)
+                    shutil.move(str(alt_root), str(expected_root))
+                    break
+
+        if not (expected_wind.exists() and expected_land.exists()):
+            details = {
+                "expected_root": str(expected_root),
+                "expected_wind_exists": expected_wind.exists(),
+                "expected_landscape_exists": expected_land.exists(),
+            }
+            cand_roots = [str(self.path / "regions" / c) for c in _region_dir_candidates(self._region_name)[:8]]
+            details["candidate_roots"] = cand_roots
+            msg = (f"Region stores are still missing after materialize_region(). Details: {details}")
+            if err_id is not None:
+                msg += f" (materialize_region(region_id) failed with: {type(err_id).__name__}: {err_id})"
+            raise RuntimeError(msg)
 
     def materialize_canonical(self) -> None:
         """Materialize both wind.zarr and landscape.zarr canonical stores.
@@ -383,15 +501,10 @@ class Atlas:
         Creates a Windows-safe, sortable run ID with optional prefix.
         Format: [prefix-]YYYYMMDDTHHMMSSz-<8-char-uuid>
 
-        Args:
-            prefix: Optional prefix to prepend to the run ID.
-                Must match pattern [A-Za-z0-9_-]+ (no colons or slashes).
-
-        Returns:
-            A unique run ID string.
-
-        Raises:
-            ValueError: If prefix contains invalid characters.
+        :param prefix: Optional prefix prepended to the run ID. Must match
+            ``[A-Za-z0-9_-]+`` (no colons or slashes).
+        :returns: A unique run ID string.
+        :raises ValueError: If ``prefix`` contains invalid characters.
         """
         from datetime import datetime, timezone
 
@@ -421,18 +534,13 @@ class Atlas:
         Creates an atomic, Windows-safe Zarr store
         under <results_root>/<run_id>/<metric_name>.zarr.
 
-        Args:
-            metric_name: Name of the metric/result being stored.
-            obj: xr.Dataset or xr.DataArray to store.
-            run_id: Unique identifier for this run/experiment.
-                If None, a new run_id is generated via new_run_id().
-            params: Optional parameters dict to store in attrs.
-
-        Returns:
-            Path to the created Zarr store.
-
-        Raises:
-            FileExistsError: If target store already exists (no silent overwrite).
+        :param metric_name: Name of the metric/result being stored.
+        :param obj: :class:`xarray.Dataset` or :class:`xarray.DataArray` to store.
+        :param run_id: Unique identifier for this run/experiment. If ``None``,
+            :meth:`new_run_id` is used.
+        :param params: Optional parameters dictionary to persist in store attrs.
+        :returns: Path to the created Zarr store.
+        :raises FileExistsError: If the target store already exists.
         """
         from cleo.store import atomic_dir
 
@@ -496,15 +604,10 @@ class Atlas:
 
         Opens the result store lazily.
 
-        Args:
-            run_id: Run identifier.
-            metric_name: Metric name.
-
-        Returns:
-            Lazy xr.Dataset (no compute performed).
-
-        Raises:
-            FileNotFoundError: If store doesn't exist.
+        :param run_id: Run identifier.
+        :param metric_name: Metric name.
+        :returns: Lazy :class:`xarray.Dataset` (no compute performed).
+        :raises FileNotFoundError: If the store does not exist.
         """
         store_path = Path(self.results_root) / run_id / f"{metric_name}.zarr"
 
@@ -528,18 +631,13 @@ class Atlas:
 
         Reads from the existing Zarr store and writes atomically to NetCDF.
 
-        Args:
-            run_id: Run identifier.
-            metric_name: Metric name.
-            out_path: Output path (must end with ".nc").
-            encoding: Optional xarray encoding dict for NetCDF.
-
-        Returns:
-            Path to the created NetCDF file.
-
-        Raises:
-            ValueError: If out_path doesn't end with ".nc".
-            FileNotFoundError: If source Zarr store doesn't exist.
+        :param run_id: Run identifier.
+        :param metric_name: Metric name.
+        :param out_path: Output path. Must end with ``.nc``.
+        :param encoding: Optional xarray encoding dictionary for NetCDF.
+        :returns: Path to the created NetCDF file.
+        :raises ValueError: If ``out_path`` does not end with ``.nc``.
+        :raises FileNotFoundError: If source Zarr store does not exist.
         """
         out_path = Path(out_path)
 
@@ -589,14 +687,11 @@ class Atlas:
 
         Deletes Zarr result directories matching the specified criteria.
 
-        Args:
-            run_id: If specified, only clean this run's results.
-            older_than: If specified, only clean results older than this date.
-                Accepts "YYYY-MM-DD" or ISO datetime format.
-            metric_name: If specified, only clean this metric's store.
-
-        Returns:
-            Number of stores deleted.
+        :param run_id: If provided, only clean this run's results.
+        :param older_than: If provided, only clean results older than this date.
+            Accepts ``YYYY-MM-DD`` or ISO datetime format.
+        :param metric_name: If provided, only clean this metric's store.
+        :returns: Number of stores deleted.
         """
         base = Path(self.results_root)
         count = 0
@@ -658,15 +753,30 @@ class Atlas:
 
     @property
     def path(self):
+        """Atlas workspace root path.
+
+        :returns: Current atlas root path.
+        :rtype: pathlib.Path
+        """
         return self._path
 
     @path.setter
     def path(self, value):
+        """Set atlas workspace root path.
+
+        :param value: Filesystem path for the atlas root.
+        :type value: str | pathlib.Path
+        """
         value = Path(value)
         self._path = value
 
     @property
     def crs(self):
+        """Atlas CRS string.
+
+        :returns: Canonical CRS string used for atlas operations.
+        :rtype: str
+        """
         return self._crs
 
     @crs.setter
@@ -699,12 +809,10 @@ class Atlas:
         Changing configured turbines changes the wind inputs_id, triggering
         rebuild on next materialize().
 
-        Args:
-            turbines: Non-empty sequence of turbine IDs (e.g., ["Enercon.E40.500"]).
-
-        Raises:
-            ValueError: If turbines is empty, contains non-strings, empty/whitespace-only
-                IDs, or duplicates.
+        :param turbines: Non-empty sequence of turbine IDs
+            (for example ``["Enercon.E40.500"]``).
+        :raises ValueError: If ``turbines`` is empty, contains non-strings,
+            contains empty/whitespace-only IDs, or contains duplicates.
 
         Example:
             >>> Atlas.configure_turbines(["Enercon.E40.500", "Vestas.V90.2000"])
@@ -732,9 +840,9 @@ class Atlas:
     def turbines_configured(self) -> tuple[str, ...] | None:
         """Turbines configured for wind materialization.
 
-        Returns:
-            Tuple of turbine IDs if configure_turbines() was called, else None.
-            None means default turbine selection logic applies during materialize().
+        :returns: Tuple of turbine IDs if :meth:`configure_turbines` was called,
+            otherwise ``None``. ``None`` means default turbine selection logic
+            is used during materialization.
         """
         return self._turbines_configured
 
@@ -760,6 +868,22 @@ class Atlas:
             logger.info(f"Created new index file: {index_file_path}")
 
     def get_nuts_region(self, region, merged_name=None, to_atlascrs=True):
+        """Return dissolved NUTS geometry for one or more regions.
+
+        Region inputs may be NUTS names (``NAME_LATN``) or NUTS IDs.
+
+        :param region: Region name/ID or a list of names/IDs.
+        :type region: str | list[str]
+        :param merged_name: Optional output value for ``NAME_LATN`` in the dissolved
+            GeoDataFrame.
+        :type merged_name: str | None
+        :param to_atlascrs: If ``True``, reproject output to ``self.crs``.
+        :returns: Single-row dissolved region geometry.
+        :rtype: geopandas.GeoDataFrame
+        :raises FileNotFoundError: If no NUTS shapefile is available.
+        :raises TypeError: If ``region`` is neither ``str`` nor ``list[str]``.
+        :raises ValueError: If any requested region is not valid for the atlas country.
+        """
         nuts_dir = self.path / "data" / "nuts"
         shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
         if not shp_files:
@@ -784,13 +908,32 @@ class Atlas:
         else:
             raise TypeError("Region must be a string or a list of strings.")
 
-        # Find invalid regions
-        invalid_regions = [r for r in region_list if r not in feasible_regions["NAME_LATN"].values]
-        if invalid_regions:
-            raise ValueError(f"{', '.join(invalid_regions)} are not valid regions in {self.country}.")
+        # Accept either human names (NAME_LATN) or NUTS IDs (typically NUTS_ID)
+        name_col = "NAME_LATN"
+        id_col = "NUTS_ID" if "NUTS_ID" in feasible_regions.columns else None
 
-        # Select and merge shapes
-        selected_shapes = feasible_regions[feasible_regions["NAME_LATN"].isin(region_list)]
+        valid_names = set(feasible_regions[name_col].astype(str).values)
+        valid_ids = set(feasible_regions[id_col].astype(str).values) if id_col else set()
+
+        invalid_regions = [
+            r for r in region_list
+            if (r not in valid_names) and (r not in valid_ids)
+        ]
+        if invalid_regions:
+            hint = "NAME_LATN" if id_col is None else "NAME_LATN or NUTS_ID"
+            raise ValueError(
+                f"{', '.join(invalid_regions)} are not valid regions in {self.country} "
+                f"(expected {hint})."
+            )
+
+        if id_col:
+            selected_shapes = feasible_regions[
+                feasible_regions[name_col].isin(region_list)
+                | feasible_regions[id_col].isin(region_list)
+                ]
+        else:
+            selected_shapes = feasible_regions[feasible_regions[name_col].isin(region_list)]
+
         merged_shape = selected_shapes.dissolve()
 
         # Set the name for the merged region
@@ -803,6 +946,12 @@ class Atlas:
         return merged_shape
 
     def get_nuts_country(self):
+        """Return country-level NUTS geometry for the configured atlas country.
+
+        :returns: NUTS level-0 geometry rows matching atlas country.
+        :rtype: geopandas.GeoDataFrame
+        :raises FileNotFoundError: If no NUTS shapefile is available.
+        """
         nuts_dir = self.path / "data" / "nuts"
         shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
         if not shp_files:

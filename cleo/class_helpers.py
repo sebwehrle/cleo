@@ -19,6 +19,9 @@ def deploy_resources(self):
     - On every Atlas init, ensure workdir has a copy of each packaged YAML.
     - Do NOT overwrite existing workdir YAMLs (workdir is the override surface).
     - Fail loudly if packaged resources cannot be found (broken install).
+
+    :returns: ``None``
+    :raises FileNotFoundError: If packaged resource files are missing.
     """
     import logging
     import shutil
@@ -65,6 +68,15 @@ def deploy_resources(self):
 
 
 def set_attributes(self):
+    """Set core metadata attributes and validate CRS consistency.
+
+    Assigns ``country`` and ``region`` attrs on ``self.data`` and validates that
+    ``self.data.rio.crs`` matches ``self.parent.crs``.
+
+    :returns: ``None``
+    :raises AttributeError: If ``self.data`` has no CRS.
+    :raises ValueError: If data CRS differs from parent atlas CRS.
+    """
     self.data.attrs['country'] = self.parent.country
     self.data.attrs['region'] = self.parent.region
     if self.data.rio.crs is None:
@@ -79,6 +91,10 @@ def setup_logging(self, console_level="INFO", file_level="DEBUG"):
     Configure cleo logger namespace without touching the root logger.
     All cleo modules should log via logging.getLogger(__name__) so messages
     propagate to the 'cleo' logger.
+
+    :param console_level: Console handler log level.
+    :param file_level: File handler log level.
+    :returns: ``None``
     """
     log_dir = self.path / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

@@ -18,7 +18,7 @@ import rasterio
 import xarray as xr
 from rasterio.crs import CRS
 
-from cleo.classes import Atlas
+from cleo import Atlas
 from cleo.unify import GWA_HEIGHTS
 
 

@@ -4,7 +4,6 @@ Oracles + contracts for Weibull PDF generation:
 - analytic mass oracle via CDF
 - finite-at-zero contract (u=0 -> 0 everywhere)
 - dask-laziness contract (when inputs are dask-backed)
-- template alignment contract for compute_weibull_pdf
 - vectorized formula spot-check on a small grid
 """
 
@@ -15,42 +14,8 @@ import pytest
 import xarray as xr
 
 from tests.helpers.oracles import assert_close, weibull_pdf as weibull_pdf_oracle, weibull_cdf as _weibull_cdf
-from tests.helpers.asserts import assert_same_coords
 
-from cleo.assess import compute_weibull_pdf, weibull_probability_density
-
-
-def _template_da(*, x: np.ndarray, y: np.ndarray, name: str = "template", crs: str = "EPSG:4326") -> xr.DataArray:
-    """
-    Minimal raster-like template for alignment tests.
-
-    We deliberately avoid depending on rasterio transforms here: the contract we care
-    about is x/y coordinate equality after alignment, not a specific affine transform.
-    """
-    da = xr.DataArray(
-        np.ones((y.size, x.size), dtype=np.float32),
-        dims=("y", "x"),
-        coords={"x": x.astype(float), "y": y.astype(float)},
-        name=name,
-    )
-    # rioxarray accessor is expected in this codebase for spatial ops
-    return da.rio.write_crs(crs)
-
-
-class _DummySelf:
-    """Minimal object for compute_weibull_pdf()."""
-
-    def __init__(self, ds: xr.Dataset, *, weibull_a: xr.DataArray, weibull_k: xr.DataArray):
-        self.data = ds
-        self._weibull_a = weibull_a
-        self._weibull_k = weibull_k
-
-    def load_weibull_parameters(self, height: int | float):  # noqa: ARG002
-        return self._weibull_a, self._weibull_k
-
-    def _set_var(self, name, da):
-        """Simple mock for _set_var - just assigns directly."""
-        self.data[name] = da
+from cleo.assess import weibull_probability_density
 
 
 def test_weibull_pdf_integration_mass_matches_cdf_oracle() -> None:
@@ -119,54 +84,6 @@ def test_weibull_probability_density_integration_still_matches_cdf_oracle() -> N
     oracle_mass = _weibull_cdf(float(u[-1]), k=k, a=a)
 
     assert abs(numerical_mass - oracle_mass) < 1e-3
-
-
-def test_compute_weibull_pdf_aligns_to_template_grid() -> None:
-    # Template grid
-    x_tpl = np.array([0.0, 1.0, 2.0, 3.0], dtype=float)
-    y_tpl = np.array([2.0, 1.0, 0.0], dtype=float)  # descending y is common in rasters
-    template = _template_da(x=x_tpl, y=y_tpl)
-
-    # Weibull parameters on a shifted grid to force alignment/resampling
-    x_shift = x_tpl + 0.1
-    y_shift = y_tpl + 0.1
-    weibull_a = _template_da(x=x_shift, y=y_shift, name="weibull_a")
-    weibull_a.values[:] = 8.0
-    weibull_k = _template_da(x=x_shift, y=y_shift, name="weibull_k")
-    weibull_k.values[:] = 2.0
-
-    wind_speeds = np.array([0.0, 5.0, 10.0], dtype=float)
-    ds = xr.Dataset(
-        data_vars={"template": template},
-        coords={"wind_speed": wind_speeds},
-        attrs={"country": "TST"},
-    ).rio.write_crs("EPSG:4326")
-
-    dummy = _DummySelf(ds, weibull_a=weibull_a, weibull_k=weibull_k)
-
-    compute_weibull_pdf(dummy)
-
-    assert "weibull_pdf" in dummy.data.data_vars
-    pdf = dummy.data["weibull_pdf"]
-
-    # Exact coordinate contract: output must share template x/y labels.
-    assert np.array_equal(pdf.coords["x"].values, x_tpl)
-    assert np.array_equal(pdf.coords["y"].values, y_tpl)
-    assert np.array_equal(pdf.coords["wind_speed"].values, wind_speeds)
-
-    # Also ensure the template coords are genuinely preserved (helper-level contract).
-    assert_same_coords(pdf.isel(wind_speed=0), template)
-
-    # Stripe metric: no column should be >=95% NaN over valid template cells.
-    valid_mask = ~np.isnan(template.values)
-    for ws_idx in range(wind_speeds.size):
-        sl = pdf.isel(wind_speed=ws_idx).values
-        for col in range(sl.shape[1]):
-            col_valid = valid_mask[:, col]
-            if int(col_valid.sum()) == 0:
-                continue
-            nan_frac = float(np.isnan(sl[:, col][col_valid]).sum()) / float(col_valid.sum())
-            assert nan_frac < 0.95, f"Stripe detected at wind_speed idx={ws_idx}, col={col} (nan_frac={nan_frac})"
 
 
 def test_weibull_probability_density_vectorized_oracle_small_grid() -> None:

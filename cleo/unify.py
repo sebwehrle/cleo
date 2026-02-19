@@ -12,12 +12,9 @@ import datetime
 import hashlib
 import json
 import logging
-import os
 import subprocess
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +24,8 @@ import rioxarray as rxr
 import xarray as xr
 import yaml
 import zarr
+import pycountry as pct
+import re as _re
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 
@@ -1096,6 +1095,47 @@ class Unifier:
             write_manifest_sources(tmp_path, sources)
             write_manifest_variables(tmp_path, variables)
 
+    def _build_region_name_index(self, atlas) -> dict[str, str]:
+        """Build region-name to region-id mapping from NUTS shapefile.
+
+        Loads NUTS shapefile and extracts NAME_LATN -> NUTS_ID mapping
+        for regions in the atlas country.
+
+        Args:
+            atlas: Atlas instance with path and country.
+
+        Returns:
+            Dict mapping normalized region names to NUTS IDs.
+            Empty dict if NUTS shapefile not available.
+        """
+        nuts_dir = Path(atlas.path) / "data" / "nuts"
+        shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
+        if not shp_files:
+            return {}
+
+        try:
+            nuts = _read_vector_file(shp_files[0])
+            alpha_2 = pct.countries.get(alpha_3=atlas.country).alpha_2
+            country_regions = nuts[nuts["CNTR_CODE"] == alpha_2]
+
+            # Normalize function: strip, collapse whitespace, casefold
+            def _normalize(name: str) -> str:
+                return _re.sub(r"\s+", " ", str(name).strip()).casefold()
+
+            # Build index: normalized NAME_LATN -> NUTS_ID
+            index: dict[str, str] = {}
+            for _, row in country_regions.iterrows():
+                name = row.get("NAME_LATN")
+                nuts_id = row.get("NUTS_ID")
+                if name and nuts_id:
+                    name_norm = _normalize(name)
+                    index[name_norm] = str(nuts_id)
+
+            return index
+        except Exception:
+            # If anything fails, return empty index (resolver will fall back)
+            return {}
+
     def materialize_landscape(self, atlas) -> None:
         """Materialize landscape.zarr as a complete canonical store.
 
@@ -1245,6 +1285,11 @@ class Unifier:
             )
             if git.get("git_diff_hash"):
                 g.attrs["git_diff_hash"] = git["git_diff_hash"]
+
+            # Build and store region-name index (maps normalized names to NUTS IDs)
+            region_index = self._build_region_name_index(atlas)
+            if region_index:
+                g.attrs["cleo_region_name_to_id_json"] = _stable_json(region_index)
 
             init_manifest(tmp)
 

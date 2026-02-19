@@ -21,7 +21,7 @@ import xarray as xr
 from rasterio.crs import CRS
 
 import cleo
-from cleo.classes import WindDomain
+from cleo.domains import WindDomain
 from cleo.unify import Unifier, GWA_HEIGHTS
 
 

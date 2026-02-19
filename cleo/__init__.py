@@ -1,1 +1,1 @@
-from cleo.classes import Atlas
+from cleo.atlas import Atlas

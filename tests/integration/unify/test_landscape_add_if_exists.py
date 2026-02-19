@@ -22,7 +22,7 @@ import zarr
 from rasterio.crs import CRS
 
 import cleo
-from cleo.classes import LandscapeDomain
+from cleo.domains import LandscapeDomain
 import json
 
 from cleo.unify import Unifier, GWA_HEIGHTS

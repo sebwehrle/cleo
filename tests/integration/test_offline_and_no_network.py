@@ -5,7 +5,7 @@ Merged test file (imports preserved per chunk).
 import logging
 import pytest
 from pathlib import Path
-from cleo.classes import Atlas
+from cleo.atlas import Atlas
 
 # --- merged from tests/_staging/test_atlas_smoke_no_network.py ---
 

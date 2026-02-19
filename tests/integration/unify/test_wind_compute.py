@@ -21,7 +21,7 @@ import xarray as xr
 from rasterio.crs import CRS
 
 import cleo
-from cleo.classes import WindDomain
+from cleo.domains import WindDomain
 from cleo.unify import Unifier, GWA_HEIGHTS
 
 
@@ -347,3 +347,98 @@ class TestCapacityFactorsEnforcement:
         assert "turbine" in da.dims
         assert da.sizes["turbine"] == 1
         assert str(da.coords["turbine"].values[0]) == turbine_names[0]
+
+
+class TestMetricResultCacheOverwrite:
+    """Tests for MetricResult.cache() overwrite behavior."""
+
+    def test_cache_overwrite_true_replaces_variable(self, tmp_path: Path) -> None:
+        """cache(overwrite=True) replaces existing variable completely."""
+        turbine_names = ["Enercon.E40.500"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        # Materialize stores
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        # Select turbine
+        atlas.wind.select(turbines=turbine_names)
+
+        # Cache capacity_factors first time (air_density=False -> cleo:air_density=0)
+        atlas.wind.compute("capacity_factors", height=100, air_density=False).cache()
+
+        # Check first cache
+        assert "capacity_factors" in atlas.wind.data
+        first_air_density = atlas.wind.data["capacity_factors"].attrs.get("cleo:air_density")
+        assert first_air_density == 0, "First cache should have air_density=0"
+
+        # Cache again with air_density=True - should overwrite
+        atlas.wind.compute(
+            "capacity_factors", height=100, air_density=True
+        ).cache(overwrite=True)
+
+        # Verify overwrite - attrs should be updated
+        assert "capacity_factors" in atlas.wind.data
+        second_air_density = atlas.wind.data["capacity_factors"].attrs.get("cleo:air_density")
+        assert second_air_density == 1, "cache(overwrite=True) must update attrs (air_density=1)"
+
+    def test_cache_overwrite_true_with_mode_change(self, tmp_path: Path) -> None:
+        """cache(overwrite=True, allow_mode_change=True) allows changing cf mode."""
+        turbine_names = ["Enercon.E40.500"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        # Materialize stores
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        # Select turbine
+        atlas.wind.select(turbines=turbine_names)
+
+        # Cache capacity_factors with mode="hub"
+        atlas.wind.compute("capacity_factors", height=100, mode="hub").cache()
+
+        # Verify first mode
+        assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_mode") == "hub"
+
+        # Cache with mode="rews" should fail without allow_mode_change
+        with pytest.raises(ValueError, match="allow_mode_change"):
+            atlas.wind.compute("capacity_factors", height=100, mode="rews").cache()
+
+        # Cache with mode="rews" and allow_mode_change=True should succeed
+        atlas.wind.compute(
+            "capacity_factors", height=100, mode="rews"
+        ).cache(overwrite=True, allow_mode_change=True)
+
+        # Verify mode changed
+        assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_mode") == "rews"
+
+    def test_cache_overwrite_false_raises_if_exists(self, tmp_path: Path) -> None:
+        """cache(overwrite=False) raises if variable already exists."""
+        turbine_names = ["Enercon.E40.500"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        # Materialize stores
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        # Select turbine
+        atlas.wind.select(turbines=turbine_names)
+
+        # Cache first time
+        atlas.wind.compute("capacity_factors", height=100).cache()
+
+        # Second cache with overwrite=False should raise
+        with pytest.raises(ValueError, match="already exists"):
+            atlas.wind.compute("capacity_factors", height=100).cache(overwrite=False)

@@ -1,7 +1,6 @@
 """test_dask_level1.py
 
 Minimal regression tests for Level-1 dask support:
-- Verify compute_chunked is bypassed when inputs are dask-backed
 - Verify outputs remain dask-lazy (not eagerly computed)
 """
 
@@ -16,14 +15,14 @@ import pytest
 import xarray as xr
 import dask.array as da
 
+from cleo.spatial import _is_dask_backed
+
 
 class TestDaskLevel1:
     """Tests for dask-backed array handling in cleo.assess."""
 
     def test_is_dask_backed_detects_dask_arrays(self):
         """Verify _is_dask_backed correctly identifies dask-backed arrays."""
-        from cleo.assess import _is_dask_backed
-
         # Create numpy-backed DataArray
         np_arr = xr.DataArray(np.ones((4, 4)), dims=("y", "x"))
         assert not _is_dask_backed(np_arr), "numpy array should not be detected as dask"
@@ -34,7 +33,7 @@ class TestDaskLevel1:
 
     def test_weibull_probability_density_stays_lazy(self):
         """Verify weibull_probability_density returns dask-backed output for dask inputs."""
-        from cleo.assess import weibull_probability_density, _is_dask_backed
+        from cleo.assess import weibull_probability_density
 
         # Create dask-backed Weibull parameters
         weibull_a = xr.DataArray(
@@ -57,43 +56,9 @@ class TestDaskLevel1:
         assert "wind_speed" in pdf.dims, "Output should have wind_speed dim"
         assert pdf.dims == ("wind_speed", "y", "x"), f"Unexpected dims: {pdf.dims}"
 
-    def test_capacity_factor_stays_lazy(self):
-        """Verify capacity_factor returns dask-backed output for dask inputs."""
-        from cleo.assess import capacity_factor, _is_dask_backed
-
-        # Create dask-backed inputs
-        u = np.arange(0.0, 25.5, 0.5)
-        weibull_pdf = xr.DataArray(
-            da.ones((len(u), 8, 8), chunks=(len(u), 4, 4)) * 0.01,
-            dims=("wind_speed", "y", "x"),
-            coords={"wind_speed": u},
-            name="weibull_pdf",
-        )
-        wind_shear = xr.DataArray(
-            da.zeros((8, 8), chunks=(4, 4)),
-            dims=("y", "x"),
-            name="wind_shear",
-        )
-        p_power_curve = np.where(u >= 4.0, np.minimum((u - 4) / 10, 1.0), 0.0)
-
-        # Call function
-        cf = capacity_factor(
-            weibull_pdf=weibull_pdf,
-            wind_shear=wind_shear,
-            u_power_curve=u,
-            p_power_curve=p_power_curve,
-            h_turbine=100,
-            h_reference=100,
-            correction_factor=1.0,
-        )
-
-        # Verify output is dask-backed (lazy)
-        assert _is_dask_backed(cf), "Output should remain dask-backed"
-        assert cf.dims == ("y", "x"), f"Unexpected dims: {cf.dims}"
-
     def test_trapz_integration_stays_lazy(self):
         """Verify _trapz_over_wind_speed keeps output dask-backed."""
-        from cleo.assess import _trapz_over_wind_speed, _is_dask_backed
+        from cleo.assess import _trapz_over_wind_speed
 
         u = np.arange(0.0, 10.5, 0.5)
         u_da = xr.DataArray(u, dims=("wind_speed",), coords={"wind_speed": u})

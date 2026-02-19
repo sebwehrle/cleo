@@ -4,7 +4,7 @@ Merged test file (imports preserved per chunk).
 
 import pytest
 from pathlib import Path
-from cleo.classes import Atlas
+from cleo.atlas import Atlas
 
 # --- merged from tests/_staging/test_get_nuts_missing_shapefile_message.py ---
 

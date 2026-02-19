@@ -15,12 +15,17 @@ def test_import_cleo() -> None:
 def test_import_key_modules() -> None:
     for mod in [
         "cleo.assess",
-        "cleo.chunk",
-        "cleo.classes",
+        "cleo.atlas",
         "cleo.class_helpers",
         "cleo.copdem",
+        "cleo.domains",
         "cleo.loaders",
+        "cleo.net",
+        "cleo.results",
         "cleo.spatial",
+        "cleo.store",
+        "cleo.unify",
         "cleo.utils",
+        "cleo.wind_metrics",
     ]:
         importlib.import_module(mod)

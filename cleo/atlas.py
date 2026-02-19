@@ -16,7 +16,7 @@ from typing import Sequence
 from xarray.util.generate_ops import inplace
 
 from cleo.domains import WindDomain, LandscapeDomain
-from cleo.unify import _read_vector_file
+from cleo.unify import _read_vector_file, _read_nuts_region_catalog
 from cleo.spatial import to_crs_if_needed
 from cleo.class_helpers import deploy_resources, setup_logging
 
@@ -64,7 +64,24 @@ def _region_dir_candidates(region_name: str) -> list[str]:
     return out
 
 
+class NutsRegionName(str):
+    """String-like NUTS region name carrying its NUTS level metadata."""
+
+    def __new__(cls, value: str, level: int):
+        obj = str.__new__(cls, value)
+        obj._nuts_level = int(level)
+        return obj
+
+    @property
+    def level(self) -> int:
+        """Return NUTS level metadata attached to this region name."""
+        return int(self._nuts_level)
+
+
 class Atlas:
+    DEFAULT_NUTS_LEVEL = 2
+    _VALID_NUTS_LEVELS = (1, 2, 3)
+
     def __init__(
         self,
         path,
@@ -108,6 +125,7 @@ class Atlas:
 
         # Canonical store readiness flag
         self._canonical_ready = False
+        self._nuts_region_catalog_cache: tuple[dict, ...] | None = None
 
     def __repr__(self) -> str:
         """Audit-safe repr: no IO, no mutation, bounded length."""
@@ -228,62 +246,177 @@ class Atlas:
         import re as _re
         return _re.sub(r"\s+", " ", name.strip()).casefold()
 
-    def _resolve_region_name(self, name: str) -> tuple[str, str]:
+    def _validate_nuts_level(self, level: int) -> int:
+        """Validate and normalize NUTS level."""
+        try:
+            level_i = int(level)
+        except Exception as e:
+            raise ValueError(f"NUTS level must be an integer, got {level!r}.") from e
+        if level_i not in self._VALID_NUTS_LEVELS:
+            raise ValueError(
+                f"Unsupported NUTS level {level_i!r}; expected one of {self._VALID_NUTS_LEVELS}."
+            )
+        return level_i
+
+    def _load_nuts_region_catalog(self) -> list[dict]:
+        """Load NUTS region catalog from store attrs (fast) or raw NUTS files (fallback)."""
+        if self._nuts_region_catalog_cache is not None:
+            return [dict(row) for row in self._nuts_region_catalog_cache]
+
+        # Fast path: read precomputed catalog from landscape attrs when available.
+        if self.landscape_store_path.exists():
+            try:
+                g = zarr.open_group(self.landscape_store_path, mode="r")
+                catalog_json = g.attrs.get("cleo_region_catalog_json")
+                if catalog_json:
+                    rows = json.loads(catalog_json)
+                    if isinstance(rows, list):
+                        catalog = []
+                        for row in rows:
+                            if not isinstance(row, dict):
+                                continue
+                            try:
+                                level = int(row.get("level"))
+                            except Exception:
+                                continue
+                            if level not in self._VALID_NUTS_LEVELS:
+                                continue
+                            name = str(row.get("name", "")).strip()
+                            name_norm = str(row.get("name_norm", "")).strip()
+                            nuts_id = str(row.get("nuts_id", "")).strip()
+                            if name and name_norm and nuts_id:
+                                catalog.append(
+                                    {
+                                        "name": name,
+                                        "name_norm": name_norm,
+                                        "nuts_id": nuts_id,
+                                        "level": level,
+                                    }
+                                )
+                        if catalog:
+                            self._nuts_region_catalog_cache = tuple(catalog)
+                            return [dict(row) for row in catalog]
+                # Backward-compat path for tests/older stores that only provide
+                # legacy normalized-name -> NUTS-ID mapping (default level 2).
+                legacy_index_json = g.attrs.get("cleo_region_name_to_id_json")
+                if legacy_index_json:
+                    try:
+                        legacy_index = json.loads(legacy_index_json)
+                    except Exception:
+                        legacy_index = None
+                    if isinstance(legacy_index, dict) and legacy_index:
+                        catalog = []
+                        for name_norm, nuts_id in legacy_index.items():
+                            name_norm_s = str(name_norm).strip()
+                            nuts_id_s = str(nuts_id).strip()
+                            if not name_norm_s or not nuts_id_s:
+                                continue
+                            catalog.append(
+                                {
+                                    "name": name_norm_s,
+                                    "name_norm": name_norm_s,
+                                    "nuts_id": nuts_id_s,
+                                    "level": 2,
+                                }
+                            )
+                        if catalog:
+                            self._nuts_region_catalog_cache = tuple(catalog)
+                            return [dict(row) for row in catalog]
+            except Exception:
+                pass
+
+        # Fallback: raw I/O delegated to unify helper.
+        catalog = _read_nuts_region_catalog(self)
+        if not catalog:
+            raise ValueError(
+                "No NUTS regions available for this atlas. "
+                "Ensure NUTS data is present (e.g. run cleo.loaders.load_nuts)."
+            )
+        self._nuts_region_catalog_cache = tuple(dict(row) for row in catalog)
+        return [dict(row) for row in catalog]
+
+    @property
+    def nuts_regions(self) -> tuple[NutsRegionName, ...]:
+        """List selectable region names for default NUTS level (level 2)."""
+        return self.nuts_regions_level(self.DEFAULT_NUTS_LEVEL)
+
+    def nuts_regions_level(self, level: int) -> tuple[NutsRegionName, ...]:
+        """List selectable region names for a specific NUTS level.
+
+        :param level: NUTS level (1, 2, or 3).
+        :returns: Tuple of region names tagged with level metadata.
+        :raises ValueError: If level is invalid or no regions are available.
         """
-        Resolve region name to (normalized_name, region_id).
+        level_i = self._validate_nuts_level(level)
+        catalog = self._load_nuts_region_catalog()
+        rows = [row for row in catalog if int(row["level"]) == level_i]
+        if not rows:
+            raise ValueError(
+                f"No NUTS level {level_i} regions found for atlas country {self.country!r}."
+            )
 
-        Uses the region-name index stored in landscape.zarr attrs (NO heavy I/O).
-        Raises if index is missing - must call materialize() first.
+        # Deterministic and unique by normalized name.
+        seen = set()
+        out: list[NutsRegionName] = []
+        for row in sorted(rows, key=lambda r: (str(r["name"]).casefold(), str(r["nuts_id"]))):
+            key = str(row["name_norm"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(NutsRegionName(str(row["name"]), level_i))
+        return tuple(out)
 
-        Args:
-            name: Human-readable region name (e.g. "Niederösterreich").
-
-        Returns:
-            Tuple of (normalized_name, region_id) where region_id is NUTS ID.
-
-        Raises:
-            ValueError: If region index missing or region name not found.
+    def _resolve_region_name(self, name: str, *, region_level: int | None = None) -> tuple[str, str, int]:
+        """
+        Resolve region name to ``(normalized_name, region_id, level)``.
         """
         name_norm = self._normalize_region_name(name)
+        catalog = self._load_nuts_region_catalog()
+        matches = [row for row in catalog if row["name_norm"] == name_norm]
 
-        # Load region-name index from landscape.zarr base store attrs
-        if not self.landscape_store_path.exists():
+        if region_level is not None:
+            level_i = self._validate_nuts_level(region_level)
+            matches_level = [row for row in matches if int(row["level"]) == level_i]
+            if len(matches_level) == 1:
+                row = matches_level[0]
+                return name_norm, str(row["nuts_id"]), level_i
+            if len(matches_level) > 1:
+                raise ValueError(
+                    f"Region '{name}' is ambiguous within NUTS level {level_i}; "
+                    f"matches IDs: {[str(r['nuts_id']) for r in matches_level]}."
+                )
             raise ValueError(
-                "Region index missing. Run atlas.materialize() to build region index."
+                f"Region '{name}' not found in NUTS level {level_i} for country {self.country!r}."
             )
 
-        try:
-            g = zarr.open_group(self.landscape_store_path, mode="r")
-            index_json = g.attrs.get("cleo_region_name_to_id_json")
-        except Exception as e:
+        # Default resolution: prefer NUTS-2.
+        default_level = self.DEFAULT_NUTS_LEVEL
+        matches_default = [row for row in matches if int(row["level"]) == default_level]
+        if len(matches_default) == 1:
+            row = matches_default[0]
+            return name_norm, str(row["nuts_id"]), default_level
+        if len(matches_default) > 1:
             raise ValueError(
-                f"Region index unreadable. Run atlas.materialize() to build region index. "
-                f"Error: {e}"
+                f"Region '{name}' is ambiguous at default NUTS level {default_level}; "
+                f"pass region_level explicitly."
             )
 
-        if not index_json:
+        # Fallback to unique match across all levels when not found in default level.
+        if len(matches) == 1:
+            row = matches[0]
+            return name_norm, str(row["nuts_id"]), int(row["level"])
+        if len(matches) > 1:
+            levels = sorted({int(r["level"]) for r in matches})
             raise ValueError(
-                "Region index missing from landscape store. "
-                "Run atlas.materialize() to build region index."
+                f"Region '{name}' is ambiguous across NUTS levels {levels}; "
+                f"pass region_level explicitly."
             )
 
-        try:
-            index = json.loads(index_json)
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Region index corrupted (invalid JSON). "
-                f"Re-run atlas.materialize() to rebuild. Error: {e}"
-            )
-
-        if name_norm in index:
-            return name_norm, index[name_norm]
-
-        # Provide helpful error with available regions (capped at 20)
-        available = list(index.keys())[:20]
-        suffix = "..." if len(index) > 20 else ""
+        available = [str(r) for r in self.nuts_regions[:20]]
+        suffix = "..." if len(self.nuts_regions) > 20 else ""
         raise ValueError(
-            f"Region '{name}' (normalized: '{name_norm}') not found in region index. "
-            f"Available regions: {available}{suffix}"
+            f"Region '{name}' not found at default NUTS level {default_level}. "
+            f"Available level-{default_level} regions: {available}{suffix}"
         )
 
     def _clone_for_selection(self) -> "Atlas":
@@ -310,7 +443,13 @@ class Atlas:
 
         return clone
 
-    def select(self, *, region: str | None = None, inplace: bool = False) -> "Atlas | None":
+    def select(
+        self,
+        *,
+        region: str | NutsRegionName | None = None,
+        region_level: int | None = None,
+        inplace: bool = False,
+    ) -> "Atlas | None":
         """
         Select a subregion within the atlas-country.
 
@@ -319,25 +458,43 @@ class Atlas:
             - inplace=True: constrain self in-place and return None
 
         :param region: Human-readable region name (for example ``"Niederösterreich"``),
-            or ``None`` to clear the selection. Strings are stripped.
+            a ``NutsRegionName`` value, or ``None`` to clear selection.
+        :param region_level: Optional NUTS level override for resolving plain strings.
         :param inplace: If ``True``, mutate ``self`` and return ``None``.
         :returns: A new constrained :class:`Atlas` when ``inplace=False``, else ``None``.
         :raises ValueError: If ``region`` is empty, whitespace-only, wrong type, or unknown.
         """
         if not inplace:
             clone = self._clone_for_selection()
-            clone.select(region=region, inplace=True)
+            clone.select(region=region, region_level=region_level, inplace=True)
             return clone
 
         if region is not None:
-            if not isinstance(region, str):
+            inferred_level: int | None = None
+            if isinstance(region, NutsRegionName):
+                inferred_level = int(region.level)
+            elif not isinstance(region, str):
                 raise ValueError(f"region must be a string or None, got {type(region).__name__}")
+
+            if region_level is not None:
+                region_level = self._validate_nuts_level(region_level)
+            if inferred_level is not None and region_level is None:
+                region_level = inferred_level
+            elif inferred_level is not None and region_level != inferred_level:
+                raise ValueError(
+                    f"Conflicting NUTS levels for region {region!r}: "
+                    f"region carries level={inferred_level}, but region_level={region_level}."
+                )
+
             stripped = region.strip()
             if not stripped:
                 raise ValueError("region cannot be empty or whitespace-only")
 
             # Resolve region name to (name_norm, region_id)
-            _name_norm, region_id = self._resolve_region_name(stripped)
+            _name_norm, region_id, _resolved_level = self._resolve_region_name(
+                stripped,
+                region_level=region_level,
+            )
             self._region_name = stripped  # Store original (stripped) name
             self._region_id = region_id
         else:

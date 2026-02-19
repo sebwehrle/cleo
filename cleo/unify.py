@@ -1091,33 +1091,17 @@ class Unifier:
             Dict mapping normalized region names to NUTS IDs.
             Empty dict if NUTS shapefile not available.
         """
-        nuts_dir = Path(atlas.path) / "data" / "nuts"
-        shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
-        if not shp_files:
-            return {}
-
         try:
-            nuts = _read_vector_file(shp_files[0])
-            alpha_2 = pct.countries.get(alpha_3=atlas.country).alpha_2
-            country_regions = nuts[nuts["CNTR_CODE"] == alpha_2]
-
-            # Normalize function: strip, collapse whitespace, casefold
-            def _normalize(name: str) -> str:
-                return _re.sub(r"\s+", " ", str(name).strip()).casefold()
-
-            # Build index: normalized NAME_LATN -> NUTS_ID
-            index: dict[str, str] = {}
-            for _, row in country_regions.iterrows():
-                name = row.get("NAME_LATN")
-                nuts_id = row.get("NUTS_ID")
-                if name and nuts_id:
-                    name_norm = _normalize(name)
-                    index[name_norm] = str(nuts_id)
-
-            return index
+            rows = _read_nuts_region_catalog(atlas)
         except Exception:
-            # If anything fails, return empty index (resolver will fall back)
             return {}
+
+        # Legacy index is default NUTS-2 only to keep name resolution deterministic.
+        index: dict[str, str] = {}
+        for row in rows:
+            if int(row["level"]) == 2:
+                index[str(row["name_norm"])] = str(row["nuts_id"])
+        return index
 
     def materialize_landscape(self, atlas) -> None:
         """Materialize landscape.zarr as a complete canonical store.
@@ -1267,7 +1251,16 @@ class Unifier:
             if git.get("git_diff_hash"):
                 g.attrs["git_diff_hash"] = git["git_diff_hash"]
 
-            # Build and store region-name index (maps normalized names to NUTS IDs)
+            # Build and store region-name metadata for selection/discovery.
+            try:
+                region_catalog = _read_nuts_region_catalog(atlas)
+            except Exception:
+                region_catalog = []
+
+            if region_catalog:
+                g.attrs["cleo_region_catalog_json"] = _stable_json(region_catalog)
+
+            # Build and store region-name index (legacy key: normalized name -> NUTS-2 ID)
             region_index = self._build_region_name_index(atlas)
             if region_index:
                 g.attrs["cleo_region_name_to_id_json"] = _stable_json(region_index)
@@ -1968,8 +1961,21 @@ class Unifier:
 
         mask_da = xr.DataArray(mask, coords={"y": wind_region_ds["y"], "x": wind_region_ds["x"]}, dims=("y", "x"))
 
-        wind_region_ds = wind_region_ds.where(mask_da)
-        land_region_ds = land_region_ds.where(mask_da)
+        # Apply mask only to spatial variables to avoid broadcasting
+        # non-spatial turbine metadata onto y/x.
+        wind_spatial_vars = [
+            name for name, var in wind_region_ds.data_vars.items()
+            if "y" in var.dims and "x" in var.dims
+        ]
+        if wind_spatial_vars:
+            wind_region_ds[wind_spatial_vars] = wind_region_ds[wind_spatial_vars].where(mask_da)
+
+        land_spatial_vars = [
+            name for name, var in land_region_ds.data_vars.items()
+            if "y" in var.dims and "x" in var.dims
+        ]
+        if land_spatial_vars:
+            land_region_ds[land_spatial_vars] = land_region_ds[land_spatial_vars].where(mask_da)
 
         # 5) Compute region inputs_id deterministically
         region_inputs_items = [
@@ -2407,3 +2413,60 @@ def _read_vector_file(path: Path | str) -> gpd.GeoDataFrame:
         GeoDataFrame with loaded features.
     """
     return gpd.read_file(path)
+
+
+def _read_nuts_region_catalog(atlas) -> list[dict[str, Any]]:
+    """Read NUTS region catalog for the atlas country from raw NUTS files.
+
+    Returns rows with keys: ``name``, ``name_norm``, ``nuts_id``, ``level``.
+    Only levels 1, 2, and 3 are included.
+
+    :param atlas: Atlas-like object exposing ``path`` and ``country``.
+    :returns: Deterministically sorted region catalog rows.
+    :raises FileNotFoundError: If no NUTS shapefile is available.
+    """
+    nuts_dir = Path(atlas.path) / "data" / "nuts"
+    shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
+    if not shp_files:
+        raise FileNotFoundError(
+            f"NUTS shapefile not found under {nuts_dir}. "
+            "Run NUTS download/extract first (e.g. cleo.loaders.load_nuts)."
+        )
+
+    nuts = _read_vector_file(shp_files[0])
+    alpha_2 = pct.countries.get(alpha_3=atlas.country).alpha_2
+    if alpha_2 is None:
+        return []
+
+    country_regions = nuts[nuts["CNTR_CODE"] == alpha_2]
+
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for _, row in country_regions.iterrows():
+        name = str(row.get("NAME_LATN", "")).strip()
+        nuts_id = str(row.get("NUTS_ID", "")).strip()
+        level_raw = row.get("LEVL_CODE")
+        if not name or not nuts_id:
+            continue
+        try:
+            level = int(level_raw)
+        except Exception:
+            continue
+        if level not in (1, 2, 3):
+            continue
+
+        key = (level, nuts_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "name": name,
+                "name_norm": _re.sub(r"\s+", " ", name).casefold(),
+                "nuts_id": nuts_id,
+                "level": level,
+            }
+        )
+
+    out.sort(key=lambda r: (int(r["level"]), str(r["name"]).casefold(), str(r["nuts_id"])))
+    return out

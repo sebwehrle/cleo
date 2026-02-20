@@ -29,10 +29,10 @@ def test_load_nuts_rejects_zip_slip(tmp_path, monkeypatch):
     with zipfile.ZipFile(outer_zip_path, "w") as outer:
         outer.write(inner_bytes_path, arcname=file_name)
 
-    def mock_download_file(url, fpath):
-        return True
+    def mock_download_to_path(url, fpath, **kwargs):
+        return fpath
 
-    monkeypatch.setattr(L, "download_file", mock_download_file)
+    monkeypatch.setattr(L, "download_to_path", mock_download_to_path)
 
     parent = SimpleNamespace(path=tmp_path)
     self = SimpleNamespace(parent=parent)

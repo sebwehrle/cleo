@@ -18,7 +18,7 @@ def test_atlas_init_creates_expected_dirs_offline(tmp_path, monkeypatch):
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted during Atlas.__init__")
 
-    monkeypatch.setattr("cleo.utils.download_file", _block_network)
+    monkeypatch.setattr("cleo.net.download_to_path", _block_network)
     monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     # Create Atlas - this should NOT trigger network calls
@@ -49,7 +49,7 @@ def test_atlas_init_does_not_modify_root_logger(tmp_path, monkeypatch):
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted")
 
-    monkeypatch.setattr("cleo.utils.download_file", _block_network)
+    monkeypatch.setattr("cleo.net.download_to_path", _block_network)
     monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     # Capture root logger state before
@@ -78,7 +78,7 @@ def test_atlas_materialize_deferred(tmp_path, monkeypatch):
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted during __init__")
 
-    monkeypatch.setattr("cleo.utils.download_file", _block_network)
+    monkeypatch.setattr("cleo.net.download_to_path", _block_network)
     monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     atlas = Atlas(tmp_path, "AUT", "EPSG:3035")
@@ -126,15 +126,15 @@ def test_load_gwa_never_downloads_elevation(tmp_path, monkeypatch):
     # Track all download URLs
     recorded_urls = []
 
-    def mock_download_file(url, fpath):
+    def mock_download_to_path(url, fpath, **kwargs):
         recorded_urls.append(url)
         # Create empty file so subsequent checks see it as downloaded
         Path(fpath).parent.mkdir(parents=True, exist_ok=True)
         Path(fpath).touch()
-        return True
+        return Path(fpath)
 
     import cleo.loaders
-    monkeypatch.setattr(cleo.loaders, "download_file", mock_download_file)
+    monkeypatch.setattr(cleo.loaders, "download_to_path", mock_download_to_path)
 
     parent = MockParent(path=tmp_path, country="AUT")
     dummy = MockSelf(parent)
@@ -166,14 +166,14 @@ def test_load_gwa_skips_elevation_even_with_legacy_file(tmp_path, monkeypatch):
     # Track all download URLs
     recorded_urls = []
 
-    def mock_download_file(url, fpath):
+    def mock_download_to_path(url, fpath, **kwargs):
         recorded_urls.append(url)
         Path(fpath).parent.mkdir(parents=True, exist_ok=True)
         Path(fpath).touch()
-        return True
+        return Path(fpath)
 
     import cleo.loaders
-    monkeypatch.setattr(cleo.loaders, "download_file", mock_download_file)
+    monkeypatch.setattr(cleo.loaders, "download_to_path", mock_download_to_path)
 
     parent = MockParent(path=tmp_path, country="AUT")
     dummy = MockSelf(parent)

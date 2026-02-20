@@ -1046,7 +1046,7 @@ class Atlas:
         if not shp_files:
             raise FileNotFoundError(
                 f"NUTS shapefile not found under {nuts_dir}. "
-                f"Run NUTS download/extract first (e.g. atlas.landscape._load_nuts() / cleo.loaders.load_nuts)."
+                "Run NUTS download/extract first (e.g. via cleo.loaders.load_nuts)."
             )
         nuts_shape = shp_files[0]
         # Read vector via centralized helper
@@ -1114,7 +1114,7 @@ class Atlas:
         if not shp_files:
             raise FileNotFoundError(
                 f"NUTS shapefile not found under {nuts_dir}. "
-                f"Run NUTS download/extract first (e.g. atlas.landscape._load_nuts() / cleo.loaders.load_nuts)."
+                "Run NUTS download/extract first (e.g. via cleo.loaders.load_nuts)."
             )
         nuts_shape = shp_files[0]
         # Read vector via centralized helper

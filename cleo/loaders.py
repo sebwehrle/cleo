@@ -4,7 +4,6 @@ import re
 import json
 import yaml
 import zipfile
-import requests
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -13,7 +12,7 @@ import rioxarray as rxr
 import logging
 from pathlib import Path
 from cleo.assess import turbine_overnight_cost
-from cleo.utils import download_file
+from cleo.net import download_to_path, RequestException
 from cleo.spatial import reproject_raster_if_needed, to_crs_if_needed
 
 logger = logging.getLogger(__name__)
@@ -453,7 +452,7 @@ def load_air_density(self, height):
     if not rho_path.is_file():
         raise FileNotFoundError(
             f"Missing air-density raster for height={height}: {rho_path}. "
-            f"Run atlas.materialize() or atlas.wind._load_gwa() to download GWA data."
+            "Run atlas.materialize() to prepare/download required GWA inputs."
         )
 
     try:
@@ -519,10 +518,11 @@ def load_gwa(self):
 
             durl = f"{url}/{c}/{ly}/{h}"
             try:
-                success = download_file(durl, fpath)
-            except requests.RequestException as e:
+                download_to_path(durl, fpath)
+                success = True
+            except (RequestException, FileNotFoundError) as e:
                 logger.error(f"Error downloading {fname} from {durl}: {e}")
-                continue
+                success = False
 
             if success:
                 logger.info(f"Download of {fname} from {durl} complete")
@@ -577,7 +577,7 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
     # Download outer zip (collection) if needed
     outer_zip_path = nuts_path / file_collection
     if not outer_zip_path.is_file():
-        download_file(url + file_collection, outer_zip_path)
+        download_to_path(url + file_collection, outer_zip_path)
         logger.info(f"Downloaded {file_collection}")
 
     # Extract the requested inner zip safely (no trust in zip paths)

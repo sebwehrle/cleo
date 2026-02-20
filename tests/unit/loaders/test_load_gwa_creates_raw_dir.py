@@ -22,13 +22,13 @@ class MockSelf:
 def test_load_gwa_creates_raw_dir(tmp_path, monkeypatch):
     recorded = []
 
-    def mock_download_file(url, fpath):
+    def mock_download_to_path(url, fpath, **kwargs):
         recorded.append((url, Path(fpath)))
         Path(fpath).parent.mkdir(parents=True, exist_ok=True)
         Path(fpath).touch()
-        return True
+        return Path(fpath)
 
-    monkeypatch.setattr(cleo.loaders, "download_file", mock_download_file)
+    monkeypatch.setattr(cleo.loaders, "download_to_path", mock_download_to_path)
 
     parent = MockParent(path=tmp_path, country="AUT")
     dummy = MockSelf(parent)

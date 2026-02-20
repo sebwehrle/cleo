@@ -98,7 +98,6 @@ class TestCrsGuardrails:
         expected_imports = {
             "class_helpers.py": ["crs_equal"],
             "loaders.py": ["reproject_raster_if_needed", "to_crs_if_needed"],
-            "utils.py": ["reproject_raster_if_needed"],
             "classes.py": ["to_crs_if_needed", "crs_equal"],
         }
 

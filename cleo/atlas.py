@@ -852,6 +852,7 @@ class Atlas:
         """
         base = Path(self.results_root)
         count = 0
+        scanned = 0
 
         # Determine which run directories to scan
         if run_id:
@@ -871,6 +872,7 @@ class Atlas:
 
         for run_dir in runs:
             for store in sorted(run_dir.glob("*.zarr")):
+                scanned += 1
                 # Filter by metric_name if specified
                 if metric_name and store.name != f"{metric_name}.zarr":
                     continue
@@ -905,6 +907,28 @@ class Atlas:
             # Clean up empty run directories
             if run_dir.exists() and not any(run_dir.iterdir()):
                 run_dir.rmdir()
+
+        if count == 0:
+            logger.info(
+                "clean_results: deleted=0 (scanned=%d, run_id=%r, metric_name=%r, older_than=%r, results_root=%s). "
+                "No matching persisted result stores were found. "
+                "Note: atlas.wind.compute(...).cache() writes to wind.zarr, not results_root.",
+                scanned,
+                run_id,
+                metric_name,
+                older_than,
+                base,
+            )
+        else:
+            logger.info(
+                "clean_results: deleted=%d (scanned=%d, run_id=%r, metric_name=%r, older_than=%r, results_root=%s).",
+                count,
+                scanned,
+                run_id,
+                metric_name,
+                older_than,
+                base,
+            )
 
         return count
 

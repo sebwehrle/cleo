@@ -328,8 +328,8 @@ def capacity_factors_v1(
         cf = cf.expand_dims(turbine=[turbine_id])
         cf_list.append(cf)
 
-    # Concatenate along turbine dimension
-    out = xr.concat(cf_list, dim="turbine")
+    # Concatenate along turbine dimension (explicit coords policy avoids xarray FutureWarning).
+    out = xr.concat(cf_list, dim="turbine", coords="different")
     out = out.rename("capacity_factors")
 
     # Set attrs (no compute)
@@ -766,7 +766,10 @@ def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
     # Broadcasting: u_da (wind_speed) over raster (y,x)
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         z = u_da / weibull_a
-        pdf = (weibull_k / weibull_a) * (z ** (weibull_k - 1)) * np.exp(-(z ** weibull_k))
+        # Avoid the u==0 singular branch for k<1 (0**negative), which is later
+        # explicitly set to 0 by contract.
+        z_safe = xr.where(u_da == 0, 1.0, z)
+        pdf = (weibull_k / weibull_a) * (z_safe ** (weibull_k - 1)) * np.exp(-(z ** weibull_k))
 
     # Exact u=0 handling (avoids inf for k<1); keep dtype float
     pdf = xr.where(u_da == 0, 0.0, pdf)

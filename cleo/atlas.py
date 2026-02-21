@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Sequence
 
 from cleo.domains import WindDomain, LandscapeDomain
-from cleo.unify import _read_vector_file, _read_nuts_region_catalog
+from cleo.unification.nuts_io import _read_vector_file, _read_nuts_region_catalog
 from cleo.spatial import to_crs_if_needed
 from cleo.class_helpers import deploy_resources, setup_logging
 from cleo.dask_utils import normalize_compute_backend, normalize_compute_workers
@@ -657,7 +657,7 @@ class Atlas:
             )
             shutil.rmtree(expected_root)
 
-        from cleo.unify import Unifier
+        from cleo.unification import Unifier
 
         u = Unifier(
             chunk_policy=self.chunk_policy,
@@ -712,7 +712,7 @@ class Atlas:
 
         Requires that all GWA data files are present.
         """
-        from cleo.unify import Unifier
+        from cleo.unification import Unifier
 
         u = Unifier(
             chunk_policy=self.chunk_policy,

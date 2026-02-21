@@ -177,8 +177,9 @@ def build_copdem_elevation_like(reference_da, tile_paths):
     """
     Mosaic Copernicus DEM tiles and reproject to match a reference raster.
 
-    This is a compatibility wrapper that delegates to cleo.unify._build_copdem_mosaic.
-    Raw I/O is centralized in unify.py.
+    This is a compatibility wrapper that delegates to
+    ``cleo.unification.raster_io._build_copdem_mosaic``.
+    Raw I/O is centralized in the unification raster I/O module.
 
     Contracts:
     - tile_paths must be non-empty
@@ -195,6 +196,6 @@ def build_copdem_elevation_like(reference_da, tile_paths):
     :raises ValueError: If tile_paths is empty or CRS is missing
     :raises RuntimeError: If mosaicking fails
     """
-    # Delegate to unify.py for raw I/O
-    from cleo.unify import _build_copdem_mosaic
+    # Delegate to unification raster I/O for raw I/O
+    from cleo.unification.raster_io import _build_copdem_mosaic
     return _build_copdem_mosaic(tile_paths, reference_da)

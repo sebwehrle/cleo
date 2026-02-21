@@ -380,7 +380,7 @@ class LandscapeDomain:
             with ``if_exists="error"``.
         :raises RuntimeError: If canonical stores are not ready.
         """
-        from cleo.unify import Unifier
+        from cleo.unification import Unifier
 
         # Validate if_exists parameter
         valid_if_exists = {"error", "replace", "noop"}

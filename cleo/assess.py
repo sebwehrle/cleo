@@ -329,7 +329,7 @@ def capacity_factors_v1(
         cf_list.append(cf)
 
     # Concatenate along turbine dimension (explicit coords policy avoids xarray FutureWarning).
-    out = xr.concat(cf_list, dim="turbine", coords="different")
+    out = xr.concat(cf_list, dim="turbine", coords="different", compat="equals")
     out = out.rename("capacity_factors")
 
     # Set attrs (no compute)
@@ -430,12 +430,15 @@ def min_lcoe_turbine_idx(
     """
     lcoe_f = lcoe.fillna(np.inf)
     idx = lcoe_f.argmin(dim="turbine").astype(np.int32)
+    all_invalid = lcoe.isnull().all(dim="turbine")
+    idx = xr.where(all_invalid, np.int32(-1), idx).astype(np.int32)
     idx = idx.rename("min_lcoe_turbine")
 
     idx.attrs["cleo:turbine_ids_json"] = json.dumps(list(turbine_ids), ensure_ascii=True)
     idx.attrs["cleo:cf_mode"] = lcoe.attrs.get("cleo:cf_mode")
     idx.attrs["cleo:algo"] = "min_lcoe_turbine_idx"
     idx.attrs["cleo:algo_version"] = "1"
+    idx.attrs["cleo:nodata_index"] = -1
 
     return idx
 
@@ -456,6 +459,7 @@ def optimal_power_kw(
     """
     # Use argmin to find the index of minimum LCOE (avoids float equality)
     idx = lcoe.fillna(np.inf).argmin(dim="turbine")
+    all_invalid = lcoe.isnull().all(dim="turbine")
 
     p_da = xr.DataArray(
         power_kw.astype(np.float64),
@@ -464,6 +468,7 @@ def optimal_power_kw(
     )
     # Select power at the min-LCOE turbine index
     p_sel = p_da.isel(turbine=idx).rename("optimal_power")
+    p_sel = p_sel.where(~all_invalid)
     p_sel.attrs["units"] = "kW"
     p_sel.attrs["cleo:cf_mode"] = lcoe.attrs.get("cleo:cf_mode")
     p_sel.attrs["cleo:algo"] = "optimal_power_kw"

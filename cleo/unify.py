@@ -572,6 +572,15 @@ def _ingest_turbines_and_costs(
     if turbines is not None:
         turbine_names = list(turbines)
         turbines_mode = "configured"
+        missing_configured = [
+            str(resources_dir / f"{turbine_id}.yml")
+            for turbine_id in turbine_names
+            if not (resources_dir / f"{turbine_id}.yml").exists()
+        ]
+        if missing_configured:
+            raise FileNotFoundError(
+                "Configured turbine YAML files not found:\n" + "\n".join(missing_configured)
+            )
     else:
         turbine_names = _default_turbines_from_resources(resources_dir)
         turbines_mode = "default"
@@ -599,8 +608,6 @@ def _ingest_turbines_and_costs(
 
     for turbine_id in turbine_names:
         yaml_path = resources_dir / f"{turbine_id}.yml"
-        if not yaml_path.exists():
-            continue
 
         data = _load_turbine_yaml(yaml_path)
 
@@ -2338,7 +2345,7 @@ def _build_copdem_mosaic(
             try:
                 ds.close()
             except Exception:
-                pass
+                logger.debug("Failed to close temporary raster tile dataset.", exc_info=True)
 
     mosaic_2d = mosaic_arr[0]
 

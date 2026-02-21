@@ -77,12 +77,64 @@ class TestAtlasConstructorContractA2:
             country="AUT",
             crs="epsg:3035",
             chunk_policy={"y": 512, "x": 512},
+            compute_backend="threads",
+            compute_workers=4,
             region="Niederösterreich",
             results_root=tmp_path / "custom_results",
         )
         assert atlas.region == "Niederösterreich"
         assert atlas.chunk_policy == {"y": 512, "x": 512}
+        assert atlas.compute_backend == "threads"
+        assert atlas.compute_workers == 4
         assert atlas.results_root == tmp_path / "custom_results"
+
+    def test_atlas_compute_backend_defaults_to_serial(self, tmp_path: Path) -> None:
+        atlas = Atlas(
+            tmp_path,
+            country="AUT",
+            crs="epsg:3035",
+        )
+        assert atlas.compute_backend == "serial"
+        assert atlas.compute_workers is None
+
+    def test_atlas_compute_backend_rejects_invalid_value(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Unknown compute_backend"):
+            Atlas(
+                tmp_path,
+                country="AUT",
+                crs="epsg:3035",
+                compute_backend="invalid",
+            )
+
+    def test_atlas_compute_workers_rejects_non_positive(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="compute_workers must be >= 1"):
+            Atlas(
+                tmp_path,
+                country="AUT",
+                crs="epsg:3035",
+                compute_backend="threads",
+                compute_workers=0,
+            )
+
+    def test_atlas_compute_workers_rejects_serial_gt_one(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="compute_workers must be None or 1"):
+            Atlas(
+                tmp_path,
+                country="AUT",
+                crs="epsg:3035",
+                compute_backend="serial",
+                compute_workers=2,
+            )
+
+    def test_atlas_compute_workers_rejects_distributed_override(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="not supported for compute_backend='distributed'"):
+            Atlas(
+                tmp_path,
+                country="AUT",
+                crs="epsg:3035",
+                compute_backend="distributed",
+                compute_workers=2,
+            )
 
     def test_atlas_construction_performs_no_heavy_io(self, tmp_path: Path) -> None:
         """Atlas construction performs no heavy I/O per contract A2.
@@ -103,3 +155,31 @@ class TestAtlasConstructorContractA2:
 
         # _canonical_ready should be False
         assert atlas._canonical_ready is False
+
+    def test_clone_for_selection_preserves_compute_policy(self, tmp_path: Path) -> None:
+        atlas = Atlas(
+            tmp_path,
+            country="AUT",
+            crs="epsg:3035",
+            compute_backend="threads",
+            compute_workers=3,
+        )
+
+        clone = atlas._clone_for_selection()
+
+        assert clone.compute_backend == "threads"
+        assert clone.compute_workers == 3
+
+    def test_select_copy_preserves_compute_policy(self, tmp_path: Path) -> None:
+        atlas = Atlas(
+            tmp_path,
+            country="AUT",
+            crs="epsg:3035",
+            compute_backend="threads",
+            compute_workers=3,
+        )
+
+        clone = atlas.select(region=None, inplace=False)
+        assert clone is not None
+        assert clone.compute_backend == "threads"
+        assert clone.compute_workers == 3

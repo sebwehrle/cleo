@@ -3,7 +3,7 @@ import json
 import numpy as np
 import xarray as xr
 from pathlib import Path
-from cleo.results import MetricResult
+from cleo.results import DomainResult
 from cleo.wind_metrics import _WIND_METRICS
 
 
@@ -211,11 +211,11 @@ class WindDomain:
         self._atlas._wind_selected_turbines = None
         return self
 
-    def compute(self, metric: str, **kwargs) -> MetricResult:
+    def compute(self, metric: str, **kwargs) -> DomainResult:
         """
         Compute a wind metric from canonical data.
 
-        Returns a MetricResult wrapper supporting .data and .cache() pattern.
+        Returns a DomainResult wrapper supporting .data/.cache()/.persist() pattern.
 
         :param metric: Metric name (see supported metrics below).
         :param kwargs: Metric-specific parameters. For metrics requiring
@@ -237,7 +237,7 @@ class WindDomain:
             - "optimal_energy": same params as lcoe. Returns annual energy (GWh/a)
               of the minimum-LCOE turbine at each pixel.
 
-        :returns: :class:`cleo.results.MetricResult` with ``.data`` and ``.cache()``.
+        :returns: :class:`cleo.results.DomainResult` with ``.data``/``.cache()``/``.persist()``.
         :raises ValueError: If metric is unknown, params are missing, or turbine
             validation fails.
         """
@@ -289,21 +289,21 @@ class WindDomain:
         # Compute the metric
         da = fn(wind, land, **kwargs)
 
-        # Build params dict for MetricResult (exclude turbines from kwargs copy)
+        # Build params dict for DomainResult (exclude turbines from kwargs copy)
         params = {k: v for k, v in kwargs.items()}
 
-        return MetricResult(self, metric, da, params)
+        return DomainResult(self, metric, da, params)
 
-    def mean_wind_speed(self, height: int, **kwargs) -> MetricResult:
+    def mean_wind_speed(self, height: int, **kwargs) -> DomainResult:
         """
         Compute mean wind speed at specified height.
 
         Thin wrapper around compute("mean_wind_speed", ...).
-        Returns MetricResult supporting .data and .cache() pattern.
+        Returns DomainResult supporting .data/.cache()/.persist() pattern.
 
         :param height: Height level that must exist in the wind store.
         :param kwargs: Additional parameters forwarded to :meth:`compute`.
-        :returns: :class:`cleo.results.MetricResult`.
+        :returns: :class:`cleo.results.DomainResult`.
         """
         return self.compute("mean_wind_speed", height=height, **kwargs)
 
@@ -315,19 +315,19 @@ class WindDomain:
         air_density: bool = False,
         loss_factor: float = 1.0,
         **kwargs,
-    ) -> MetricResult:
+    ) -> DomainResult:
         """
         Compute capacity factors for selected turbines.
 
         Thin wrapper around compute("capacity_factors", ...).
-        Returns MetricResult supporting .data and .cache() pattern.
+        Returns DomainResult supporting .data/.cache()/.persist() pattern.
 
         :param turbines: Turbine IDs; if ``None``, uses persistent selection.
         :param height: Reference height for Weibull interpolation.
         :param air_density: If ``True``, apply air-density correction.
         :param loss_factor: Multiplicative loss factor.
         :param kwargs: Additional parameters forwarded to :meth:`compute`.
-        :returns: :class:`cleo.results.MetricResult`.
+        :returns: :class:`cleo.results.DomainResult`.
         """
         # Only pass turbines if explicitly provided (let compute() inject from selection)
         compute_kwargs = {

@@ -88,7 +88,8 @@ def flatten(self, digits=5, exclude_template=True):
             for coord in data_var.coords[non_spatial_dim]:
                 data_slice = data_var.sel({non_spatial_dim: coord})
                 data_slice = data_slice.drop_vars(non_spatial_dim)
-                data_slice.name = f"{var_name}_{non_spatial_dim}_{coord.data}"
+                coord_value = coord.item() if hasattr(coord, "item") else coord.data
+                data_slice.name = f"{var_name}_{non_spatial_dim}_{coord_value}"
                 df = data_slice.to_dataframe().dropna()
                 df.index = pd.MultiIndex.from_arrays([
                     np.round(df.index.get_level_values("y"), digits),
@@ -97,6 +98,18 @@ def flatten(self, digits=5, exclude_template=True):
                 collect_df.append(df)
 
         else:
-            raise ValueError(f"Error in {var_name}. Only 3-dimensional data with 'x' and 'y'-coordinates are supported")
+            raise ValueError(
+                f"Error in {var_name}. Only 2D ('x','y') or 3D data with one non-spatial dimension plus 'x' and 'y' are supported"
+            )
+    if not collect_df:
+        # No variables selected (e.g., template-only with exclude_template=True):
+        # return an empty frame with rounded spatial index when available.
+        if {"x", "y"}.issubset(set(self.data.coords)):
+            y_vals = np.round(np.asarray(self.data.coords["y"].values), digits)
+            x_vals = np.round(np.asarray(self.data.coords["x"].values), digits)
+            index = pd.MultiIndex.from_product([y_vals, x_vals], names=["y", "x"])
+            return pd.DataFrame(index=index)
+        empty_index = pd.MultiIndex.from_arrays([[], []], names=["y", "x"])
+        return pd.DataFrame(index=empty_index)
 
     return pd.concat(collect_df, axis=1)

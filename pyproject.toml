@@ -39,6 +39,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+bench = ["psutil"]
 
 [tool.setuptools]
 include-package-data = true

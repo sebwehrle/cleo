@@ -21,6 +21,7 @@ import xarray as xr
 from rasterio.crs import CRS
 
 import cleo
+from cleo.dask_utils import compute as dask_compute
 from cleo.domains import WindDomain
 from cleo.unify import Unifier, GWA_HEIGHTS
 
@@ -235,7 +236,7 @@ class TestWindDomainCompute:
         ok = wind[var_A].sel(height=100).notnull() & land["valid_mask"]
         assert bool(ok.any().compute()) is True, "Fixture must have valid cells"
 
-        # Compute mean wind speed (compute() returns MetricResult, use .data for DataArray)
+        # Compute mean wind speed (compute() returns DomainResult, use .data for DataArray)
         da = atlas.wind.compute("mean_wind_speed", height=100).data
 
         # Assert not all NaN
@@ -292,7 +293,7 @@ class TestCapacityFactorsEnforcement:
         # Get turbine IDs
         tids = atlas.wind.turbines[:1]
 
-        # Compute capacity factors (compute() returns MetricResult, use .data for DataArray)
+        # Compute capacity factors (compute() returns DomainResult, use .data for DataArray)
         da = atlas.wind.compute("capacity_factors", turbines=tids, height=100).data
 
         # Assert not all NaN
@@ -349,8 +350,8 @@ class TestCapacityFactorsEnforcement:
         assert str(da.coords["turbine"].values[0]) == turbine_names[0]
 
 
-class TestMetricResultCacheOverwrite:
-    """Tests for MetricResult.cache() overwrite behavior."""
+class TestDomainResultCacheOverwrite:
+    """Tests for DomainResult.cache() overwrite behavior."""
 
     def test_cache_overwrite_true_replaces_variable(self, tmp_path: Path) -> None:
         """cache(overwrite=True) replaces existing variable completely."""
@@ -442,3 +443,35 @@ class TestMetricResultCacheOverwrite:
         # Second cache with overwrite=False should raise
         with pytest.raises(ValueError, match="already exists"):
             atlas.wind.compute("capacity_factors", height=100).cache(overwrite=False)
+
+
+class TestComputeBackendParity:
+    """Numerical parity across local compute backends."""
+
+    def test_capacity_factors_parity_serial_threads_processes(self, tmp_path: Path) -> None:
+        np.random.seed(42)
+        turbine_names = ["Enercon.E40.500", "Vestas.V112.3075"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        atlas.wind.select(turbines=turbine_names)
+        da = atlas.wind.compute("capacity_factors", height=100, mode="hub").data
+
+        serial = dask_compute(da, backend="serial").values
+        threads = dask_compute(da, backend="threads").values
+        assert np.allclose(serial, threads, equal_nan=True)
+
+        try:
+            processes = dask_compute(da, backend="processes").values
+        except Exception as exc:
+            msg = str(exc)
+            if "Operation not permitted" in msg or "PermissionError" in msg:
+                pytest.skip("Process backend unavailable in this execution environment.")
+            raise
+        assert np.allclose(serial, processes, equal_nan=True)

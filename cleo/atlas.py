@@ -13,12 +13,11 @@ from uuid import uuid4
 from pathlib import Path
 from typing import Sequence
 
-from xarray.util.generate_ops import inplace
-
 from cleo.domains import WindDomain, LandscapeDomain
 from cleo.unify import _read_vector_file, _read_nuts_region_catalog
 from cleo.spatial import to_crs_if_needed
 from cleo.class_helpers import deploy_resources, setup_logging
+from cleo.dask_utils import normalize_compute_backend, normalize_compute_workers
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +88,8 @@ class Atlas:
         crs,
         *,
         chunk_policy: dict[str, int] | None = None,
+        compute_backend: str = "serial",
+        compute_workers: int | None = None,
         region: str | None = None,
         results_root: Path | None = None,
         fingerprint_method: str = "path_mtime_size",
@@ -115,6 +116,11 @@ class Atlas:
 
         # Canonical store configuration
         self.chunk_policy = chunk_policy if chunk_policy is not None else {"y": 1024, "x": 1024}
+        self.compute_backend = normalize_compute_backend(compute_backend)
+        self.compute_workers = normalize_compute_workers(
+            compute_workers,
+            backend=self.compute_backend,
+        )
         self.fingerprint_method = fingerprint_method
 
         # Base (country-wide) store paths
@@ -195,6 +201,58 @@ class Atlas:
     def landscape_data(self) -> xr.Dataset:
         """Direct access to landscape dataset (convenience for atlas.landscape.data)."""
         return self.landscape.data
+
+    def flatten(
+        self,
+        *,
+        domain: str = "wind",
+        digits: int = 5,
+        exclude_template: bool = True,
+        include_domain_prefix: bool = True,
+    ):
+        """Flatten atlas domain data to a pandas DataFrame for downstream models.
+
+        The resulting frame uses a rounded `(y, x)` MultiIndex and one column per
+        supported data variable / non-spatial coordinate slice, matching the
+        semantics of :func:`cleo.utils.flatten`.
+
+        :param domain: Dataset source to flatten: ``"wind"``, ``"landscape"``, or ``"both"``.
+        :param digits: Number of decimal digits used to round ``x``/``y`` index.
+        :param exclude_template: If ``True``, skip the ``template`` data variable.
+        :param include_domain_prefix: When ``domain="both"``, prefix columns with
+            ``"wind__"`` / ``"landscape__"`` to avoid collisions.
+        :returns: Flattened :class:`pandas.DataFrame`.
+        :raises ValueError: If ``domain`` is unsupported.
+        """
+        from types import SimpleNamespace
+        from cleo.utils import flatten as flatten_data
+
+        if domain == "wind":
+            data = self.wind_data
+        elif domain == "landscape":
+            data = self.landscape_data
+        elif domain == "both":
+            wind_proxy = SimpleNamespace(data=self.wind_data)
+            land_proxy = SimpleNamespace(data=self.landscape_data)
+            wind_df = flatten_data(wind_proxy, digits=digits, exclude_template=exclude_template)
+            land_df = flatten_data(land_proxy, digits=digits, exclude_template=exclude_template)
+
+            if include_domain_prefix:
+                wind_df = wind_df.rename(columns={c: f"wind__{c}" for c in wind_df.columns})
+                land_df = land_df.rename(columns={c: f"landscape__{c}" for c in land_df.columns})
+            else:
+                overlap = set(wind_df.columns) & set(land_df.columns)
+                if overlap:
+                    raise ValueError(
+                        "Column name collision when flattening both domains: "
+                        f"{sorted(overlap)}. Set include_domain_prefix=True."
+                    )
+            return wind_df.join(land_df, how="outer")
+        else:
+            raise ValueError(f"Unsupported domain {domain!r}; expected 'wind', 'landscape', or 'both'.")
+
+        proxy = SimpleNamespace(data=data)
+        return flatten_data(proxy, digits=digits, exclude_template=exclude_template)
 
     @property
     def wind_zarr(self) -> xr.Dataset:
@@ -323,7 +381,11 @@ class Atlas:
                             self._nuts_region_catalog_cache = tuple(catalog)
                             return [dict(row) for row in catalog]
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to load NUTS region catalog from landscape store attrs; "
+                    "falling back to raw NUTS catalog loading.",
+                    exc_info=True,
+                )
 
         # Fallback: raw I/O delegated to unify helper.
         catalog = _read_nuts_region_catalog(self)
@@ -432,6 +494,8 @@ class Atlas:
             country = self.country,
             crs = self.crs,
             chunk_policy = dict(self.chunk_policy) if self.chunk_policy is not None else None,
+            compute_backend = self.compute_backend,
+            compute_workers = self.compute_workers,
             region = None,
             results_root = self.results_root,
             fingerprint_method = self.fingerprint_method
@@ -547,6 +611,18 @@ class Atlas:
         if self._region_name is not None:
             return self._region_store_root() / "landscape.zarr"
         return self.landscape_store_path
+
+    def _evaluate_for_io(self, obj: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
+        """Materialize potentially lazy xarray objects using configured backend."""
+        from cleo.dask_utils import compute as dask_compute, is_dask_backed
+
+        if not is_dask_backed(obj):
+            return obj
+        return dask_compute(
+            obj,
+            backend=self.compute_backend,
+            num_workers=self.compute_workers,
+        )
 
     def _ensure_region_stores(self) -> None:
         """
@@ -688,73 +764,17 @@ class Atlas:
     ) -> Path:
         """Persist a result dataset/dataarray to a Zarr store.
 
-        Creates an atomic, Windows-safe Zarr store
-        under <results_root>/<run_id>/<metric_name>.zarr.
-
-        :param metric_name: Name of the metric/result being stored.
-        :param obj: :class:`xarray.Dataset` or :class:`xarray.DataArray` to store.
-        :param run_id: Unique identifier for this run/experiment. If ``None``,
-            :meth:`new_run_id` is used.
-        :param params: Optional parameters dictionary to persist in store attrs.
-        :returns: Path to the created Zarr store.
-        :raises FileExistsError: If the target store already exists.
+        Transitional low-level API. Prefer fluent ``<domain-result>.persist(...)``.
         """
-        from cleo.store import atomic_dir
+        from cleo.results import persist_result
 
-        if run_id is None:
-            run_id = self.new_run_id()
-
-        store_path = Path(self.results_root) / run_id / f"{metric_name}.zarr"
-
-        # Collision check - raise FileExistsError if target exists
-        if store_path.exists():
-            raise FileExistsError(
-                f"Result store already exists: {store_path}. "
-                f"Use a different run_id or metric_name."
-            )
-
-        # Handle DataArray vs Dataset
-        if isinstance(obj, xr.DataArray):
-            da = obj
-            if da.name is None:
-                da = da.rename(metric_name)
-            ds = da.to_dataset()
-        else:
-            ds = obj
-
-        # Ensure parent directory exists
-        (Path(self.results_root) / run_id).mkdir(parents=True, exist_ok=True)
-
-        # Atomic write
-        with atomic_dir(store_path) as tmp:
-            ds.to_zarr(tmp, mode="w", consolidated=False)
-
-            # Add metadata attrs
-            g = zarr.open_group(tmp, mode="a")
-            g.attrs["store_state"] = "complete"
-            g.attrs["run_id"] = run_id
-            g.attrs["metric_name"] = metric_name
-
-            # Inline timestamp and JSON serialization (no unify.py helper imports)
-            g.attrs["created_at"] = datetime.datetime.now(
-                datetime.timezone.utc
-            ).isoformat()
-            if params is not None:
-                g.attrs["params_json"] = json.dumps(
-                    params, sort_keys=True, separators=(",", ":")
-                )
-
-            # Optional provenance from canonical stores
-            try:
-                if getattr(self, "_canonical_ready", False):
-                    w = self.wind_zarr
-                    l = self.landscape_zarr
-                    g.attrs["wind_grid_id"] = w.attrs.get("grid_id", "")
-                    g.attrs["landscape_grid_id"] = l.attrs.get("grid_id", "")
-            except Exception:
-                pass
-
-        return store_path
+        return persist_result(
+            self,
+            metric_name,
+            obj,
+            run_id=run_id,
+            params=params,
+        )
 
     def open_result(self, run_id: str, metric_name: str) -> xr.Dataset:
         """Open a persisted result Zarr store.
@@ -766,7 +786,13 @@ class Atlas:
         :returns: Lazy :class:`xarray.Dataset` (no compute performed).
         :raises FileNotFoundError: If the store does not exist.
         """
-        store_path = Path(self.results_root) / run_id / f"{metric_name}.zarr"
+        from cleo.results import result_store_path
+
+        store_path = result_store_path(
+            results_root=Path(self.results_root),
+            run_id=run_id,
+            metric_name=metric_name,
+        )
 
         if not store_path.exists():
             raise FileNotFoundError(
@@ -801,7 +827,13 @@ class Atlas:
         if not str(out_path).endswith(".nc"):
             raise ValueError(f"out_path must end with '.nc', got: {out_path}")
 
-        src_store = Path(self.results_root) / run_id / f"{metric_name}.zarr"
+        from cleo.results import result_store_path
+
+        src_store = result_store_path(
+            results_root=Path(self.results_root),
+            run_id=run_id,
+            metric_name=metric_name,
+        )
         if not src_store.exists():
             raise FileNotFoundError(
                 f"Result store not found: {src_store}. "
@@ -810,6 +842,7 @@ class Atlas:
 
         # Open source store
         ds = xr.open_zarr(src_store, consolidated=False)
+        ds = self._evaluate_for_io(ds)
 
         # Build encoding: handle string/object dtype coords and vars
         final_encoding = {}
@@ -854,9 +887,17 @@ class Atlas:
         count = 0
         scanned = 0
 
+        if metric_name is not None:
+            from cleo.results import validate_result_path_token
+
+            metric_name = validate_result_path_token(metric_name, field="metric_name")
+
         # Determine which run directories to scan
         if run_id:
-            runs = [base / run_id] if (base / run_id).exists() else []
+            from cleo.results import result_run_dir_path
+
+            run_dir = result_run_dir_path(results_root=base, run_id=run_id)
+            runs = [run_dir] if run_dir.exists() else []
         else:
             runs = sorted([p for p in base.iterdir() if p.is_dir()])
 
@@ -897,7 +938,13 @@ class Atlas:
                         store_dt = datetime.datetime.fromtimestamp(mtime)
 
                     # Skip if not older than threshold
-                    if store_dt >= threshold_dt:
+                    cmp_threshold = threshold_dt
+                    if store_dt.tzinfo is not None and cmp_threshold.tzinfo is None:
+                        cmp_threshold = cmp_threshold.replace(tzinfo=datetime.timezone.utc)
+                    elif store_dt.tzinfo is None and cmp_threshold.tzinfo is not None:
+                        store_dt = store_dt.replace(tzinfo=datetime.timezone.utc)
+
+                    if store_dt >= cmp_threshold:
                         continue
 
                 # Delete the store
@@ -931,6 +978,154 @@ class Atlas:
             )
 
         return count
+
+    def clean_regions(
+        self,
+        region: str | None = None,
+        older_than: str | None = None,
+        *,
+        include_incomplete: bool = True,
+    ) -> int:
+        """Clean up materialized region stores under ``<atlas.path>/regions``.
+
+        Deletes region directories that match the given filters. A region directory
+        is expected to contain ``wind.zarr`` and/or ``landscape.zarr``.
+
+        :param region: Optional human-readable region name. When provided, it is
+            resolved with the same region-resolution logic as :meth:`select`, and
+            only that resolved region directory is considered.
+        :param older_than: Optional age threshold. Only region directories older
+            than this timestamp are deleted. Accepts ``YYYY-MM-DD`` or ISO datetime.
+            Age is determined from ``created_at`` in region store attrs when available,
+            otherwise filesystem mtime.
+        :param include_incomplete: If ``True`` (default), incomplete/partial region
+            directories are eligible for deletion. If ``False``, only complete region
+            directories (both stores present and ``store_state == "complete"``) are
+            eligible.
+        :returns: Number of region directories deleted.
+        :raises ValueError: If ``region`` is not a string/None, is empty, or if
+            ``older_than`` has invalid format.
+        """
+        regions_root = self.path / "regions"
+        deleted = 0
+        scanned = 0
+
+        if not regions_root.exists():
+            logger.info(
+                "clean_regions: deleted=0 (scanned=0, region=%r, older_than=%r, include_incomplete=%r, regions_root=%s). "
+                "No region stores directory exists.",
+                region,
+                older_than,
+                include_incomplete,
+                regions_root,
+            )
+            return 0
+
+        # Determine which region directories to scan.
+        if region is not None:
+            if not isinstance(region, str):
+                raise ValueError(f"region must be a string or None, got {type(region).__name__}")
+            region_stripped = region.strip()
+            if not region_stripped:
+                raise ValueError("region cannot be empty or whitespace-only")
+            _name_norm, region_id, _level = self._resolve_region_name(region_stripped)
+            region_dir = regions_root / region_id
+            region_dirs = [region_dir] if region_dir.exists() and region_dir.is_dir() else []
+        else:
+            region_dirs = sorted([p for p in regions_root.iterdir() if p.is_dir()])
+
+        # Parse older_than threshold if specified.
+        threshold_dt = None
+        if older_than:
+            try:
+                threshold_dt = datetime.datetime.fromisoformat(older_than)
+            except ValueError:
+                threshold_dt = datetime.datetime.strptime(older_than, "%Y-%m-%d")
+
+        for region_dir in region_dirs:
+            scanned += 1
+            wind_store = region_dir / "wind.zarr"
+            land_store = region_dir / "landscape.zarr"
+
+            wind_exists = wind_store.exists() and wind_store.is_dir()
+            land_exists = land_store.exists() and land_store.is_dir()
+
+            wind_complete = False
+            land_complete = False
+
+            if wind_exists:
+                try:
+                    g_wind = zarr.open_group(wind_store, mode="r")
+                    wind_complete = g_wind.attrs.get("store_state") == "complete"
+                except Exception:
+                    wind_complete = False
+
+            if land_exists:
+                try:
+                    g_land = zarr.open_group(land_store, mode="r")
+                    land_complete = g_land.attrs.get("store_state") == "complete"
+                except Exception:
+                    land_complete = False
+
+            is_complete_region = wind_exists and land_exists and wind_complete and land_complete
+            if not include_incomplete and not is_complete_region:
+                continue
+
+            if threshold_dt is not None:
+                store_dt = None
+
+                # Prefer created_at from wind store, then landscape store.
+                for store_path in (wind_store, land_store):
+                    try:
+                        g = zarr.open_group(store_path, mode="r")
+                        created_at = g.attrs.get("created_at")
+                        if created_at:
+                            store_dt = datetime.datetime.fromisoformat(
+                                str(created_at).replace("Z", "+00:00")
+                            )
+                            break
+                    except Exception:
+                        continue
+
+                # Fallback to region directory mtime.
+                if store_dt is None:
+                    store_dt = datetime.datetime.fromtimestamp(region_dir.stat().st_mtime)
+
+                # Normalize timezone awareness for safe comparison.
+                cmp_threshold = threshold_dt
+                if store_dt.tzinfo is not None and cmp_threshold.tzinfo is None:
+                    cmp_threshold = cmp_threshold.replace(tzinfo=datetime.timezone.utc)
+                elif store_dt.tzinfo is None and cmp_threshold.tzinfo is not None:
+                    store_dt = store_dt.replace(tzinfo=datetime.timezone.utc)
+
+                if store_dt >= cmp_threshold:
+                    continue
+
+            shutil.rmtree(region_dir)
+            deleted += 1
+
+        if deleted == 0:
+            logger.info(
+                "clean_regions: deleted=0 (scanned=%d, region=%r, older_than=%r, include_incomplete=%r, regions_root=%s). "
+                "No matching region stores were found.",
+                scanned,
+                region,
+                older_than,
+                include_incomplete,
+                regions_root,
+            )
+        else:
+            logger.info(
+                "clean_regions: deleted=%d (scanned=%d, region=%r, older_than=%r, include_incomplete=%r, regions_root=%s).",
+                deleted,
+                scanned,
+                region,
+                older_than,
+                include_incomplete,
+                regions_root,
+            )
+
+        return deleted
 
     @property
     def path(self):

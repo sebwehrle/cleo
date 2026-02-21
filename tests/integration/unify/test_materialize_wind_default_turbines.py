@@ -321,6 +321,20 @@ class TestMaterializeWindDefaultTurbines:
 
         assert turbine_ids == [configured_turbine]
 
+    def test_configured_turbines_missing_yaml_raises(self, tmp_path: Path) -> None:
+        """Configured turbines fail fast when resource YAML is missing."""
+        atlas = MockAtlas(tmp_path)
+
+        # Create GWA rasters
+        _create_all_gwa_rasters(tmp_path)
+
+        # Configure turbine that does not exist in resources/
+        atlas.turbines_configured = ["Missing.Turbine.9999"]
+
+        unifier = Unifier(chunk_policy={"y": 1024, "x": 1024})
+        with pytest.raises(FileNotFoundError, match="Configured turbine YAML files not found"):
+            unifier.materialize_wind(atlas)
+
     def test_inputs_id_differs_for_different_defaults(self, tmp_path: Path) -> None:
         """inputs_id differs when default turbines change."""
         # Create two atlas instances with different default turbines

@@ -1,16 +1,141 @@
 # %% imports
 import json
+import datetime
+import logging
+from pathlib import Path
+
 import zarr
 import numpy as np
 import xarray as xr
 
+from cleo.dask_utils import compute as dask_compute
 
-# %% MetricResult wrapper for compute(...).cache() pattern
-class MetricResult:
+logger = logging.getLogger(__name__)
+
+
+def validate_result_path_token(value: str, *, field: str) -> str:
+    """Validate a run/metric token used in result-store filesystem paths."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string, got {type(value).__name__}.")
+    if value != value.strip() or not value:
+        raise ValueError(f"{field} cannot be empty or have leading/trailing whitespace.")
+    if "/" in value or "\\" in value:
+        raise ValueError(f"{field} cannot contain path separators: {value!r}")
+    if value in {".", ".."}:
+        raise ValueError(f"{field} cannot be {value!r}.")
+    if Path(value).is_absolute():
+        raise ValueError(f"{field} must be a relative token, got absolute path: {value!r}")
+    return value
+
+
+def result_run_dir_path(*, results_root: Path, run_id: str) -> Path:
+    """Return validated run directory path under ``results_root``."""
+    run_id_n = validate_result_path_token(run_id, field="run_id")
+    root = Path(results_root).resolve()
+    run_dir = (root / run_id_n).resolve()
+    if root not in run_dir.parents and run_dir != root:
+        raise ValueError(f"run_id resolves outside results_root: {run_id!r}")
+    return run_dir
+
+
+def result_store_path(*, results_root: Path, run_id: str, metric_name: str) -> Path:
+    """Return validated result store path under ``results_root``."""
+    metric_n = validate_result_path_token(metric_name, field="metric_name")
+    run_dir = result_run_dir_path(results_root=results_root, run_id=run_id)
+    store_path = (run_dir / f"{metric_n}.zarr").resolve()
+    root = Path(results_root).resolve()
+    if root not in store_path.parents and store_path != root:
+        raise ValueError(
+            f"result store path resolves outside results_root: run_id={run_id!r}, metric_name={metric_name!r}"
+        )
+    return store_path
+
+
+def persist_result(
+    atlas,
+    metric_name: str,
+    obj,
+    *,
+    run_id: str | None = None,
+    params: dict | None = None,
+) -> Path:
+    """Persist a result dataset/dataarray to a Zarr store.
+
+    Creates an atomic Zarr store under ``<results_root>/<run_id>/<metric_name>.zarr``.
+    This helper is the canonical persistence path used by fluent result APIs.
     """
-    Wrapper for computed metric results supporting .cache() pattern.
+    from cleo.store import atomic_dir
 
-    Allows chaining: atlas.wind.compute(...).cache()
+    if run_id is None:
+        run_id = atlas.new_run_id()
+
+    store_path = result_store_path(
+        results_root=Path(atlas.results_root),
+        run_id=run_id,
+        metric_name=metric_name,
+    )
+    if store_path.exists():
+        raise FileExistsError(
+            f"Result store already exists: {store_path}. "
+            f"Use a different run_id or metric_name."
+        )
+
+    if isinstance(obj, xr.DataArray):
+        da = obj
+        if da.name is None:
+            da = da.rename(metric_name)
+        ds = da.to_dataset()
+    else:
+        ds = obj
+
+    evaluator = getattr(atlas, "_evaluate_for_io", None)
+    if callable(evaluator):
+        ds = evaluator(ds)
+    else:
+        backend = getattr(atlas, "compute_backend", "serial")
+        workers = getattr(atlas, "compute_workers", None)
+        ds = dask_compute(ds, backend=backend, num_workers=workers)
+
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with atomic_dir(store_path) as tmp:
+        ds.to_zarr(tmp, mode="w", consolidated=False)
+
+        g = zarr.open_group(tmp, mode="a")
+        g.attrs["store_state"] = "complete"
+        g.attrs["run_id"] = run_id
+        g.attrs["metric_name"] = metric_name
+        g.attrs["created_at"] = datetime.datetime.now(
+            datetime.timezone.utc
+        ).isoformat()
+        if params is not None:
+            g.attrs["params_json"] = json.dumps(
+                params, sort_keys=True, separators=(",", ":")
+            )
+
+        try:
+            if getattr(atlas, "_canonical_ready", False):
+                w = atlas.wind_zarr
+                l = atlas.landscape_zarr
+                g.attrs["wind_grid_id"] = w.attrs.get("grid_id", "")
+                g.attrs["landscape_grid_id"] = l.attrs.get("grid_id", "")
+        except Exception:
+            logger.debug(
+                "Failed to attach canonical provenance attrs to persisted result store.",
+                exc_info=True,
+            )
+
+    return store_path
+
+
+# %% DomainResult wrapper for compute(...).cache()/persist() pattern
+class DomainResult:
+    """
+    Wrapper for computed domain results supporting .cache()/.persist() pattern.
+
+    Allows chaining, e.g.:
+    - ``atlas.wind.compute(...).cache()``
+    - ``atlas.wind.compute(...).persist(run_id=...)``
     """
 
     def __init__(self, domain: "WindDomain", metric: str, data: xr.DataArray, params: dict):
@@ -23,6 +148,25 @@ class MetricResult:
     def data(self) -> xr.DataArray:
         """Access the computed DataArray (lazy)."""
         return self._data
+
+    def persist(
+        self,
+        *,
+        run_id: str | None = None,
+        params: dict | None = None,
+        metric_name: str | None = None,
+    ) -> Path:
+        """Persist this result as a standalone run artifact."""
+        atlas = self._domain._atlas
+        name = metric_name if metric_name is not None else self._metric
+        payload_params = self._params if params is None else params
+        return persist_result(
+            atlas,
+            name,
+            self._data,
+            run_id=run_id,
+            params=payload_params,
+        )
 
     def cache(self, *, overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray:
         """
@@ -72,6 +216,13 @@ class MetricResult:
         full_turbine_indices = list(range(n_turbines))
 
         da = self._data.copy()
+        evaluator = getattr(atlas, "_evaluate_for_io", None)
+        if callable(evaluator):
+            da = evaluator(da)
+        else:
+            backend = getattr(atlas, "compute_backend", "serial")
+            workers = getattr(atlas, "compute_workers", None)
+            da = dask_compute(da, backend=backend, num_workers=workers)
 
         # Handle turbine dimension: expand to full turbine set with NaN for uncomputed
         if "turbine" in da.dims:

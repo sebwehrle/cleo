@@ -3,7 +3,7 @@
 Tests verify:
 - atlas.select(region=...) persists region selection
 - Region stores are created with smaller y/x than country stores
-- MetricResult.cache() writes to region store (not country store)
+- DomainResult.cache() writes to region store (not country store)
 - atlas.wind.data surfaces data from region store when region selected
 
 Offline-only: uses local synthetic fixtures with no network calls.
@@ -379,10 +379,10 @@ class TestRegionStores:
 
 
 class TestRegionCaching:
-    """Tests for MetricResult.cache() with region selection."""
+    """Tests for DomainResult.cache() with region selection."""
 
     def test_cache_writes_to_region_store(self, region_atlas: Atlas) -> None:
-        """MetricResult.cache() writes to region store, not base store."""
+        """DomainResult.cache() writes to region store, not base store."""
         atlas = region_atlas
 
         # Materialize base stores first

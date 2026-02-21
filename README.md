@@ -1,361 +1,272 @@
 # CLEO
 
-CLEO is an **xarray-based** Python package for wind resource assessment using the **Global Wind Atlas (GWA)**.
-It downloads (once) country rasters into a local work directory, builds a canonical grid, and computes wind-energy metrics
-such as Weibull PDFs, capacity factors, and LCOE.
-
-Design principles:
-
-- **Explicit IO, deterministic compute:** network downloads happen during `materialize()` (or explicit loader calls), not inside compute methods.
-- **Local, explicit prerequisites:** higher-level computations trigger required *derived* prerequisites when needed.
-- **Reproducible & cacheable:** results live in `xarray.Dataset`s with stable coordinates; repeated calls can skip recomputation when inputs/parameters match.
-- **Workdir-first resources:** packaged YAML resources (turbines, costs, land cover codes) are deployed into your workdir for inspection/override.
-- **Optional Dask:** CLEO works without Dask; when enabled explicitly, it supports chunked, parallel execution for large rasters.
-
----
+CLEO is an `xarray`-based Python package for wind resource assessment with Global Wind Atlas (GWA) inputs.
+It materializes canonical Zarr stores, computes wind metrics, and persists/export results.
 
 ## Installation
-
-From a local checkout:
 
 ```bash
 python -m pip install -e .
 ```
 
-Optional (recommended for large rasters): install Dask support (chunking + parallel execution).  
-If your project defines extras, prefer the package extra; otherwise install Dask directly:
-
-```bash
-python -m pip install "dask[array]"
-```
-
-(For distributed clusters, install `dask[distributed]`.)
-
----
-
-## Quick start
-
-```python
-from cleo import Atlas
-
-atlas = Atlas("/path/to/cleo-workdir", country="AUT", crs="EPSG:3035")
-
-# First-time setup: downloads required raw inputs (GWA rasters, NUTS) and builds base NetCDF scaffolds
-atlas.materialize()
-
-# Add one or more turbine models (YAML expected at <workdir>/resources/<turbine>.yml)
-atlas.add_turbine("Vestas.V150.4200")
-
-# Derived metrics
-atlas.wind.compute_wind_shear_coefficient()
-atlas.wind.compute_mean_wind_speed(100)
-
-# Capacity factors (hub-height Weibull + optional air-density correction)
-atlas.wind.simulate_capacity_factors(
-    weibull_height_mode="hub",
-    air_density_mode="gwa",   # loads local GWA air-density GeoTIFFs; no network during compute
-)
-
-# LCOE (uses cost assumptions YAML in <workdir>/resources/cost_assumptions.yml)
-atlas.wind.compute_lcoe()
-```
-
-Notes:
-
-- `country` is an **ISO-3166 alpha-3** country code used by the GWA endpoints (e.g. `AUT`).
-- `crs` is the target CRS for the processed atlas grid (e.g. `EPSG:3035` or `EPSG:4326`).
-
----
-
-## Atlas model
-
-The public API is centered around the `Atlas` class:
-
-- `atlas.wind` is a WindAtlas holding wind resource data and derived products.
-- `atlas.landscape` is a LandscapeAtlas holding supporting spatial characteristics (e.g., NUTS shapes).
-- Both are backed by `xarray.Dataset`s:
-  - `atlas.wind.data`
-  - `atlas.landscape.data`
-
-### Workdir layout
-
-CLEO uses the following structure:
-
-- `<workdir>/resources/`
-  - YAML resources deployed from the package (not overwritten if you edit them).
-- `<workdir>/data/raw/<ISO3>/`
-  - Downloaded GWA rasters (GeoTIFF).
-- `<workdir>/data/nuts/`
-  - Downloaded/extracted NUTS shapefiles for region clipping.
-- `<workdir>/data/processed/`
-  - NetCDF outputs for WindAtlas and LandscapeAtlas (optionally versioned by scenario/timestamp).
-- `<workdir>/data/index.jsonl`
-  - Append-only index used by `save()` / `load()` for version selection.
-- `<workdir>/logs/`
-  - Log output.
-
----
-
-## Dask support (chunking + parallel execution)
-
-CLEO supports **optional** Dask usage for:
-- **Chunking** large rasters (GeoTIFF and NetCDF-backed datasets).
-- **Parallel execution** when you explicitly request execution of lazy results.
-
-Two separate ideas matter:
-
-1) **Chunking** (how data is represented)
-- If data is opened with `chunks=...`, `xarray` will use Dask-backed arrays internally.
-- If `chunks=None`, arrays are typically NumPy-backed (eager). Dask schedulers have nothing to schedule in that case.
-
-2) **Execution mode** (when work actually runs)
-- Many operations build a lazy task graph when arrays are Dask-backed.
-- Work runs when you explicitly execute (or when an output operation triggers execution).
-
-### Unified Dask configuration
-
-CLEO uses a unified configuration object (stored on the Atlas) and allows per-call overrides:
-
-- **Atlas default:** configured at `Atlas(...)` construction, stored as `atlas.dask_cfg`.
-- **Method override:** heavy compute methods accept `dask=...` to override the Atlas default for that call.
-
-Configuration fields:
-
-- `use_dask`: `False | True | "auto"`
-  - `False`: never use Dask.
-  - `True`: require Dask to be installed.
-  - `"auto"`: enable Dask only if installed.
-- `chunks`: `None | "auto" | dict[str,int]`
-  - `None`: do not chunk (typically eager arrays).
-  - `"auto"`: let xarray choose chunking (only when Dask is enabled).
-  - `{"y": 1024, "x": 1024}`: explicit chunk sizes.
-- `scheduler`: `None | "threads" | "processes" | "single-threaded" | "distributed"`
-  - Used when executing graphs (see `execute` below).
-  - `"distributed"` requires an active `dask.distributed.Client` (see below).
-- `execute`: `"lazy" | "eager" | "cached"`
-  - `"lazy"`: store results without executing (keeps laziness if Dask-backed).
-  - `"eager"`: execute immediately and store NumPy-backed results.
-  - `"cached"`: execute immediately but keep Dask-backed cached results (`persist`).
-
-### Example: enable chunking at Atlas creation
+## Quick Start
 
 ```python
 from cleo import Atlas
 
 atlas = Atlas(
-    "/path/to/cleo-workdir",
-    country="AUT",
+    "/path/to/workdir",
+    country="AUT",      # ISO-3166 alpha-3
     crs="EPSG:3035",
-    use_dask="auto",
-    chunks={"y": 1024, "x": 1024},
-    scheduler="threads",
-    execute="lazy",
 )
+
+# Optional: restrict materialized turbines to an explicit subset
+atlas.configure_turbines(["Enercon.E40.500", "Vestas.V100.2000"])
+
+# Build/update canonical stores (wind.zarr + landscape.zarr)
 atlas.materialize()
+
+# Select turbines for compute calls that require turbines
+atlas.wind.select(turbines=["Enercon.E40.500"])
+
+# Compute + cache into active wind store
+atlas.wind.capacity_factors(mode="hub", air_density=True).cache()
+
+# Compute another metric
+mean_ws = atlas.wind.mean_wind_speed(height=100).data
 ```
 
-### Example: execute a computation immediately (parallel) and store eager results
+## Workspace Layout
+
+After materialization, CLEO uses:
+
+- `<workdir>/wind.zarr`
+- `<workdir>/landscape.zarr`
+- `<workdir>/regions/<region_id>/wind.zarr` (only after region selection/materialization)
+- `<workdir>/regions/<region_id>/landscape.zarr`
+- `<workdir>/results/<run_id>/<metric_name>.zarr` (only after `persist`)
+- `<workdir>/resources/*.yml`
+- `<workdir>/data/raw/<ISO3>/*.tif`
+- `<workdir>/data/nuts/*`
+
+## Public API
+
+### Atlas Construction
 
 ```python
-from cleo.dask_utils import DaskConfig
-
-atlas.wind.simulate_capacity_factors(
-    weibull_height_mode="hub",
-    air_density_mode="gwa",
-    dask=DaskConfig(execute="eager", scheduler="threads"),
+Atlas(
+    path,
+    country,
+    crs,
+    *,
+    chunk_policy: dict[str, int] | None = None,
+    compute_backend: str = "serial",
+    compute_workers: int | None = None,
+    region: str | None = None,
+    results_root: Path | None = None,
+    fingerprint_method: str = "path_mtime_size",
 )
 ```
 
-### Example: keep results lazy but cache chunks for reuse
+Options:
+
+- `path`: workspace root for stores/resources/results.
+- `country`: ISO3 country code (for GWA/raw data resolution).
+- `crs`: canonical projected CRS for the atlas stores.
+- `chunk_policy`: xarray/dask chunk sizes for `y/x`.
+- `compute_backend`: compute execution backend for internal eager materialization (`"serial"|"threads"|"processes"|"distributed"`).
+- `compute_workers`: optional worker count for local dask backends (`threads`/`processes`).
+  Use `None` for dask defaults. Must be `None` or `1` for `serial`. Must be `None` for `distributed` (configure workers on the active client).
+- `region`: optional initial region selection.
+- `results_root`: optional custom results directory.
+- `fingerprint_method`: hashing/fingerprinting policy used by unification internals.
+
+Good for:
+
+- Creating a reproducible atlas workspace with explicit compute/storage policy.
+
+### Lifecycle and Region Selection
+
+`atlas.materialize()`
+- Builds/updates canonical stores and selected region stores.
+- Good for normal day-to-day workflow.
+
+`atlas.materialize_canonical()`
+- Builds/updates only base country stores (`wind.zarr`, `landscape.zarr`).
+- Good for preparing a base before region-specific work.
+
+`atlas.select(region=..., region_level=None, inplace=False)`
+- `region`: region name or `None` (clear selection).
+- `region_level`: optional NUTS level (1/2/3) disambiguation.
+- `inplace`: if `True`, mutates atlas; otherwise returns a selected copy.
+- Good for switching scope between full-country and region-scoped analysis.
+
+`atlas.region`
+- Current selected region name (`None` means full-country).
+
+`atlas.nuts_regions` / `atlas.nuts_regions_level(level)`
+- Discover available region names (all levels or one specific level).
+
+### Domains and Data Access
+
+`atlas.wind` / `atlas.landscape`
+- Domain facades for compute/load operations.
+
+`atlas.wind_data` / `atlas.landscape_data`
+- Direct dataset access shortcuts.
+
+`atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True)`
+- `domain`: select source dataset(s).
+- `digits`: coordinate rounding precision for `(y, x)` index.
+- `exclude_template`: omit template variable from output columns.
+- `include_domain_prefix`: for `domain="both"`, prefix columns with `wind__` / `landscape__`.
+- Good for exporting tidy tabular data (e.g. econometric pipelines).
+
+### WindDomain APIs
+
+`atlas.wind.turbines`
+- Tuple of available turbine IDs in the active store.
+
+`atlas.wind.selected_turbines`
+- Persistent turbine selection or `None` (all turbines).
+
+`atlas.wind.select(turbines=[...])`
+- Set persistent turbine selection for future turbine-dependent metrics.
+
+`atlas.wind.clear_selection()`
+- Clear persistent selection.
+
+`atlas.wind.compute(metric, **kwargs)`
+- Generic metric entrypoint.
+- Good for dynamic metric dispatch.
+
+`atlas.wind.mean_wind_speed(height, **kwargs)`
+- Convenience wrapper for `compute("mean_wind_speed", ...)`.
+
+`atlas.wind.capacity_factors(turbines=None, height=100, air_density=False, loss_factor=1.0, **kwargs)`
+- Convenience wrapper for `compute("capacity_factors", ...)`.
+
+`compute(...)` returns `DomainResult`:
+
+- `.data`
+  - Lazy/eager xarray `DataArray` depending on backing.
+- `.cache(overwrite=True, allow_mode_change=False)`
+  - `overwrite`: replace existing variable in active wind store.
+  - `allow_mode_change`: required when replacing cached `capacity_factors` with different mode (`hub` vs `rews`).
+  - Good for making results part of active domain state.
+- `.persist(run_id=None, params=None, metric_name=None)`
+  - `run_id`: explicit run id (or auto-generate).
+  - `params`: metadata dict to store in attrs.
+  - `metric_name`: override default metric variable name.
+  - Good for run-tracked artifacts under `results_root`.
+
+### Supported Wind Metrics
+
+- `mean_wind_speed`
+  - Required: `height` (int)
+- `capacity_factors`
+  - Requires turbines via selection or `turbines=[...]`
+  - Optional: `mode="hub"|"rews"`, `rews_n`, `air_density`, `loss_factor`
+- `lcoe`
+  - Requires turbines and:
+  - `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`
+  - Optional: `turbine_cost_share`, `hours_per_year`, plus capacity-factor options
+- `min_lcoe_turbine`
+- `optimal_power`
+- `optimal_energy`
+
+### LandscapeDomain APIs
+
+`atlas.landscape.data`
+- Active landscape dataset.
+
+`atlas.landscape.add(name, source_path, *, kind="raster", params=None, materialize=True, if_exists="error")`
+- `name`: output variable name in landscape store.
+- `source_path`: input source path.
+- `kind`: currently only `"raster"`.
+- `params`: source-specific params (e.g. `{"categorical": True}`).
+- `materialize`: if `True`, immediately writes variable into landscape store.
+- `if_exists`: `"error"|"replace"|"noop"` conflict policy.
+- Good for incrementally enriching landscape layers.
+
+### Results API
+
+`atlas.new_run_id(prefix=None)`
+- Creates sortable run ID string; optional safe prefix.
+
+`atlas.persist(metric_name, obj, run_id=None, params=None)` (transitional low-level API)
+- Persists arbitrary `Dataset`/`DataArray` into results store.
+- Prefer fluent `DomainResult.persist(...)` when available.
+- `run_id` and `metric_name` must be simple path tokens (no `/`, `\\`, `.` or `..`).
+
+`atlas.open_result(run_id, metric_name)`
+- Opens a persisted result store lazily.
+- `run_id` and `metric_name` use the same path-token validation as `persist`.
+
+`atlas.export_result_netcdf(run_id, metric_name, out_path, encoding=None)`
+- Exports a persisted result store to `.nc`.
+- `encoding`: optional xarray encoding overrides.
+- `run_id` and `metric_name` use the same path-token validation as `persist`.
 
 ```python
-from cleo.dask_utils import DaskConfig
-
-atlas.wind.simulate_capacity_factors(
-    weibull_height_mode="hub",
-    air_density_mode="gwa",
-    dask=DaskConfig(execute="cached", scheduler="threads"),
-)
+run = atlas.wind.compute("capacity_factors", mode="hub", air_density=True)
+store_path = run.persist(run_id="baseline")
+opened = atlas.open_result(store_path.parent.name, "capacity_factors")
+atlas.export_result_netcdf(store_path.parent.name, "capacity_factors", "cf.nc")
 ```
 
-### Scheduler warning (guidance)
+### Cleanup APIs
 
-If you request a parallel scheduler (`"threads"` / `"processes"`) while **not chunking** (`chunks=None`), results are usually **not**
-Dask-backed and the scheduler cannot be applied. In this case CLEO emits a warning like:
+`atlas.clean_results(run_id=None, older_than=None, metric_name=None)`
+- Remove persisted result stores by run/age/metric filters.
+- When provided, `run_id`/`metric_name` use the same path-token validation as `persist`.
 
-- "scheduler='threads' requested but result is not dask-backed (chunks=None); scheduler will be ignored. Set chunks …"
+`atlas.clean_regions(region=None, older_than=None, include_incomplete=True)`
+- Remove materialized region stores under `<workdir>/regions`.
+- `include_incomplete=False` keeps partial/incomplete region stores untouched.
 
-To benefit from Dask parallelism on large rasters, enable chunking (`chunks="auto"` or a dict).
+## Dask and Chunking
 
-### Distributed scheduler
+CLEO does not expose a `DaskConfig` object in the public API.
+Chunking behavior is controlled by `chunk_policy` and by how xarray opens data.
 
-CLEO supports the `dask.distributed` scheduler for cluster-based parallelism. Key requirements:
-
-1. **Install `dask[distributed]`:**
-   ```bash
-   pip install "dask[distributed]"
-   ```
-
-2. **Start a Client outside CLEO:**
-   CLEO does **not** create or manage distributed clusters/clients. You must start a client before calling CLEO methods:
-   ```python
-   from dask.distributed import Client
-   client = Client()  # local cluster, or connect to existing cluster
-   ```
-
-3. **Use `scheduler="distributed"`:**
-   ```python
-   from cleo.dask_utils import DaskConfig
-
-   atlas.wind.simulate_capacity_factors(
-       weibull_height_mode="hub",
-       air_density_mode="gwa",
-       dask=DaskConfig(
-           chunks={"y": 1024, "x": 1024},
-           execute="eager",
-           scheduler="distributed",
-       ),
-   )
-   ```
-
-4. **Dashboard link logging:**
-   When `execute` is `"eager"` or `"cached"` and `scheduler="distributed"`, CLEO logs:
-   ```
-   INFO:cleo.assess:Dask dashboard: http://127.0.0.1:8787/status
-   ```
-   The link can change if the cluster restarts; CLEO does **not** persist or store it.
-
-If no active client exists when `scheduler="distributed"` is used, CLEO raises a clear `RuntimeError` with guidance.
-
----
-
-## Turbines and YAML resources
-
-Packaged turbine definitions live in `cleo/resources/*.yml` and are deployed to:
-
-- `<workdir>/resources/<turbine_name>.yml`
-
-Add a turbine by name:
+- If `dask` is installed and arrays are chunked, computations can remain lazy.
+- If data is unchunked/eager, computations execute eagerly.
+- For local schedulers, set `compute_workers` on `Atlas(...)` to cap worker count.
+- `compute_backend="distributed"` requires an active `dask.distributed.Client`.
+  In distributed mode, worker count is managed by the client/cluster (not `Atlas`).
+  If no active client exists, CLEO raises a clear `RuntimeError`.
+  Local worker cap example:
 
 ```python
-atlas.add_turbine("Enercon.E115.3000")
+atlas = Atlas(..., compute_backend="processes", compute_workers=4)
 ```
-
-To add your own turbine:
-
-1. Create `<workdir>/resources/MyMaker.MyModel.yml` (follow the existing turbine YAML structure).
-2. Call `atlas.add_turbine("MyMaker.MyModel")`.
-
----
-
-## Wind resource assessment
-
-All wind assessment methods are called on `atlas.wind`.
-
-### Wind shear coefficient
+  Typical setup:
 
 ```python
-atlas.wind.compute_wind_shear_coefficient()
+from dask.distributed import Client
+Client()  # start and register active client
+atlas = Atlas(..., compute_backend="distributed")
 ```
 
-### Mean wind speed at height
+## Remaining Issues
 
-```python
-atlas.wind.compute_mean_wind_speed(100)
-```
+These are known and intentionally left as follow-up work:
 
-### Weibull PDF
-
-```python
-atlas.wind.compute_weibull_pdf()
-```
-
-### Capacity factors
-
-```python
-atlas.wind.simulate_capacity_factors(
-    weibull_height_mode="hub",
-    air_density_mode="none",  # or "gwa"
-)
-```
-
-Key modes:
-
-- `weibull_height_mode="hub"`:
-  - Interpolates GWA Weibull parameters to hub height and computes the PDF at hub height.
-- `weibull_height_mode="100m_shear"` (legacy):
-  - Uses the 100 m Weibull PDF and shear scaling for hub-height adjustment.
-
-Air density correction (`air_density_mode="gwa"`) uses local GWA air-density rasters and the equivalent wind-speed mapping
-
-\[
-u_{eq} = u \left(\frac{\rho}{\rho_0}\right)^{1/3},
-\qquad \rho_0 = 1.225\ \mathrm{kg/m^3}.
-\]
-
-Air density contract (important):
-
-- **No network downloads during compute.**
-- `air_density_mode="gwa"` loads local GeoTIFFs from `<workdir>/data/raw/<ISO3>/` via the package loaders.
-- Interpolation requires **at least two** available GWA air-density height levels (from the package’s `GWA_HEIGHTS`, e.g. 50/100/150/200 m).
-- If required raw files are missing, CLEO raises an actionable `FileNotFoundError` (run `atlas.materialize()` first).
-
-### LCOE
-
-```python
-lcoe = atlas.wind.compute_lcoe()
-```
-
-LCOE uses cost assumptions from:
-
-- `<workdir>/resources/cost_assumptions.yml`
-
----
-
-## Spatial operations
-
-### Clip to NUTS region
-
-```python
-atlas.clip_to_nuts("Wien")
-atlas.clip_to_nuts(["Wien", "Niederösterreich"], merged_name="W + NÖ")
-```
-
-This clips both `atlas.wind.data` and `atlas.landscape.data` to the chosen shape and sets `atlas.region`.
-
----
-
-## Persistence and versioning
-
-### Save
-
-```python
-atlas.save()
-atlas.save(scenario="my_scenario")
-```
-
-### Load
-
-```python
-atlas.load()  # load latest
-atlas.load(scenario="my_scenario")
-atlas.load(scenario="my_scenario", timestamp="2026-02-08T12-34-56")
-```
-
-(Timestamp formats follow what was written by `save()`.)
-
----
+- Broad exception handling (`except Exception`) still exists in several internal modules (`atlas`, `unify`, `spatial`, `loaders`) and can hide root causes.
+- `loaders.add_corine_land_cover` remains experimental and contains TODO-marked performance/workflow gaps.
+- Core orchestration modules are large (`unify.py`, `atlas.py`) and could be split to reduce maintenance risk.
 
 ## Testing
 
-From repository root:
+Test suite location:
+
+- `tests/unit/`
+- `tests/integration/`
+- `tests/smoke/`
+
+Run:
 
 ```bash
-pytest -q
+python -m pytest tests/ -v
 ```
-
----
-
-## License
-
-MIT License. See `LICENSE.md`.

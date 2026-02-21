@@ -209,6 +209,20 @@ class TestPersistAndOpenResult:
         with pytest.raises(FileNotFoundError, match="not found"):
             atlas.open_result("nonexistent-run", "nonexistent-metric")
 
+    def test_persist_rejects_path_traversal_tokens(self, atlas: Atlas) -> None:
+        ds_in = xr.Dataset({"a": ("x", [1, 2, 3])})
+
+        with pytest.raises(ValueError, match="run_id"):
+            atlas.persist("m", ds_in, run_id="../escape")
+        with pytest.raises(ValueError, match="metric_name"):
+            atlas.persist("../metric", ds_in, run_id=atlas.new_run_id("safe"))
+
+    def test_open_result_rejects_path_traversal_tokens(self, atlas: Atlas) -> None:
+        with pytest.raises(ValueError, match="run_id"):
+            atlas.open_result("../escape", "m")
+        with pytest.raises(ValueError, match="metric_name"):
+            atlas.open_result("run", "../metric")
+
 
 class TestPersistCollision:
     """Tests for persist collision detection."""
@@ -287,3 +301,12 @@ class TestExportResultNetcdfStringCoords:
         assert list(vals) == ["turbA", "turbB"]
 
         ds_nc.close()
+
+    def test_export_result_rejects_path_traversal_tokens(self, tmp_path: Path) -> None:
+        atlas = Atlas(tmp_path, "AUT", "epsg:3035")
+
+        out_nc = tmp_path / "out.nc"
+        with pytest.raises(ValueError, match="run_id"):
+            atlas.export_result_netcdf("../escape", "m", out_nc)
+        with pytest.raises(ValueError, match="metric_name"):
+            atlas.export_result_netcdf("run", "../metric", out_nc)

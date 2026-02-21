@@ -322,7 +322,8 @@ def _wind_metric_min_lcoe_turbine(
 
     idx = min_lcoe_turbine_idx(lcoe=lcoe, turbine_ids=turbines)
 
-    # valid_mask already applied via CF -> LCOE -> idx (NaN propagates)
+    # valid_mask already applied via CF -> LCOE.
+    # All-NaN pixels are encoded as nodata index (-1) in assess.min_lcoe_turbine_idx.
     return idx
 
 
@@ -368,7 +369,7 @@ def _wind_metric_optimal_power(
 
     p = optimal_power_kw(lcoe=lcoe, power_kw=power_kw)
 
-    # valid_mask already applied via CF -> LCOE -> p (NaN propagates)
+    # valid_mask already applied via CF -> LCOE; all-NaN pixels remain NaN.
     return p
 
 

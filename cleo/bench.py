@@ -13,7 +13,9 @@ from importlib.metadata import PackageNotFoundError, version
 from time import perf_counter, sleep
 from typing import Any, Callable
 
+import numpy as np
 import pandas as pd
+from cleo.unification.vertical_policy import canonical_json_dumps, sha256_hex_from_json
 
 try:
     import psutil  # type: ignore
@@ -429,3 +431,127 @@ def benchmark_metric_variants(
     out["speedup_vs_baseline"] = speedup_col
     out["baseline_label"] = baseline_label
     return out
+
+
+def evaluate_cf_mode_acceptance(
+    df: pd.DataFrame,
+    *,
+    baseline_col: str = "cf_direct",
+    candidate_col: str = "cf_candidate",
+    turbine_col: str = "turbine_id",
+    terrain_bin_col: str = "terrain_bin",
+    median_threshold: float = 0.0025,
+    p95_threshold: float = 0.0100,
+    min_valid_pixels_global: int = 10_000,
+    min_valid_pixels_per_turbine: int = 2_000,
+    min_valid_pixels_per_bin: int = 2_000,
+    insufficient_sample_policy: str = "fail",
+) -> pd.DataFrame:
+    """Evaluate acceptance thresholds for CF mode deltas across strata.
+
+    Input dataframe contract:
+    - must contain columns ``baseline_col`` and ``candidate_col``.
+    - may contain ``turbine_col`` and ``terrain_bin_col`` for stratified checks.
+
+    Output columns:
+    - ``stratum``: ``global`` | ``per_turbine`` | ``per_bin``
+    - ``stratum_key``: ``__all__`` or group key
+    - ``n_valid``
+    - ``median_abs_delta``
+    - ``p95_abs_delta``
+    - ``status``: ``pass`` | ``fail`` | ``insufficient_sample``
+    """
+    if baseline_col not in df.columns or candidate_col not in df.columns:
+        raise ValueError(
+            f"Dataframe must contain columns {baseline_col!r} and {candidate_col!r}"
+        )
+    if insufficient_sample_policy not in {"fail", "skip"}:
+        raise ValueError("insufficient_sample_policy must be 'fail' or 'skip'")
+
+    work = df.copy()
+    work["delta_abs"] = (work[candidate_col] - work[baseline_col]).abs()
+    work = work[np.isfinite(work["delta_abs"])]
+
+    rows: list[dict[str, Any]] = []
+
+    def _evaluate_group(stratum: str, key: str, series: pd.Series, min_valid: int) -> None:
+        vals = series.to_numpy(dtype=np.float64)
+        n_valid = int(vals.size)
+        if n_valid < int(min_valid):
+            status = "insufficient_sample"
+            if insufficient_sample_policy == "fail":
+                status = "fail"
+            rows.append(
+                dict(
+                    stratum=stratum,
+                    stratum_key=key,
+                    n_valid=n_valid,
+                    median_abs_delta=np.nan,
+                    p95_abs_delta=np.nan,
+                    status=status,
+                )
+            )
+            return
+
+        med = float(np.median(vals))
+        p95 = float(np.quantile(vals, 0.95))
+        status = "pass" if (med <= median_threshold and p95 <= p95_threshold) else "fail"
+        rows.append(
+            dict(
+                stratum=stratum,
+                stratum_key=key,
+                n_valid=n_valid,
+                median_abs_delta=med,
+                p95_abs_delta=p95,
+                status=status,
+            )
+        )
+
+    _evaluate_group("global", "__all__", work["delta_abs"], int(min_valid_pixels_global))
+
+    if turbine_col in work.columns:
+        for key, grp in work.groupby(turbine_col, sort=True):
+            _evaluate_group("per_turbine", str(key), grp["delta_abs"], int(min_valid_pixels_per_turbine))
+
+    if terrain_bin_col in work.columns:
+        for key, grp in work.groupby(terrain_bin_col, sort=True):
+            _evaluate_group("per_bin", str(key), grp["delta_abs"], int(min_valid_pixels_per_bin))
+
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out["median_threshold"] = float(median_threshold)
+        out["p95_threshold"] = float(p95_threshold)
+        out["insufficient_sample_policy"] = insufficient_sample_policy
+    return out
+
+
+def build_benchmark_governance_record(
+    *,
+    benchmark_dataset_id: str,
+    dataset_payload: Any,
+    benchmark_region_mask_id: str,
+    region_mask_payload: Any,
+    benchmark_turbine_set_id: str,
+    turbine_set_payload: Any,
+    policy_snapshot: dict[str, Any],
+    benchmark_random_seed: int | None = None,
+) -> dict[str, Any]:
+    """Build deterministic benchmark-governance IDs/checksums payload."""
+    dataset_checksum = sha256_hex_from_json(dataset_payload)
+    region_checksum = sha256_hex_from_json(region_mask_payload)
+    turbine_checksum = sha256_hex_from_json(turbine_set_payload)
+    policy_checksum = sha256_hex_from_json(policy_snapshot)
+
+    record = {
+        "benchmark_dataset_id": benchmark_dataset_id,
+        "benchmark_dataset_checksum": dataset_checksum,
+        "benchmark_region_mask_id": benchmark_region_mask_id,
+        "benchmark_region_mask_checksum": region_checksum,
+        "benchmark_turbine_set_id": benchmark_turbine_set_id,
+        "benchmark_turbine_set_checksum": turbine_checksum,
+        "benchmark_policy_snapshot_checksum": policy_checksum,
+        "benchmark_random_seed": "none" if benchmark_random_seed is None else int(benchmark_random_seed),
+    }
+    # Stable string can be stored directly in attrs/manifests when needed.
+    record["benchmark_governance_json"] = canonical_json_dumps(record)
+    return record

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,9 @@ import xarray as xr
 import yaml
 
 from cleo.unification.fingerprint import fingerprint_file
+from cleo.unification.vertical_policy import resolve_vertical_policy
+
+logger = logging.getLogger(__name__)
 
 
 def _load_turbine_yaml(yaml_path: Path) -> dict:
@@ -75,6 +79,11 @@ def _ingest_turbines_and_costs(
     """
     resources_dir = Path(atlas.path) / "resources"
 
+    policy = resolve_vertical_policy(getattr(atlas, "vertical_policy", None))
+    tail_policy = str(policy["power_curve_tail_policy"])
+    cutout_source = str(policy["cutout_source"])
+    cutout_default_mps = float(policy["cutout_default_mps"])
+
     # Determine turbines: use configured list or discover from resources
     turbines = atlas.turbines_configured
     if turbines is not None:
@@ -138,9 +147,18 @@ def _ingest_turbines_and_costs(
         commissioning_year = int(data["commissioning_year"])
         model_key = f"{manufacturer}.{model}.{capacity}"
 
-        # Resample power curve to canonical wind_speed grid
-        old_u = np.array(list(map(float, data["V"])))
-        old_p = np.array(list(map(float, data["cf"])))
+        # Validate and normalize source power curve to v0 tail policy.
+        old_u = np.array(list(map(float, data["V"])), dtype=np.float64)
+        old_p = np.array(list(map(float, data["cf"])), dtype=np.float64)
+        old_u, old_p = _normalize_power_curve_for_policy(
+            turbine_id=turbine_id,
+            u=old_u,
+            p=old_p,
+            tail_policy=tail_policy,
+            cutout_source=cutout_source,
+            cutout_default_mps=cutout_default_mps,
+            yaml_data=data,
+        )
         new_p = np.interp(wind_speed, old_u, old_p, left=0.0, right=0.0)
 
         power_curves.append(new_p)
@@ -235,3 +253,96 @@ def _ingest_turbines_and_costs(
         })
 
     return ds, sources, variables
+
+
+def _normalize_power_curve_for_policy(
+    *,
+    turbine_id: str,
+    u: np.ndarray,
+    p: np.ndarray,
+    tail_policy: str,
+    cutout_source: str,
+    cutout_default_mps: float,
+    yaml_data: dict,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate and normalize turbine power curve according to tail policy."""
+    _validate_power_curve_knots(turbine_id=turbine_id, u=u, p=p)
+
+    # Already strict-compatible tail.
+    if np.isclose(float(p[-1]), 0.0, atol=1e-12):
+        return u, p
+
+    if tail_policy == "strict_zero_tail":
+        raise ValueError(
+            f"Turbine {turbine_id!r} power curve must end at zero for strict_zero_tail."
+        )
+    if tail_policy != "auto_append_zero_at_cutout":
+        raise ValueError(f"Unsupported power_curve_tail_policy: {tail_policy!r}")
+
+    cutout = _resolve_cutout_wind_speed(
+        turbine_id=turbine_id,
+        yaml_data=yaml_data,
+        cutout_source=cutout_source,
+        cutout_default_mps=cutout_default_mps,
+        u_max=float(u[-1]),
+    )
+
+    logger.warning(
+        "Auto-appending zero tail to power curve.",
+        extra={"turbine_id": turbine_id, "u_max": float(u[-1]), "u_cutout": float(cutout)},
+    )
+
+    u2 = np.append(u, float(cutout))
+    p2 = np.append(p, 0.0)
+    _validate_power_curve_knots(turbine_id=turbine_id, u=u2, p=p2)
+    return u2, p2
+
+
+def _resolve_cutout_wind_speed(
+    *,
+    turbine_id: str,
+    yaml_data: dict,
+    cutout_source: str,
+    cutout_default_mps: float,
+    u_max: float,
+) -> float:
+    """Resolve cut-out wind speed for auto tail append."""
+    cutout_meta = yaml_data.get("cutout_wind_speed")
+    if cutout_source == "from_turbine_metadata":
+        if cutout_meta is None:
+            cutout = float(cutout_default_mps)
+        else:
+            cutout = float(cutout_meta)
+    elif cutout_source == "constant_default":
+        cutout = float(cutout_default_mps)
+    else:
+        raise ValueError(f"Unsupported cutout_source: {cutout_source!r}")
+
+    if not np.isfinite(cutout):
+        raise ValueError(f"Turbine {turbine_id!r} has non-finite cutout wind speed: {cutout!r}")
+    if cutout <= float(u_max):
+        raise ValueError(
+            f"Turbine {turbine_id!r} cutout_wind_speed ({cutout}) must be > "
+            f"last power-curve wind speed ({u_max}) for auto_append_zero_at_cutout."
+        )
+    return float(cutout)
+
+
+def _validate_power_curve_knots(*, turbine_id: str, u: np.ndarray, p: np.ndarray) -> None:
+    """Validate power-curve knot vectors."""
+    if u.ndim != 1 or p.ndim != 1 or u.size != p.size:
+        raise ValueError(f"Turbine {turbine_id!r} power curve must be 1D with matching lengths.")
+    if u.size < 2:
+        raise ValueError(f"Turbine {turbine_id!r} power curve must have at least 2 knots.")
+    if not np.all(np.isfinite(u)) or not np.all(np.isfinite(p)):
+        raise ValueError(f"Turbine {turbine_id!r} power curve contains non-finite values.")
+    if np.any(u < 0.0):
+        raise ValueError(f"Turbine {turbine_id!r} power curve has negative wind-speed knots.")
+    if np.any(np.diff(u) <= 0.0):
+        raise ValueError(f"Turbine {turbine_id!r} power curve wind-speed knots must be strictly increasing.")
+    if np.any(p < 0.0):
+        raise ValueError(f"Turbine {turbine_id!r} power curve has negative power values.")
+    if np.any(p > 1.0):
+        raise ValueError(
+            f"Turbine {turbine_id!r} power curve has values above rated fraction 1.0."
+        )

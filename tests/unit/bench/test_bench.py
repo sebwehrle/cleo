@@ -6,10 +6,12 @@ import pandas as pd
 import pytest
 
 from cleo.bench import (
+    build_benchmark_governance_record,
     benchmark_callable_variants,
     benchmark_case,
     benchmark_compare,
     benchmark_metric_variants,
+    evaluate_cf_mode_acceptance,
 )
 
 
@@ -363,3 +365,72 @@ def test_benchmark_callable_variants_validates_inputs():
         benchmark_callable_variants(
             variants=[{"label": "bad", "fn": 1}],
         )
+
+
+def test_evaluate_cf_mode_acceptance_global_and_strata_pass():
+    df = pd.DataFrame(
+        {
+            "cf_direct": [0.30, 0.31, 0.32, 0.33],
+            "cf_candidate": [0.301, 0.309, 0.321, 0.331],
+            "turbine_id": ["T1", "T1", "T2", "T2"],
+            "terrain_bin": ["b1", "b1", "b2", "b2"],
+        }
+    )
+    out = evaluate_cf_mode_acceptance(
+        df,
+        min_valid_pixels_global=1,
+        min_valid_pixels_per_turbine=1,
+        min_valid_pixels_per_bin=1,
+    )
+    assert not out.empty
+    assert set(out["stratum"]) == {"global", "per_turbine", "per_bin"}
+    assert (out["status"] == "pass").all()
+
+
+def test_evaluate_cf_mode_acceptance_insufficient_sample_fail_policy():
+    df = pd.DataFrame({"cf_direct": [0.2], "cf_candidate": [0.21], "turbine_id": ["T1"]})
+    out = evaluate_cf_mode_acceptance(
+        df,
+        min_valid_pixels_global=10,
+        min_valid_pixels_per_turbine=10,
+        insufficient_sample_policy="fail",
+    )
+    assert (out["status"] == "fail").all()
+
+
+def test_evaluate_cf_mode_acceptance_insufficient_sample_skip_policy():
+    df = pd.DataFrame({"cf_direct": [0.2], "cf_candidate": [0.21], "turbine_id": ["T1"]})
+    out = evaluate_cf_mode_acceptance(
+        df,
+        min_valid_pixels_global=10,
+        min_valid_pixels_per_turbine=10,
+        insufficient_sample_policy="skip",
+    )
+    assert (out["status"] == "insufficient_sample").all()
+
+
+def test_build_benchmark_governance_record_is_deterministic():
+    payload = dict(a=1, b=[2, 3])
+    rec1 = build_benchmark_governance_record(
+        benchmark_dataset_id="ds_v1",
+        dataset_payload=payload,
+        benchmark_region_mask_id="mask_v1",
+        region_mask_payload={"mask": [1, 0, 1]},
+        benchmark_turbine_set_id="ts_v1",
+        turbine_set_payload=["T1", "T2"],
+        policy_snapshot={"cf_mode": "direct_cf_quadrature"},
+        benchmark_random_seed=None,
+    )
+    rec2 = build_benchmark_governance_record(
+        benchmark_dataset_id="ds_v1",
+        dataset_payload=payload,
+        benchmark_region_mask_id="mask_v1",
+        region_mask_payload={"mask": [1, 0, 1]},
+        benchmark_turbine_set_id="ts_v1",
+        turbine_set_payload=["T1", "T2"],
+        policy_snapshot={"cf_mode": "direct_cf_quadrature"},
+        benchmark_random_seed=None,
+    )
+    assert rec1 == rec2
+    assert rec1["benchmark_random_seed"] == "none"
+    assert len(rec1["benchmark_dataset_checksum"]) == 64

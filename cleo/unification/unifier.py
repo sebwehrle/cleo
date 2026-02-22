@@ -62,6 +62,12 @@ from cleo.unification.turbines import (
     _default_turbines_from_resources,
     _ingest_turbines_and_costs,
 )
+from cleo.unification.vertical_policy import (
+    HASH_ALGORITHM,
+    HASH_SCHEMA_VERSION,
+    checksum_float64_le,
+    policy_snapshot,
+)
 
 # NOTE: cleo.loaders is imported only inside methods that need it,
 # keeping the import boundary explicit. No re-exports for external use.
@@ -178,6 +184,7 @@ class Unifier:
         target_crs = atlas.crs
         chunk_policy = getattr(atlas, "chunk_policy", self.chunk_policy) or {"y": 1024, "x": 1024}
         mask_policy = "nan+valid_mask_in_landscape"
+        vertical_policy_snapshot = policy_snapshot(getattr(atlas, "vertical_policy", None))
 
         # 1. Validate all required GWA files exist (fail fast)
         req_files = _assert_all_required_gwa_present(atlas)
@@ -400,6 +407,11 @@ class Unifier:
                 content_hash = hashlib.sha256(yaml_path.read_bytes()).hexdigest()
                 turbine_sha256_list.append({"turbine_id": tid, "sha256": content_hash})
         input_items.append(("turbines_sha256", _stable_json(turbine_sha256_list)))
+        input_items.append(("vertical_policy_sha256", vertical_policy_snapshot["sha256"]))
+        input_items.append(("wind_speed_grid_len", str(int(ds["wind_speed"].size))))
+        input_items.append(("wind_speed_grid_checksum", checksum_float64_le(ds["wind_speed"].values)))
+        input_items.append(("hash_algorithm", HASH_ALGORITHM))
+        input_items.append(("hash_schema_version", HASH_SCHEMA_VERSION))
 
         inputs_id = hash_inputs_id(input_items, self.fingerprint_method)
 
@@ -441,6 +453,13 @@ class Unifier:
                 root.attrs["git_diff_hash"] = git_info["git_diff_hash"]
             root.attrs["chunk_policy"] = json.dumps(chunk_policy)
             root.attrs["fingerprint_method"] = self.fingerprint_method
+            root.attrs["cleo_vertical_policy_json"] = vertical_policy_snapshot["json"]
+            root.attrs["cleo_vertical_policy_checksum"] = vertical_policy_snapshot["sha256"]
+            root.attrs["wind_speed_grid_len"] = int(ds["wind_speed"].size)
+            root.attrs["wind_speed_grid_checksum"] = checksum_float64_le(ds["wind_speed"].values)
+            root.attrs["wind_speed_coord_source"] = "wind_store_coord"
+            root.attrs["hash_algorithm"] = HASH_ALGORITHM
+            root.attrs["hash_schema_version"] = HASH_SCHEMA_VERSION
 
             # Write manifest
             init_manifest(tmp_path)
@@ -576,6 +595,9 @@ class Unifier:
         items.append(("mask_policy", "nan+valid_mask_in_landscape"))
         items.append(("region", _stable_json(getattr(atlas, "region", None))))
         items.append(("chunk_policy", _stable_json(self.chunk_policy)))
+        wind_vertical_policy_checksum = str(wind.attrs.get("cleo_vertical_policy_checksum", ""))
+        if wind_vertical_policy_checksum:
+            items.append(("wind:vertical_policy_checksum", wind_vertical_policy_checksum))
 
         if elev_kind == "local":
             items.append(("elevation:kind", "legacy_tif"))
@@ -626,6 +648,22 @@ class Unifier:
                 chunk_policy=_stable_json(self.chunk_policy),
                 fingerprint_method=landscape_fingerprint_method,
             )
+            if wind_vertical_policy_checksum:
+                g.attrs["cleo_vertical_policy_checksum"] = wind_vertical_policy_checksum
+            wind_vertical_policy_json = wind.attrs.get("cleo_vertical_policy_json")
+            if isinstance(wind_vertical_policy_json, str) and wind_vertical_policy_json:
+                g.attrs["cleo_vertical_policy_json"] = wind_vertical_policy_json
+            wind_speed_grid_len = wind.attrs.get("wind_speed_grid_len")
+            if wind_speed_grid_len is not None:
+                g.attrs["wind_speed_grid_len"] = wind_speed_grid_len
+            wind_speed_grid_checksum = wind.attrs.get("wind_speed_grid_checksum")
+            if isinstance(wind_speed_grid_checksum, str) and wind_speed_grid_checksum:
+                g.attrs["wind_speed_grid_checksum"] = wind_speed_grid_checksum
+            wind_speed_coord_source = wind.attrs.get("wind_speed_coord_source")
+            if isinstance(wind_speed_coord_source, str) and wind_speed_coord_source:
+                g.attrs["wind_speed_coord_source"] = wind_speed_coord_source
+            g.attrs["hash_algorithm"] = HASH_ALGORITHM
+            g.attrs["hash_schema_version"] = HASH_SCHEMA_VERSION
             if git.get("git_diff_hash"):
                 g.attrs["git_diff_hash"] = git["git_diff_hash"]
 

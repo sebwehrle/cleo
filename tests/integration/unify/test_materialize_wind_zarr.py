@@ -201,10 +201,19 @@ class TestMaterializeWind:
         assert "code_dirty" in root.attrs
         assert "chunk_policy" in root.attrs
         assert "fingerprint_method" in root.attrs
+        assert "cleo_vertical_policy_json" in root.attrs
+        assert "cleo_vertical_policy_checksum" in root.attrs
+        assert "wind_speed_grid_len" in root.attrs
+        assert "wind_speed_grid_checksum" in root.attrs
+        assert "wind_speed_coord_source" in root.attrs
+        assert "hash_algorithm" in root.attrs
+        assert "hash_schema_version" in root.attrs
 
         # grid_id and inputs_id should be non-empty for complete stores
         assert len(root.attrs["grid_id"]) == 16
         assert len(root.attrs["inputs_id"]) == 16
+        assert len(root.attrs["cleo_vertical_policy_checksum"]) == 64
+        assert len(root.attrs["wind_speed_grid_checksum"]) == 64
 
     def test_store_has_expected_variables(self, tmp_path: Path) -> None:
         """Store contains weibull_A, weibull_k, rho, template."""

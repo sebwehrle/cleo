@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+import textwrap
 
 import numpy as np
 import pytest
@@ -185,6 +186,31 @@ def _copy_turbine_yamls(atlas: MockAtlas, turbine_names: list[str]) -> None:
         src = resources_src / f"{name}.yml"
         if src.exists():
             shutil.copy(src, resources_dest / f"{name}.yml")
+
+
+def _write_custom_turbine_yaml(
+    atlas: MockAtlas,
+    *,
+    turbine_id: str,
+    hub_height: float,
+    rotor_diameter: float,
+) -> None:
+    """Write a deterministic custom turbine resource for integration tests."""
+    resources_dest = atlas.path / "resources"
+    resources_dest.mkdir(parents=True, exist_ok=True)
+    yaml_text = textwrap.dedent(
+        f"""\
+        manufacturer: TestCo
+        model: TallRotor
+        capacity: 3000
+        rotor_diameter: {float(rotor_diameter)}
+        hub_height: {float(hub_height)}
+        commissioning_year: 2018
+        V: [0.0, 3.0, 12.0, 25.0, 30.0]
+        cf: [0.0, 0.0, 1.0, 1.0, 0.0]
+        """
+    )
+    (resources_dest / f"{turbine_id}.yml").write_text(yaml_text, encoding="utf-8")
 
 
 def _create_elevation_raster(atlas: MockAtlas, **kwargs) -> Path:
@@ -475,3 +501,67 @@ class TestComputeBackendParity:
                 pytest.skip("Process backend unavailable in this execution environment.")
             raise
         assert np.allclose(serial, processes, equal_nan=True)
+
+
+class TestVerticalRewsIntegration:
+    """Integration gates for PR4 closure: tall-rotor and within-200 envelope."""
+
+    def test_tall_rotor_direct_cf_and_rews_mps_are_finite(self, tmp_path: Path) -> None:
+        """Tall rotor (z_top > 200 m) computes in direct mode without structural failure."""
+        turbine_id = "Test.TallRotor3000"
+        atlas = MockAtlas(tmp_path, turbines=[turbine_id])
+        _create_all_required_gwa_files(atlas)
+        _create_elevation_raster(atlas)
+        _write_custom_turbine_yaml(
+            atlas,
+            turbine_id=turbine_id,
+            hub_height=140.0,
+            rotor_diameter=240.0,  # z_top = 260 m (> 200 m)
+        )
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        atlas.wind.select(turbines=[turbine_id])
+
+        cf = atlas.wind.compute("capacity_factors", mode="direct_cf_quadrature", rews_n=12).data
+        rews = atlas.wind.compute("rews_mps", rews_n=12).data
+
+        assert cf.attrs.get("cleo:cf_mode") == "direct_cf_quadrature"
+        assert bool(cf.notnull().any().compute()) is True
+        assert bool(rews.notnull().any().compute()) is True
+
+    def test_within_200_direct_vs_legacy_rews_acceptance_envelope(self, tmp_path: Path) -> None:
+        """Within-200 envelope check between direct_cf_quadrature and legacy rews mode."""
+        turbine_names = ["Enercon.E40.500", "Enercon.E82.3000"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        atlas.wind.select(turbines=turbine_names)
+        cf_direct = atlas.wind.compute(
+            "capacity_factors",
+            mode="direct_cf_quadrature",
+            rews_n=12,
+        ).data
+        cf_legacy = atlas.wind.compute(
+            "capacity_factors",
+            mode="rews",
+            rews_n=12,
+        ).data
+
+        delta = np.abs((cf_legacy - cf_direct).where(cf_direct.notnull() & cf_legacy.notnull()))
+        delta_vals = delta.values[np.isfinite(delta.values)]
+        assert delta_vals.size > 0, "Expected at least one valid comparison pixel."
+
+        med = float(np.median(delta_vals))
+        p95 = float(np.quantile(delta_vals, 0.95))
+        # Envelope-only check for legacy comparison under new_everywhere policy.
+        assert med <= 0.05, f"median(|ΔCF|) too high: {med}"
+        assert p95 <= 0.15, f"P95(|ΔCF|) too high: {p95}"

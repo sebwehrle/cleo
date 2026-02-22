@@ -314,6 +314,8 @@ class WindDomain:
         height: int = 100,
         air_density: bool = False,
         loss_factor: float = 1.0,
+        mode: str = "direct_cf_quadrature",
+        rews_n: int = 12,
         **kwargs,
     ) -> DomainResult:
         """
@@ -326,6 +328,8 @@ class WindDomain:
         :param height: Reference height for Weibull interpolation.
         :param air_density: If ``True``, apply air-density correction.
         :param loss_factor: Multiplicative loss factor.
+        :param mode: CF mode (default ``"direct_cf_quadrature"``).
+        :param rews_n: Rotor quadrature nodes for rotor-aware modes.
         :param kwargs: Additional parameters forwarded to :meth:`compute`.
         :returns: :class:`cleo.results.DomainResult`.
         """
@@ -334,12 +338,32 @@ class WindDomain:
             "height": height,
             "air_density": air_density,
             "loss_factor": loss_factor,
+            "mode": mode,
+            "rews_n": rews_n,
             **kwargs,
         }
         if turbines is not None:
             compute_kwargs["turbines"] = turbines
 
         return self.compute("capacity_factors", **compute_kwargs)
+
+    def rews_mps(
+        self,
+        *,
+        turbines: list[str] | tuple[str, ...] | None = None,
+        air_density: bool = False,
+        rews_n: int = 12,
+        **kwargs,
+    ) -> DomainResult:
+        """Compute rotor-equivalent wind speed (m/s) as first-class metric."""
+        compute_kwargs = {
+            "air_density": air_density,
+            "rews_n": rews_n,
+            **kwargs,
+        }
+        if turbines is not None:
+            compute_kwargs["turbines"] = turbines
+        return self.compute("rews_mps", **compute_kwargs)
 
 
 class LandscapeDomain:

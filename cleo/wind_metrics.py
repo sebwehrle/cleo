@@ -6,6 +6,7 @@ import xarray as xr
 from cleo.assess import (
     mean_wind_speed_from_weibull,
     capacity_factors_v1,
+    rews_mps_v1,
     lcoe_v1_from_capacity_factors,
     min_lcoe_turbine_idx,
     optimal_power_kw,
@@ -99,8 +100,8 @@ def _wind_metric_capacity_factors(
     turbines: tuple[str, ...],
     air_density: bool = False,
     loss_factor: float = 1.0,
-    mode: str = "hub",
-    rews_n: int = 9,
+    mode: str = "direct_cf_quadrature",
+    rews_n: int = 12,
     **_,
 ) -> xr.DataArray:
     """
@@ -113,7 +114,7 @@ def _wind_metric_capacity_factors(
         height: Reference height for Weibull interpolation (default 100).
         air_density: If True, apply air density correction using rho.
         loss_factor: Loss correction factor (default 1.0).
-        mode: "hub" for hub-height, "rews" for rotor-equivalent wind speed.
+        mode: "direct_cf_quadrature" (default), "hub", or legacy "rews".
         rews_n: Number of quadrature points for REWS integration.
 
     Returns:
@@ -169,9 +170,9 @@ def _wind_metric_capacity_factors(
             raise ValueError("air_density=True but wind store missing 'rho' variable")
         rho_stack = wind["rho"]
 
-    # Rotor diameters: required for mode="rews"
+    # Rotor diameters required for rotor-aware modes.
     rotor_diameters_m = None
-    if mode == "rews":
+    if mode in ("rews", "direct_cf_quadrature", "momentmatch_weibull"):
         # Try wind var first
         if "turbine_rotor_diameter" in wind:
             rotor_diameters_m = wind["turbine_rotor_diameter"].isel(turbine=tidx).to_numpy()
@@ -185,11 +186,19 @@ def _wind_metric_capacity_factors(
                 d = meta.get("rotor_diameter") or meta.get("rotor_diameter_m")
                 if d is None:
                     raise ValueError(
-                        f"mode='rews' requires rotor_diameter for turbine {tid!r}; "
+                        f"mode={mode!r} requires rotor_diameter for turbine {tid!r}; "
                         "not found in wind store or turbine metadata"
                     )
                 diameters.append(float(d))
             rotor_diameters_m = np.array(diameters, dtype=np.float64)
+
+    vertical_policy = None
+    policy_json = wind.attrs.get("cleo_vertical_policy_json")
+    if isinstance(policy_json, str) and policy_json:
+        try:
+            vertical_policy = json.loads(policy_json)
+        except json.JSONDecodeError:
+            vertical_policy = None
 
     # Call pure numerics function
     result = capacity_factors_v1(
@@ -205,12 +214,88 @@ def _wind_metric_capacity_factors(
         air_density=air_density,
         loss_factor=loss_factor,
         rews_n=rews_n,
+        vertical_policy=vertical_policy,
     )
 
     # Apply valid_mask AFTER assess call
     result = result.where(land["valid_mask"])
 
     return result
+
+
+def _wind_metric_rews_mps(
+    wind: xr.Dataset,
+    land: xr.Dataset | None,
+    *,
+    turbines: tuple[str, ...],
+    air_density: bool = False,
+    rews_n: int = 12,
+    **_,
+) -> xr.DataArray:
+    """Compute first-class REWS output (m/s), dims ``(turbine, y, x)``."""
+    if land is None or "valid_mask" not in land:
+        raise ValueError("landscape store with valid_mask required for rews_mps")
+    if "cleo_turbines_json" not in wind.attrs:
+        raise ValueError("wind store must have cleo_turbines_json attr")
+
+    var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
+    var_k = "weibull_k"
+    if var_A not in wind or var_k not in wind:
+        raise ValueError(f"wind store must have {var_A} and {var_k}")
+    if "turbine" not in wind.coords:
+        raise ValueError("wind store must have turbine coordinate")
+
+    turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
+    turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
+    for tid in turbines:
+        if tid not in turbine_id_to_idx:
+            raise ValueError(f"turbine {tid!r} not in wind store")
+    tidx = [turbine_id_to_idx[tid] for tid in turbines]
+
+    hub_heights_m = wind["turbine_hub_height"].isel(turbine=tidx).to_numpy()
+    if "turbine_rotor_diameter" in wind:
+        rotor_diameters_m = wind["turbine_rotor_diameter"].isel(turbine=tidx).to_numpy()
+    elif "rotor_diameter" in wind:
+        rotor_diameters_m = wind["rotor_diameter"].isel(turbine=tidx).to_numpy()
+    else:
+        diameters = []
+        for tid in turbines:
+            meta = turbines_meta[turbine_id_to_idx[tid]]
+            d = meta.get("rotor_diameter") or meta.get("rotor_diameter_m")
+            if d is None:
+                raise ValueError(
+                    f"rews_mps requires rotor_diameter for turbine {tid!r}; "
+                    "not found in wind store or turbine metadata"
+                )
+            diameters.append(float(d))
+        rotor_diameters_m = np.array(diameters, dtype=np.float64)
+
+    rho_stack = None
+    if air_density:
+        if "rho" not in wind:
+            raise ValueError("air_density=True but wind store missing 'rho' variable")
+        rho_stack = wind["rho"]
+
+    vertical_policy = None
+    policy_json = wind.attrs.get("cleo_vertical_policy_json")
+    if isinstance(policy_json, str) and policy_json:
+        try:
+            vertical_policy = json.loads(policy_json)
+        except json.JSONDecodeError:
+            vertical_policy = None
+
+    out = rews_mps_v1(
+        A_stack=wind[var_A],
+        k_stack=wind[var_k],
+        turbine_ids=turbines,
+        hub_heights_m=hub_heights_m,
+        rotor_diameters_m=rotor_diameters_m,
+        rho_stack=rho_stack,
+        air_density=air_density,
+        rews_n=rews_n,
+        vertical_policy=vertical_policy,
+    )
+    return out.where(land["valid_mask"])
 
 def _wind_metric_lcoe(
     wind: xr.Dataset,
@@ -460,6 +545,11 @@ _WIND_METRICS = {
     },
     "capacity_factors": {
         "fn": _wind_metric_capacity_factors,
+        "requires_turbines": True,
+        "required": set(),
+    },
+    "rews_mps": {
+        "fn": _wind_metric_rews_mps,
         "requires_turbines": True,
         "required": set(),
     },

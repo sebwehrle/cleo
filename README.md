@@ -29,8 +29,8 @@ atlas.materialize()
 # Select turbines for compute calls that require turbines
 atlas.wind.select(turbines=["Enercon.E40.500"])
 
-# Compute + cache into active wind store
-atlas.wind.capacity_factors(mode="hub", air_density=True).cache()
+# Compute + cache into active wind store (default: direct rotor CF quadrature)
+atlas.wind.capacity_factors(air_density=True).cache()
 
 # Compute another metric
 mean_ws = atlas.wind.mean_wind_speed(height=100).data
@@ -149,8 +149,11 @@ Good for:
 `atlas.wind.mean_wind_speed(height, **kwargs)`
 - Convenience wrapper for `compute("mean_wind_speed", ...)`.
 
-`atlas.wind.capacity_factors(turbines=None, height=100, air_density=False, loss_factor=1.0, **kwargs)`
+`atlas.wind.capacity_factors(turbines=None, height=100, air_density=False, loss_factor=1.0, mode="direct_cf_quadrature", rews_n=12, **kwargs)`
 - Convenience wrapper for `compute("capacity_factors", ...)`.
+
+`atlas.wind.rews_mps(turbines=None, air_density=False, rews_n=12, **kwargs)`
+- Convenience wrapper for `compute("rews_mps", ...)`.
 
 `compute(...)` returns `DomainResult`:
 
@@ -172,7 +175,13 @@ Good for:
   - Required: `height` (int)
 - `capacity_factors`
   - Requires turbines via selection or `turbines=[...]`
-  - Optional: `mode="hub"|"rews"`, `rews_n`, `air_density`, `loss_factor`
+  - Optional: `mode="direct_cf_quadrature"|"momentmatch_weibull"|"hub"|"rews"`, `rews_n`, `air_density`, `loss_factor`
+  - `mode="direct_cf_quadrature"` is the rotor-aware default (node-wise rotor integration).
+  - `mode="momentmatch_weibull"` computes a rotor-equivalent Weibull first, then integrates CF.
+  - `mode="rews"` is the legacy approximation mode.
+- `rews_mps`
+  - Requires turbines via selection or `turbines=[...]`
+  - Optional: `rews_n`, `air_density`
 - `lcoe`
   - Requires turbines and:
   - `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`
@@ -180,6 +189,24 @@ Good for:
 - `min_lcoe_turbine`
 - `optimal_power`
 - `optimal_energy`
+
+### REWS and Rotor-Aware CF
+
+`rews_mps` returns rotor-equivalent wind speed (m/s) on `(turbine, y, x)`.
+It uses rotor quadrature across turbine disk heights, including above-200m vertical evaluation when needed.
+
+Use this when you need an explicit REWS layer, and use `capacity_factors(..., mode="direct_cf_quadrature")` for the most faithful rotor-aware CF path.
+
+```python
+# Select turbines once
+atlas.wind.select(turbines=["Enercon.E40.500", "Vestas.V112.3075", "Vestas.V150.4200"])
+
+# Rotor-aware capacity factors (default mode shown explicitly)
+cf = atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=True, rews_n=12).data
+
+# First-class REWS output
+rews = atlas.wind.rews_mps(air_density=True, rews_n=12).data
+```
 
 ### LandscapeDomain APIs
 
@@ -277,7 +304,7 @@ df = benchmark_metric_variants(
     atlas,
     "capacity_factors",
     variants=[
-        {"label": "baseline", "kwargs": {"mode": "hub"}},
+        {"label": "baseline", "kwargs": {"mode": "direct_cf_quadrature"}},
         {"label": "candidate_rews7", "kwargs": {"mode": "rews", "rews_n": 7}},
     ],
     repeats=3,

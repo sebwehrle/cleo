@@ -14,6 +14,7 @@ from cleo.wind_metrics import (
     _wind_metric_capacity_factors,
     _wind_metric_lcoe,
     _wind_metric_optimal_energy,
+    _wind_metric_rews_mps,
 )
 
 
@@ -144,6 +145,28 @@ def test_capacity_factors_rews_from_turbine_metadata_succeeds() -> None:
     assert out.dims == ("turbine", "y", "x")
     assert "cleo:cf_mode" in out.attrs
     assert out.attrs["cleo:cf_mode"] == "rews"
+
+
+def test_capacity_factors_direct_cf_quadrature_is_available() -> None:
+    wind, land = _make_wind_land()
+    out = _wind_metric_capacity_factors(wind, land, turbines=("T1",), mode="direct_cf_quadrature", rews_n=4)
+    assert out.name == "capacity_factors"
+    assert out.attrs["cleo:cf_mode"] == "direct_cf_quadrature"
+
+
+def test_capacity_factors_momentmatch_weibull_is_available() -> None:
+    wind, land = _make_wind_land()
+    out = _wind_metric_capacity_factors(wind, land, turbines=("T1",), mode="momentmatch_weibull", rews_n=4)
+    assert out.name == "capacity_factors"
+    assert out.attrs["cleo:cf_mode"] == "momentmatch_weibull"
+
+
+def test_rews_mps_metric_returns_expected_shape() -> None:
+    wind, land = _make_wind_land()
+    out = _wind_metric_rews_mps(wind, land, turbines=("T1",), rews_n=4)
+    assert out.name == "rews_mps"
+    assert out.dims == ("turbine", "y", "x")
+    assert out.attrs["units"] == "m/s"
 
 
 def test_capacity_factors_air_density_requires_rho() -> None:

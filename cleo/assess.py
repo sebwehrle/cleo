@@ -6,7 +6,9 @@ import numpy as np
 import xarray as xr
 import logging
 
-from scipy.special import gamma
+from scipy.special import gamma, gammaln
+
+from cleo.vertical import evaluate_weibull_at_heights
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +119,38 @@ def _trapz_over_wind_speed(y: xr.DataArray, x: xr.DataArray) -> xr.DataArray:
     )
 
 
+def _align_pdf_to_wind_speed_exact(
+    pdf: xr.DataArray,
+    u: np.ndarray,
+) -> xr.DataArray:
+    """Align PDF to the integration wind-speed grid with exact-match semantics.
+
+    Contract:
+    - Reindex to requested wind-speed coordinate values.
+    - Fail if any coordinate is missing (NaN introduced by reindex), i.e. no
+      nearest-neighbor tolerance and no silent drift.
+    """
+    if "wind_speed" not in pdf.dims:
+        return pdf
+
+    src = np.asarray(pdf["wind_speed"].values, dtype=np.float64)
+    tgt = np.asarray(u, dtype=np.float64)
+
+    # Fast path: same logical grid (allow float32/float64 representation noise).
+    if src.shape == tgt.shape and np.allclose(src, tgt, rtol=0.0, atol=1e-6):
+        return pdf.assign_coords(wind_speed=tgt).transpose("wind_speed", ...)
+
+    # Strict contract: no nearest interpolation. Target labels must exist exactly.
+    missing_labels = ~np.isin(tgt, src)
+    if bool(np.any(missing_labels)):
+        raise ValueError(
+            "PDF wind_speed coordinates do not exactly match integration grid. "
+            "No nearest alignment is allowed."
+        )
+
+    return pdf.reindex(wind_speed=tgt).transpose("wind_speed", ...)
+
+
 def _integrate_cf_with_density_correction(
     pdf: xr.DataArray,
     u_grid: np.ndarray,
@@ -146,11 +180,8 @@ def _integrate_cf_with_density_correction(
     u = np.asarray(u_grid, dtype=np.float64)
     p = np.asarray(p_curve, dtype=np.float64)
 
-    # Align PDF to wind_speed order
-    if "wind_speed" in pdf.dims:
-        pdf_aligned = pdf.sel(wind_speed=u).transpose("wind_speed", ...)
-    else:
-        pdf_aligned = pdf
+    # Align PDF to integration grid with strict exact-match semantics.
+    pdf_aligned = _align_pdf_to_wind_speed_exact(pdf, u)
 
     # Build wind_speed as 1D DataArray for vectorized operations
     u_da = xr.DataArray(u, dims=("wind_speed",), coords={"wind_speed": u})
@@ -162,8 +193,13 @@ def _integrate_cf_with_density_correction(
     # Evaluate power curve at all equivalent wind speeds (vectorized, dask-friendly)
     p_eq = _interp_power_curve(u_eq, u, p)
 
+    # CF-integrator endpoint stability fix:
+    # For k<1, Weibull PDF at u=0 can be +inf while P(0)=0; forcing pdf(0)=0
+    # prevents 0*inf -> NaN in the integrand.
+    if "wind_speed" in pdf_aligned.dims:
+        pdf_aligned = xr.where(pdf_aligned["wind_speed"] == 0.0, 0.0, pdf_aligned)
+
     # Build integrand: pdf(u) * PC(u*c)
-    # Both have dims (wind_speed, y, x) after alignment
     integrand = pdf_aligned * p_eq
 
     # Vectorized trapezoidal integration over wind_speed (dask-friendly)
@@ -203,11 +239,12 @@ def _integrate_cf_no_density(
     u_da = xr.DataArray(u, dims=("wind_speed",), coords={"wind_speed": u})
     pc_da = xr.DataArray(p, dims=("wind_speed",), coords={"wind_speed": u})
 
-    # Align PDF to wind_speed order
-    if "wind_speed" in pdf.dims:
-        pdf_aligned = pdf.sel(wind_speed=u).transpose("wind_speed", ...)
-    else:
-        pdf_aligned = pdf
+    # Align PDF to integration grid with strict exact-match semantics.
+    pdf_aligned = _align_pdf_to_wind_speed_exact(pdf, u)
+
+    # CF-integrator endpoint stability fix (see density path for rationale).
+    if "wind_speed" in pdf_aligned.dims:
+        pdf_aligned = xr.where(pdf_aligned["wind_speed"] == 0.0, 0.0, pdf_aligned)
 
     # Build integrand: pdf(u) * PC(u)
     integrand = pdf_aligned * pc_da
@@ -241,18 +278,21 @@ def capacity_factors_v1(
     turbine_ids: tuple[str, ...],
     hub_heights_m: np.ndarray,
     power_curves: np.ndarray,
-    mode: str = "hub",
+    mode: str = "direct_cf_quadrature",
     rotor_diameters_m: np.ndarray | None = None,
     rho_stack: xr.DataArray | None = None,
     air_density: bool = False,
     loss_factor: float = 1.0,
-    rews_n: int = 9,
+    rews_n: int = 12,
+    vertical_policy: dict | None = None,
 ) -> xr.DataArray:
     """
     Compute capacity factors for multiple turbines (pure numerics, turbine-loop).
 
-    This is the v1 capacity factor algorithm with support for hub-height mode
-    and REWS (rotor-equivalent wind speed) mode.
+    This is the v1 capacity factor algorithm with support for:
+    - direct rotor-node quadrature mode (default)
+    - hub-height mode
+    - legacy REWS-factor mode
 
     Contract: No I/O, no eager evaluation on spatial arrays (stays lazy/dask).
     Turbine-loop implementation (benchmarked best).
@@ -263,20 +303,22 @@ def capacity_factors_v1(
     :param turbine_ids: Tuple of turbine ID strings
     :param hub_heights_m: Hub heights for each turbine (n_turb,)
     :param power_curves: Power curves for each turbine (n_turb, n_ws)
-    :param mode: "hub" for hub-height, "rews" for rotor-equivalent wind speed
-    :param rotor_diameters_m: Rotor diameters (required if mode="rews")
+    :param mode: "direct_cf_quadrature" (default), "hub", or legacy "rews"
+    :param rotor_diameters_m: Rotor diameters (required for direct/rews modes)
     :param rho_stack: Air density DataArray (required if air_density=True)
     :param air_density: If True, apply air density correction
     :param loss_factor: Loss correction factor (default 1.0)
     :param rews_n: Number of quadrature points for REWS integration
     :return: DataArray with capacity factors, dims (turbine, y, x)
     """
-    # Validate mode
-    if mode not in ("hub", "rews"):
-        raise ValueError(f"mode must be 'hub' or 'rews', got {mode!r}")
+    if mode not in ("hub", "rews", "direct_cf_quadrature", "momentmatch_weibull"):
+        raise ValueError(
+            "mode must be 'hub', 'rews', 'direct_cf_quadrature', or "
+            f"'momentmatch_weibull', got {mode!r}"
+        )
 
-    if mode == "rews" and rotor_diameters_m is None:
-        raise ValueError("rotor_diameters_m required when mode='rews'")
+    if mode in ("rews", "direct_cf_quadrature", "momentmatch_weibull") and rotor_diameters_m is None:
+        raise ValueError(f"rotor_diameters_m required when mode={mode!r}")
 
     if air_density and rho_stack is None:
         raise ValueError("rho_stack required when air_density=True")
@@ -285,44 +327,69 @@ def capacity_factors_v1(
     for i, turbine_id in enumerate(turbine_ids):
         H = float(hub_heights_m[i])
 
-        # Interpolate Weibull params to hub height
-        A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, H)
-
-        # Apply REWS correction if requested
-        if mode == "rews":
+        if mode == "direct_cf_quadrature":
             D = float(rotor_diameters_m[i])
-            f = _rews_moment_factor(
+            cf, _rews = _direct_cf_and_rews_for_turbine(
                 A_stack=A_stack,
                 k_stack=k_stack,
+                rho_stack=rho_stack if air_density else None,
+                u_grid=u_grid,
+                p_curve=power_curves[i],
                 hub_height=H,
                 rotor_diameter=D,
-                n=rews_n,
+                rews_n=rews_n,
+                loss_factor=loss_factor,
+                vertical_policy=vertical_policy,
+                compute_cf=True,
             )
-            A_eff = A_hub * f
-        else:
-            A_eff = A_hub
-
-        # Compute Weibull PDF
-        pdf = weibull_probability_density(u_grid, k_hub, A_eff)
-
-        # Compute capacity factor
-        if air_density:
-            rho_hub = air_density_at_height(rho_stack, H)
-            c = (rho_hub / RHO_0) ** (1.0 / 3.0)
-            cf = _integrate_cf_with_density_correction(
-                pdf=pdf,
+        elif mode == "momentmatch_weibull":
+            D = float(rotor_diameters_m[i])
+            cf, _rews = _momentmatch_cf_and_rews_for_turbine(
+                A_stack=A_stack,
+                k_stack=k_stack,
+                rho_stack=rho_stack if air_density else None,
                 u_grid=u_grid,
                 p_curve=power_curves[i],
-                c=c,
+                hub_height=H,
+                rotor_diameter=D,
+                rews_n=rews_n,
                 loss_factor=loss_factor,
+                vertical_policy=vertical_policy,
             )
         else:
-            cf = _integrate_cf_no_density(
-                pdf=pdf,
-                u_grid=u_grid,
-                p_curve=power_curves[i],
-                loss_factor=loss_factor,
-            )
+            # Legacy paths retained for explicit comparability.
+            A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, H)
+            if mode == "rews":
+                D = float(rotor_diameters_m[i])
+                f = _rews_moment_factor(
+                    A_stack=A_stack,
+                    k_stack=k_stack,
+                    hub_height=H,
+                    rotor_diameter=D,
+                    n=rews_n,
+                )
+                A_eff = A_hub * f
+            else:
+                A_eff = A_hub
+
+            pdf = weibull_probability_density(u_grid, k_hub, A_eff)
+            if air_density:
+                rho_hub = air_density_at_height(rho_stack, H)
+                c = (rho_hub / RHO_0) ** (1.0 / 3.0)
+                cf = _integrate_cf_with_density_correction(
+                    pdf=pdf,
+                    u_grid=u_grid,
+                    p_curve=power_curves[i],
+                    c=c,
+                    loss_factor=loss_factor,
+                )
+            else:
+                cf = _integrate_cf_no_density(
+                    pdf=pdf,
+                    u_grid=u_grid,
+                    p_curve=power_curves[i],
+                    loss_factor=loss_factor,
+                )
 
         # Expand with turbine dimension
         cf = cf.expand_dims(turbine=[turbine_id])
@@ -335,12 +402,225 @@ def capacity_factors_v1(
     # Set attrs (no compute)
     out.attrs["cleo:cf_mode"] = mode
     out.attrs["cleo:algo"] = "capacity_factors_v1"
-    out.attrs["cleo:algo_version"] = "1"
-    if mode == "rews":
+    out.attrs["cleo:algo_version"] = "2"
+    if mode in ("rews", "direct_cf_quadrature", "momentmatch_weibull"):
         out.attrs["cleo:rews_n"] = int(rews_n)
     out.attrs["cleo:air_density"] = int(air_density)  # int for netCDF4 compat
 
     return out
+
+
+def rews_mps_v1(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    turbine_ids: tuple[str, ...],
+    hub_heights_m: np.ndarray,
+    rotor_diameters_m: np.ndarray,
+    rho_stack: xr.DataArray | None = None,
+    air_density: bool = False,
+    rews_n: int = 12,
+    vertical_policy: dict | None = None,
+) -> xr.DataArray:
+    """Compute first-class REWS output in m/s, dims ``(turbine, y, x)``."""
+    if air_density and rho_stack is None:
+        raise ValueError("rho_stack required when air_density=True")
+
+    rews_list = []
+    for i, turbine_id in enumerate(turbine_ids):
+        H = float(hub_heights_m[i])
+        D = float(rotor_diameters_m[i])
+        _cf, rews = _direct_cf_and_rews_for_turbine(
+            A_stack=A_stack,
+            k_stack=k_stack,
+            rho_stack=rho_stack if air_density else None,
+            u_grid=np.array([0.0, 1.0], dtype=np.float64),
+            p_curve=np.array([0.0, 0.0], dtype=np.float64),
+            hub_height=H,
+            rotor_diameter=D,
+            rews_n=rews_n,
+            loss_factor=1.0,
+            vertical_policy=vertical_policy,
+            compute_cf=False,
+        )
+        rews_list.append(rews.expand_dims(turbine=[turbine_id]))
+
+    out = xr.concat(rews_list, dim="turbine", coords="different", compat="equals")
+    out = out.rename("rews_mps")
+    out.attrs["units"] = "m/s"
+    out.attrs["cleo:algo"] = "rews_mps_v1"
+    out.attrs["cleo:algo_version"] = "1"
+    out.attrs["cleo:rews_n"] = int(rews_n)
+    out.attrs["cleo:air_density"] = int(air_density)
+    return out
+
+
+def _direct_cf_and_rews_for_turbine(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    rho_stack: xr.DataArray | None,
+    u_grid: np.ndarray,
+    p_curve: np.ndarray,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+    loss_factor: float,
+    vertical_policy: dict | None,
+    compute_cf: bool,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Compute direct rotor CF and REWS for one turbine."""
+    if rews_n < 2:
+        raise ValueError(f"rews_n must be >= 2, got {rews_n}")
+    if rotor_diameter <= 0:
+        raise ValueError(f"rotor_diameter must be > 0, got {rotor_diameter!r}")
+
+    t, g = np.polynomial.legendre.leggauss(int(rews_n))
+    chord = (2.0 / np.pi) * np.sqrt(np.clip(1.0 - t**2, 0.0, 1.0))
+    weights = g * chord
+    weights = weights / np.sum(weights)
+
+    z_nodes = float(hub_height) + (float(rotor_diameter) / 2.0) * t
+
+    _mu, k_nodes, _A_nodes, A_prime_nodes = evaluate_weibull_at_heights(
+        A_stack,
+        k_stack,
+        query_heights_m=z_nodes,
+        rho_stack=rho_stack,
+        policy=vertical_policy,
+    )
+
+    cf_acc: xr.DataArray | None = None
+    m3_acc: xr.DataArray | None = None
+    for j, zq in enumerate(z_nodes):
+        wj = float(weights[j])
+        A_j = A_prime_nodes.sel(query_height=float(zq))
+        k_j = k_nodes.sel(query_height=float(zq))
+
+        m3_j = np.exp(3.0 * np.log(A_j) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_j), dask="parallelized"))
+        m3_acc = (wj * m3_j) if m3_acc is None else (m3_acc + (wj * m3_j))
+
+        if compute_cf:
+            pdf_j = weibull_probability_density(u_grid, k_j, A_j)
+            cf_j = _integrate_cf_no_density(
+                pdf=pdf_j,
+                u_grid=u_grid,
+                p_curve=p_curve,
+                loss_factor=loss_factor,
+            )
+            cf_acc = (wj * cf_j) if cf_acc is None else (cf_acc + (wj * cf_j))
+
+    assert m3_acc is not None
+    rews = (m3_acc ** (1.0 / 3.0)).rename("rews_mps")
+    if cf_acc is None:
+        cf_acc = xr.zeros_like(rews)
+    return cf_acc.rename("capacity_factor"), rews
+
+
+def _momentmatch_cf_and_rews_for_turbine(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    rho_stack: xr.DataArray | None,
+    u_grid: np.ndarray,
+    p_curve: np.ndarray,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+    loss_factor: float,
+    vertical_policy: dict | None,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Compute rotor CF via moment-matched Weibull and return REWS."""
+    if rews_n < 2:
+        raise ValueError(f"rews_n must be >= 2, got {rews_n}")
+    if rotor_diameter <= 0:
+        raise ValueError(f"rotor_diameter must be > 0, got {rotor_diameter!r}")
+
+    t, g = np.polynomial.legendre.leggauss(int(rews_n))
+    chord = (2.0 / np.pi) * np.sqrt(np.clip(1.0 - t**2, 0.0, 1.0))
+    weights = g * chord
+    weights = weights / np.sum(weights)
+    z_nodes = float(hub_height) + (float(rotor_diameter) / 2.0) * t
+
+    _mu, k_nodes, _A_nodes, A_prime_nodes = evaluate_weibull_at_heights(
+        A_stack,
+        k_stack,
+        query_heights_m=z_nodes,
+        rho_stack=rho_stack,
+        policy=vertical_policy,
+    )
+
+    m1_acc: xr.DataArray | None = None
+    m3_acc: xr.DataArray | None = None
+    for j, zq in enumerate(z_nodes):
+        wj = float(weights[j])
+        A_j = A_prime_nodes.sel(query_height=float(zq))
+        k_j = k_nodes.sel(query_height=float(zq))
+
+        log_m1_j = np.log(A_j) + xr.apply_ufunc(gammaln, 1.0 + (1.0 / k_j), dask="parallelized")
+        log_m3_j = 3.0 * np.log(A_j) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_j), dask="parallelized")
+        m1_j = np.exp(log_m1_j)
+        m3_j = np.exp(log_m3_j)
+
+        m1_acc = (wj * m1_j) if m1_acc is None else (m1_acc + (wj * m1_j))
+        m3_acc = (wj * m3_j) if m3_acc is None else (m3_acc + (wj * m3_j))
+
+    assert m1_acc is not None and m3_acc is not None
+    rews = (m3_acc ** (1.0 / 3.0)).rename("rews_mps")
+
+    # Moment match Weibull via r = m3 / m1^3.
+    r = m3_acc / (m1_acc ** 3)
+    k_rot = _solve_k_from_moment_ratio(r)
+
+    log_A_rot = np.log(m1_acc) - xr.apply_ufunc(gammaln, 1.0 + (1.0 / k_rot), dask="parallelized")
+    A_rot = np.exp(log_A_rot)
+
+    pdf_rot = weibull_probability_density(u_grid, k_rot, A_rot)
+    cf = _integrate_cf_no_density(
+        pdf=pdf_rot,
+        u_grid=u_grid,
+        p_curve=p_curve,
+        loss_factor=loss_factor,
+    ).rename("capacity_factor")
+    return cf, rews
+
+
+def _solve_k_from_moment_ratio(
+    r: xr.DataArray,
+    *,
+    k_lo: float = 0.6,
+    k_hi: float = 12.0,
+    iterations: int = 32,
+) -> xr.DataArray:
+    """Solve ``Gamma(1+3/k)/Gamma(1+1/k)^3 = r`` by vectorized bisection."""
+    if k_lo <= 0 or k_hi <= k_lo:
+        raise ValueError("Invalid k bracket")
+    if iterations < 8:
+        raise ValueError("iterations must be >= 8")
+
+    def ratio_from_k(k_da: xr.DataArray) -> xr.DataArray:
+        return np.exp(
+            xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_da), dask="parallelized")
+            - 3.0 * xr.apply_ufunc(gammaln, 1.0 + (1.0 / k_da), dask="parallelized")
+        )
+
+    k_left = xr.full_like(r, float(k_lo), dtype=np.float64)
+    k_right = xr.full_like(r, float(k_hi), dtype=np.float64)
+    r_left = ratio_from_k(k_left)
+    r_right = ratio_from_k(k_right)
+
+    r_min = xr.where(r_left < r_right, r_left, r_right)
+    r_max = xr.where(r_left > r_right, r_left, r_right)
+    r_clamped = xr.where(r < r_min, r_min, xr.where(r > r_max, r_max, r))
+
+    for _ in range(int(iterations)):
+        k_mid = 0.5 * (k_left + k_right)
+        r_mid = ratio_from_k(k_mid)
+        go_right = r_mid > r_clamped
+        k_left = xr.where(go_right, k_mid, k_left)
+        k_right = xr.where(go_right, k_right, k_mid)
+
+    return (0.5 * (k_left + k_right)).rename("k_rot")
 
 
 def lcoe_v1_from_capacity_factors(

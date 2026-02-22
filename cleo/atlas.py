@@ -875,7 +875,7 @@ class Atlas:
         :returns: Lazy :class:`xarray.Dataset` (no compute performed).
         :raises FileNotFoundError: If the store does not exist.
         """
-        from cleo.results import result_store_path
+        from cleo.results import result_store_path, restore_serialized_string_coords
 
         store_path = result_store_path(
             results_root=Path(self.results_root),
@@ -916,7 +916,7 @@ class Atlas:
         if not str(out_path).endswith(".nc"):
             raise ValueError(f"out_path must end with '.nc', got: {out_path}")
 
-        from cleo.results import result_store_path
+        from cleo.results import result_store_path, restore_serialized_string_coords
 
         src_store = result_store_path(
             results_root=Path(self.results_root),
@@ -931,6 +931,7 @@ class Atlas:
 
         # Open source store
         ds = xr.open_zarr(src_store, consolidated=False)
+        ds = restore_serialized_string_coords(ds)
         ds = self._evaluate_for_io(ds)
 
         # Build encoding: handle string/object dtype coords and vars

@@ -13,6 +13,104 @@ from cleo.dask_utils import compute as dask_compute
 logger = logging.getLogger(__name__)
 
 
+_STRING_COORDS_ATTR = "cleo_string_coords_json"
+
+
+def _is_unsafe_zarr_v3_dtype(var: xr.DataArray) -> bool:
+    """Return True for dtypes disallowed by the Zarr-v3 storage contract."""
+    dtype = var.dtype
+    if hasattr(dtype, "kind") and dtype.kind in {"U", "S"}:
+        return True
+    return dtype == object
+
+
+def _normalize_text_value(value) -> str:
+    """Normalize scalar values for JSON-safe text coordinate storage."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _sanitize_result_dataset_for_zarr(ds: xr.Dataset) -> xr.Dataset:
+    """Serialize string-like coordinates to attrs and enforce Zarr-v3-safe dtypes."""
+    out = ds.copy()
+    string_coords: dict[str, list[str]] = {}
+
+    for coord_name, coord in list(out.coords.items()):
+        if not _is_unsafe_zarr_v3_dtype(coord):
+            continue
+        if coord.ndim != 1:
+            raise ValueError(
+                f"Cannot persist string-like coord {coord_name!r} with ndim={coord.ndim}; "
+                "only 1D coordinates are supported for serialization."
+            )
+        dim = coord.dims[0]
+        values = [_normalize_text_value(v) for v in np.asarray(coord.values).tolist()]
+        string_coords[coord_name] = values
+        out = out.assign_coords({coord_name: (coord.dims, np.arange(coord.sizes[dim], dtype=np.int64))})
+
+    unsafe_after: list[str] = []
+    for name, coord in out.coords.items():
+        if _is_unsafe_zarr_v3_dtype(coord):
+            unsafe_after.append(f"coord:{name}")
+    for name, var in out.data_vars.items():
+        if _is_unsafe_zarr_v3_dtype(var):
+            unsafe_after.append(f"data_var:{name}")
+
+    if unsafe_after:
+        raise ValueError(
+            "Result dataset contains Zarr-v3-unsafe string/object arrays after sanitization: "
+            f"{unsafe_after}. Persist numeric arrays only; store strings in attrs."
+        )
+
+    if string_coords:
+        attrs = dict(out.attrs)
+        attrs[_STRING_COORDS_ATTR] = json.dumps(
+            string_coords,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        out = out.assign_attrs(attrs)
+
+    return out
+
+
+def restore_serialized_string_coords(ds: xr.Dataset) -> xr.Dataset:
+    """Restore string coordinates serialized by `_sanitize_result_dataset_for_zarr`."""
+    payload = ds.attrs.get(_STRING_COORDS_ATTR)
+    if not isinstance(payload, str) or not payload:
+        return ds
+
+    try:
+        mapping = json.loads(payload)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Invalid %s payload; leaving dataset coordinates as-is.",
+            _STRING_COORDS_ATTR,
+        )
+        return ds
+
+    out = ds
+    for coord_name, values in mapping.items():
+        if coord_name not in out.coords:
+            continue
+        coord = out.coords[coord_name]
+        if coord.ndim != 1:
+            continue
+        dim = coord.dims[0]
+        if coord.sizes[dim] != len(values):
+            logger.warning(
+                "Serialized string coord length mismatch for %s: dim=%d, values=%d",
+                coord_name,
+                coord.sizes[dim],
+                len(values),
+            )
+            continue
+        out = out.assign_coords({coord_name: (coord.dims, np.asarray(values, dtype=object))})
+    return out
+
+
 def validate_result_path_token(value: str, *, field: str) -> str:
     """Validate a run/metric token used in result-store filesystem paths."""
     if not isinstance(value, str):
@@ -87,6 +185,8 @@ def persist_result(
         ds = da.to_dataset()
     else:
         ds = obj
+
+    ds = _sanitize_result_dataset_for_zarr(ds)
 
     evaluator = getattr(atlas, "_evaluate_for_io", None)
     if callable(evaluator):
@@ -283,4 +383,6 @@ class DomainResult:
         # Invalidate cached data so .data reloads with new variable
         self._domain._data = None
 
-        return self._data
+        # Return the surfaced store-backed variable so callers receive the exact
+        # cached representation (including any alignment/reindexing done for IO).
+        return self._domain.data[self._metric]

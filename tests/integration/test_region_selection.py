@@ -150,6 +150,14 @@ def _create_nuts_shapefile(
         bounds[3],
     )
 
+    # Add an additional level-2 region ("Wien") for realistic small-region workflow tests.
+    wien_bounds = (
+        center_x,
+        center_y - height / 2,
+        center_x + width,
+        center_y + height / 2,
+    )
+
     # Create GeoDataFrame with test regions
     # Include all columns expected by Atlas.get_nuts_region()
     gdf = gpd.GeoDataFrame(
@@ -157,6 +165,7 @@ def _create_nuts_shapefile(
             "NUTS_ID": [
                 "AT",
                 "Niederösterreich",
+                "AT13",
                 "AT1",
                 "AT123",
                 "ATX1",
@@ -165,6 +174,7 @@ def _create_nuts_shapefile(
             "NUTS_NAME": [
                 "Österreich",
                 "Niederösterreich",
+                "Wien",
                 "Westregion",
                 "Sankt Pölten",
                 "SharedName",
@@ -173,16 +183,18 @@ def _create_nuts_shapefile(
             "NAME_LATN": [
                 "Österreich",
                 "Niederösterreich",
+                "Wien",
                 "Westregion",
                 "Sankt Pölten",
                 "SharedName",
                 "SharedName",
             ],  # Required for lookup
-            "CNTR_CODE": ["AT", "AT", "AT", "AT", "AT", "AT"],
-            "LEVL_CODE": [0, 2, 1, 3, 1, 3],  # country + levels 1/2/3
+            "CNTR_CODE": ["AT", "AT", "AT", "AT", "AT", "AT", "AT"],
+            "LEVL_CODE": [0, 2, 2, 1, 3, 1, 3],  # country + levels 1/2/3
             "geometry": [
                 box(*bounds),
                 box(*region_bounds),
+                box(*wien_bounds),
                 box(*level1_bounds),
                 box(*level3_bounds),
                 box(*shared_l1_bounds),
@@ -447,3 +459,23 @@ class TestRegionCaching:
         # Selections should persist
         assert atlas.region == "Niederösterreich"
         assert atlas.wind.selected_turbines == (tid,)
+
+    def test_wien_capacity_factors_exist_and_not_all_nan(self, region_atlas: Atlas) -> None:
+        """Small-region workflow: Wien + limited turbines yields non-empty, non-all-NaN CF."""
+        atlas = region_atlas
+
+        # Build base, select small region, and build region stores.
+        atlas.materialize()
+        atlas.select(region="Wien", inplace=True)
+        atlas.materialize()
+
+        # Limit turbine set for compute workload.
+        turbines = list(atlas.wind.turbines[:2])
+        assert len(turbines) == 2
+        atlas.wind.select(turbines=turbines)
+
+        # Compute + cache and verify surfaced output.
+        cf = atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=False).cache()
+        assert "capacity_factors" in atlas.wind.data
+        assert cf.size > 0
+        assert bool(cf.notnull().any().compute()) is True

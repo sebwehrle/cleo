@@ -237,7 +237,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
 
     # === Compute capacity factors (result wrapper API) ===
     # compute() returns DomainResult with .data and .cache()
-    metric_result = atlas.wind.capacity_factors(height=100, air_density=False)
+    metric_result = atlas.wind.capacity_factors(air_density=False)
     cf = metric_result.data  # Access the DataArray
 
     # Ensure stable name before persist

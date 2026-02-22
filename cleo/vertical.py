@@ -195,13 +195,17 @@ def weighted_top_shear_alpha(
     w_sum = w_valid.sum(dim="height")
     valid_count = valid.sum(dim="height")
 
-    x_bar = (w_valid * x).sum(dim="height") / xr.where(w_sum > 0, w_sum, np.nan)
-    y_bar = (w_valid * y).sum(dim="height") / xr.where(w_sum > 0, w_sum, np.nan)
+    # Avoid runtime divide-by-zero warnings in dask graphs by dividing by a safe
+    # denominator, then masking invalid tiles back to NaN.
+    safe_w_sum = xr.where(w_sum > 0, w_sum, 1.0)
+    x_bar = ((w_valid * x).sum(dim="height") / safe_w_sum).where(w_sum > 0)
+    y_bar = ((w_valid * y).sum(dim="height") / safe_w_sum).where(w_sum > 0)
 
     num = (w_valid * (x - x_bar) * (y - y_bar)).sum(dim="height")
     den = (w_valid * (x - x_bar) ** 2).sum(dim="height")
 
-    alpha_raw = xr.where((valid_count >= 2) & (den > 0), num / den, np.nan)
+    safe_den = xr.where(den > 0, den, 1.0)
+    alpha_raw = (num / safe_den).where((valid_count >= 2) & (den > 0))
     alpha = alpha_raw.clip(min=float(alpha_min), max=float(alpha_max))
     return alpha.rename("alpha_top")
 

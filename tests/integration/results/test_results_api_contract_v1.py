@@ -10,6 +10,7 @@ Tests verify:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -282,6 +283,11 @@ class TestExportResultNetcdfStringCoords:
         # Persist
         run_id = atlas.new_run_id("strcoord")
         atlas.persist("capacity_factors", ds, run_id=run_id)
+        ds_store = atlas.open_result(run_id, "capacity_factors")
+        assert "cleo_string_coords_json" in ds_store.attrs
+        assert json.loads(ds_store.attrs["cleo_string_coords_json"]) == {"turbine": ["turbA", "turbB"]}
+        np.testing.assert_array_equal(ds_store["turbine"].values, [0, 1])
+        ds_store.close()
 
         # Act: export to NetCDF
         out = atlas.export_result_netcdf(run_id, "capacity_factors", tmp_path / "cf.nc")

@@ -163,43 +163,102 @@ class WindDomain:
         )
         return ds
 
-    def select(self, *, turbines: list[str] | tuple[str, ...]) -> "WindDomain":
+    def select(
+        self,
+        *,
+        turbines: list[str] | tuple[str, ...] | None = None,
+        turbine_indices: list[int] | tuple[int, ...] | None = None,
+    ) -> "WindDomain":
         """
         Set persistent turbine selection on the Atlas.
 
         Selection persists even if atlas.wind creates new WindDomain objects.
         Use clear_selection() to remove selection.
 
+        Exactly one selection mode must be used:
+        - ``turbines=[...]`` for turbine IDs.
+        - ``turbine_indices=[...]`` for positional indices into ``atlas.wind.turbines``.
+
         :param turbines: Turbine IDs to select (non-empty list/tuple of strings).
-            IDs are stripped, empty IDs are rejected, duplicates are rejected,
-            and order is preserved.
+        :param turbine_indices: Positional turbine indices into ``atlas.wind.turbines``
+            (non-empty list/tuple of ints).
         :returns: ``self`` for chaining.
-        :raises ValueError: If IDs are empty/invalid/duplicate/unknown.
+        :raises ValueError: If selection args are invalid, ambiguous, out-of-range,
+            duplicate, or unknown.
         """
-        if not turbines:
+        if (turbines is None) == (turbine_indices is None):
             raise ValueError(
-                "turbines must be non-empty; use clear_selection() to clear"
+                "Provide exactly one of turbines=... or turbine_indices=...."
             )
 
-        # Validate: non-empty, strings, strip, reject empty, reject duplicates
-        cleaned = []
-        seen = set()
-        for item in turbines:
-            if not isinstance(item, str):
-                raise ValueError(f"Each turbine ID must be a string, got {type(item).__name__}")
-            stripped = item.strip()
-            if not stripped:
-                raise ValueError("Turbine ID cannot be empty or whitespace-only")
-            if stripped in seen:
-                raise ValueError(f"Duplicate turbine ID: {stripped!r}")
-            seen.add(stripped)
-            cleaned.append(stripped)
+        if turbines is not None:
+            if isinstance(turbines, (str, bytes)):
+                raise ValueError(
+                    "turbines must be a non-empty list/tuple of turbine IDs; "
+                    "got a single string/bytes value. Use turbines=[...]."
+                )
+            if not isinstance(turbines, (list, tuple)):
+                raise ValueError(
+                    f"turbines must be a list/tuple of strings, got {type(turbines).__name__}"
+                )
+            if not turbines:
+                raise ValueError(
+                    "turbines must be non-empty; use clear_selection() to clear"
+                )
 
-        # Validate against available turbines
-        validated = self._validate_turbines(cleaned)
+            # Validate: strings, strip, reject empty, reject duplicates
+            cleaned = []
+            seen = set()
+            for item in turbines:
+                if not isinstance(item, str):
+                    raise ValueError(f"Each turbine ID must be a string, got {type(item).__name__}")
+                stripped = item.strip()
+                if not stripped:
+                    raise ValueError("Turbine ID cannot be empty or whitespace-only")
+                if stripped in seen:
+                    raise ValueError(f"Duplicate turbine ID: {stripped!r}")
+                seen.add(stripped)
+                cleaned.append(stripped)
 
-        # Persist on Atlas
-        self._atlas._wind_selected_turbines = validated
+            # Validate against available turbines
+            validated = self._validate_turbines(cleaned)
+            self._atlas._wind_selected_turbines = validated
+            return self
+
+        # turbine_indices path
+        if isinstance(turbine_indices, (str, bytes)):
+            raise ValueError(
+                "turbine_indices must be a non-empty list/tuple of integers; "
+                "got a string/bytes value."
+            )
+        if not isinstance(turbine_indices, (list, tuple)):
+            raise ValueError(
+                f"turbine_indices must be a list/tuple of integers, got {type(turbine_indices).__name__}"
+            )
+        if not turbine_indices:
+            raise ValueError(
+                "turbine_indices must be non-empty; use clear_selection() to clear"
+            )
+
+        available = self.turbines
+        n_available = len(available)
+        selected: list[str] = []
+        seen_indices: set[int] = set()
+        for idx in turbine_indices:
+            if not isinstance(idx, int) or isinstance(idx, bool):
+                raise ValueError(
+                    f"Each turbine index must be an integer, got {type(idx).__name__}"
+                )
+            if idx < 0 or idx >= n_available:
+                raise ValueError(
+                    f"turbine index out of range: {idx}. Valid range is [0, {n_available - 1}]"
+                )
+            if idx in seen_indices:
+                raise ValueError(f"Duplicate turbine index: {idx}")
+            seen_indices.add(idx)
+            selected.append(available[idx])
+
+        self._atlas._wind_selected_turbines = tuple(selected)
         return self
 
     def clear_selection(self) -> "WindDomain":
@@ -225,8 +284,11 @@ class WindDomain:
         Supported metrics:
             - "mean_wind_speed": requires height (int).
             - "capacity_factors": requires turbines (from select() or kwarg).
-              Optional: mode ("hub" or "rews"), rews_n (int, default 9),
-              air_density (bool), loss_factor (float).
+              Optional: mode ("direct_cf_quadrature" [default], "momentmatch_weibull",
+              "hub", "rews"), rews_n (int, default 12), air_density (bool),
+              loss_factor (float).
+            - "rews_mps": requires turbines (from select() or kwarg).
+              Optional: rews_n (int, default 12), air_density (bool).
             - "lcoe": requires turbines + cost params (om_fixed_eur_per_kw_a,
               om_variable_eur_per_kwh, discount_rate, lifetime_a).
               Optional: turbine_cost_share, hours_per_year (default 8766).
@@ -311,7 +373,6 @@ class WindDomain:
         self,
         *,
         turbines: list[str] | tuple[str, ...] | None = None,
-        height: int = 100,
         air_density: bool = False,
         loss_factor: float = 1.0,
         mode: str = "direct_cf_quadrature",
@@ -325,7 +386,6 @@ class WindDomain:
         Returns DomainResult supporting .data/.cache()/.persist() pattern.
 
         :param turbines: Turbine IDs; if ``None``, uses persistent selection.
-        :param height: Reference height for Weibull interpolation.
         :param air_density: If ``True``, apply air-density correction.
         :param loss_factor: Multiplicative loss factor.
         :param mode: CF mode (default ``"direct_cf_quadrature"``).
@@ -333,9 +393,14 @@ class WindDomain:
         :param kwargs: Additional parameters forwarded to :meth:`compute`.
         :returns: :class:`cleo.results.DomainResult`.
         """
+        if "height" in kwargs:
+            raise ValueError(
+                "capacity_factors() does not accept a free 'height' argument. "
+                "Hub height is derived from each turbine definition."
+            )
+
         # Only pass turbines if explicitly provided (let compute() inject from selection)
         compute_kwargs = {
-            "height": height,
             "air_density": air_density,
             "loss_factor": loss_factor,
             "mode": mode,

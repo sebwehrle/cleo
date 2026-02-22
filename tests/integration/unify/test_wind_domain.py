@@ -203,6 +203,10 @@ class TestWindDomainTurbineSelection:
         w0.select(turbines=list(tids))
         assert w0.selected_turbines == tuple(tids)
 
+        # Test selecting by positional turbine indices
+        w0.select(turbine_indices=[1, 0])
+        assert w0.selected_turbines == (tids[1], tids[0])
+
         # Test clearing selection via clear_selection()
         w0.clear_selection()
         assert w0.selected_turbines is None
@@ -218,6 +222,28 @@ class TestWindDomainTurbineSelection:
         # Verify error message contains unknown turbine name
         with pytest.raises(ValueError, match="Unknown.Turbine.999"):
             w0.select(turbines=["Unknown.Turbine.999"])
+
+        # Reject single-string iterable footgun
+        with pytest.raises(ValueError, match="single string/bytes"):
+            w0.select(turbines=tids[0])
+
+        # Must provide exactly one selection mode
+        with pytest.raises(ValueError, match="exactly one"):
+            w0.select(turbines=[tids[0]], turbine_indices=[0])
+        with pytest.raises(ValueError, match="exactly one"):
+            w0.select()
+
+        # Index-based validation
+        with pytest.raises(ValueError, match="out of range"):
+            w0.select(turbine_indices=[99])
+        with pytest.raises(ValueError, match="Duplicate turbine index"):
+            w0.select(turbine_indices=[0, 0])
+        with pytest.raises(ValueError, match="must be an integer"):
+            w0.select(turbine_indices=[0, "1"])  # type: ignore[list-item]
+
+        # capacity_factors wrapper must reject free height (avoid silent no-op)
+        with pytest.raises(ValueError, match="does not accept a free 'height'"):
+            w0.capacity_factors(height=100)
 
 
 class TestMeanWindSpeedComputation:

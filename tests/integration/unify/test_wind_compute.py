@@ -12,6 +12,7 @@ Tests verify:
 from __future__ import annotations
 
 import shutil
+import warnings
 from pathlib import Path
 import textwrap
 
@@ -470,6 +471,27 @@ class TestDomainResultCacheOverwrite:
         with pytest.raises(ValueError, match="already exists"):
             atlas.wind.compute("capacity_factors", height=100).cache(overwrite=False)
 
+    def test_cache_returns_store_backed_metric_after_subset_alignment(self, tmp_path: Path) -> None:
+        """cache() returns the surfaced store-backed metric (not pre-write subset object)."""
+        turbine_names = ["Enercon.E40.500", "Vestas.V112.3075"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        # Compute only first turbine; cache() expands to full turbine axis in store.
+        atlas.wind.select(turbines=[turbine_names[0]])
+        cached = atlas.wind.compute("capacity_factors", height=100, mode="hub").cache()
+        surfaced = atlas.wind.data["capacity_factors"]
+
+        assert cached.identical(surfaced)
+        assert cached.sizes["turbine"] == 2
+        assert bool(cached.sel(turbine=turbine_names[1]).isnull().all().compute()) is True
+
 
 class TestComputeBackendParity:
     """Numerical parity across local compute backends."""
@@ -529,8 +551,10 @@ class TestVerticalRewsIntegration:
         rews = atlas.wind.compute("rews_mps", rews_n=12).data
 
         assert cf.attrs.get("cleo:cf_mode") == "direct_cf_quadrature"
-        assert bool(cf.notnull().any().compute()) is True
-        assert bool(rews.notnull().any().compute()) is True
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            assert bool(cf.notnull().any().compute()) is True
+            assert bool(rews.notnull().any().compute()) is True
 
     def test_within_200_direct_vs_legacy_rews_acceptance_envelope(self, tmp_path: Path) -> None:
         """Within-200 envelope check between direct_cf_quadrature and legacy rews mode."""

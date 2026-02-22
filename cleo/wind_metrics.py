@@ -111,10 +111,10 @@ def _wind_metric_capacity_factors(
         wind: Canonical wind dataset (must have weibull_A, weibull_k, power_curve).
         land: Canonical landscape dataset (must have valid_mask).
         turbines: Tuple of turbine IDs to compute.
-        height: Reference height for Weibull interpolation (default 100).
         air_density: If True, apply air density correction using rho.
         loss_factor: Loss correction factor (default 1.0).
-        mode: "direct_cf_quadrature" (default), "hub", or legacy "rews".
+        mode: "direct_cf_quadrature" (default), "momentmatch_weibull",
+            "hub", or legacy "rews".
         rews_n: Number of quadrature points for REWS integration.
 
     Returns:

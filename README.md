@@ -1,7 +1,7 @@
 # CLEO
 
-CLEO is an `xarray`-based Python package for wind resource assessment with Global Wind Atlas (GWA) inputs.
-It materializes canonical Zarr stores, computes wind metrics, and persists/export results.
+CLEO is an `xarray`-based package for wind resource assessment with Global Wind Atlas (GWA) inputs.
+It materializes canonical Zarr stores, computes wind/energy metrics, and persists/exports results.
 
 ## Installation
 
@@ -20,19 +20,19 @@ atlas = Atlas(
     crs="EPSG:3035",
 )
 
-# Optional: restrict materialized turbines to an explicit subset
+# Optional: restrict turbines materialized into wind.zarr
 atlas.configure_turbines(["Enercon.E40.500", "Vestas.V100.2000"])
 
 # Build/update canonical stores (wind.zarr + landscape.zarr)
 atlas.materialize()
 
-# Select turbines for compute calls that require turbines
+# Select turbines for turbine-dependent metrics
 atlas.wind.select(turbines=["Enercon.E40.500"])
 
-# Compute + cache into active wind store (default: direct rotor CF quadrature)
-atlas.wind.capacity_factors(air_density=True).cache()
+# Compute + cache into active wind store
+atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=True).cache()
 
-# Compute another metric
+# Compute another metric (lazy result)
 mean_ws = atlas.wind.mean_wind_speed(height=100).data
 ```
 
@@ -42,9 +42,9 @@ After materialization, CLEO uses:
 
 - `<workdir>/wind.zarr`
 - `<workdir>/landscape.zarr`
-- `<workdir>/regions/<region_id>/wind.zarr` (only after region selection/materialization)
+- `<workdir>/regions/<region_id>/wind.zarr` (after region selection/materialization)
 - `<workdir>/regions/<region_id>/landscape.zarr`
-- `<workdir>/results/<run_id>/<metric_name>.zarr` (only after `persist`)
+- `<workdir>/results/<run_id>/<metric_name>.zarr` (after `persist`)
 - `<workdir>/resources/*.yml`
 - `<workdir>/data/raw/<ISO3>/*.tif`
 - `<workdir>/data/nuts/*`
@@ -68,106 +68,75 @@ Atlas(
 )
 ```
 
-Options:
-
 - `path`: workspace root for stores/resources/results.
-- `country`: ISO3 country code (for GWA/raw data resolution).
-- `crs`: canonical projected CRS for the atlas stores.
-- `chunk_policy`: xarray/dask chunk sizes for `y/x`.
-- `compute_backend`: compute execution backend for internal eager materialization (`"serial"|"threads"|"processes"|"distributed"`).
-- `compute_workers`: optional worker count for local dask backends (`threads`/`processes`).
-  Use `None` for dask defaults. Must be `None` or `1` for `serial`. Must be `None` for `distributed` (configure workers on the active client).
-- `region`: optional initial region selection.
+- `country`: ISO3 country code.
+- `crs`: canonical projected CRS for atlas stores.
+- `chunk_policy`: chunk sizes for `y/x` when opening zarr datasets.
+- `compute_backend`: eager-materialization backend (`"serial"|"threads"|"processes"|"distributed"`).
+- `compute_workers`: optional worker cap for local backends (`threads`/`processes`).
+  Must be `None` or `1` for `serial`; must be `None` for `distributed`.
+- `region`: optional initial region selection (applied on `materialize()`).
 - `results_root`: optional custom results directory.
-- `fingerprint_method`: hashing/fingerprinting policy used by unification internals.
+- `fingerprint_method`: internal fingerprinting policy used by unification internals.
 
-Good for:
+### Lifecycle and Selection
 
-- Creating a reproducible atlas workspace with explicit compute/storage policy.
-
-### Lifecycle and Region Selection
-
-`atlas.materialize()`
-- Builds/updates canonical stores and selected region stores.
-- Good for normal day-to-day workflow.
-
-`atlas.materialize_canonical()`
-- Builds/updates only base country stores (`wind.zarr`, `landscape.zarr`).
-- Good for preparing a base before region-specific work.
-
-`atlas.select(region=..., region_level=None, inplace=False)`
-- `region`: region name or `None` (clear selection).
-- `region_level`: optional NUTS level (1/2/3) disambiguation.
-- `inplace`: if `True`, mutates atlas; otherwise returns a selected copy.
-- Good for switching scope between full-country and region-scoped analysis.
-
-`atlas.region`
-- Current selected region name (`None` means full-country).
-
-`atlas.nuts_regions` / `atlas.nuts_regions_level(level)`
-- Discover available region names (all levels or one specific level).
+- `atlas.materialize()`
+  - Ensures base stores and, when a region is selected, region stores.
+- `atlas.materialize_canonical()`
+  - Ensures base stores only (`wind.zarr`, `landscape.zarr`).
+- `atlas.select(region=..., region_level=None, inplace=False)`
+  - `region`: region name or `None` to clear selection.
+  - `region_level`: optional NUTS level disambiguation (`1|2|3`).
+  - `inplace=False` returns a selected clone; `inplace=True` mutates current atlas.
+- `atlas.region`
+  - current selected region name, or `None`.
+- `atlas.nuts_regions`, `atlas.nuts_regions_level(level)`
+  - discover available region names.
 
 ### Domains and Data Access
 
-`atlas.wind` / `atlas.landscape`
-- Domain facades for compute/load operations.
+- `atlas.wind`, `atlas.landscape`
+  - domain facades.
+- `atlas.wind_data`, `atlas.landscape_data`
+  - direct shortcuts to `atlas.wind.data` / `atlas.landscape.data`.
+- `atlas.configure_turbines(turbines)`
+  - configure turbines used for wind materialization.
+- `atlas.turbines_configured`
+  - configured materialization turbine set or `None`.
+- `atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True, cast_binary_to_int=False, include_only=None)`
+  - flattens domain data into a tabular frame.
+- `Atlas.validate_flatten_schema(df, required_columns)`
+  - raises if required flattened columns are missing.
 
-`atlas.wind_data` / `atlas.landscape_data`
-- Direct dataset access shortcuts.
+### WindDomain
 
-`atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True, cast_binary_to_int=False, include_only=None)`
-- `domain`: select source dataset(s).
-- `digits`: coordinate rounding precision for `(y, x)` index.
-- `exclude_template`: omit template variable from output columns.
-- `include_domain_prefix`: for `domain="both"`, prefix columns with `wind__` / `landscape__`.
-- `cast_binary_to_int`: if `True`, cast binary columns (`bool` or numeric `{0,1}`) to nullable `Int8`.
-- `include_only`: optional list of output columns to keep; raises if any requested column is missing.
-- Good for exporting tidy tabular data (e.g. econometric pipelines).
-
-`Atlas.validate_flatten_schema(df, required_columns)`
-- Validates that flattened output contains all required columns.
-- Raises with missing column names; does not mutate/filter data.
-
-### WindDomain APIs
-
-`atlas.wind.turbines`
-- Tuple of available turbine IDs in the active store.
-
-`atlas.wind.selected_turbines`
-- Persistent turbine selection or `None` (all turbines).
-
-`atlas.wind.select(turbines=[...])`
-- Set persistent turbine selection for future turbine-dependent metrics.
-
-`atlas.wind.clear_selection()`
-- Clear persistent selection.
-
-`atlas.wind.compute(metric, **kwargs)`
-- Generic metric entrypoint.
-- Good for dynamic metric dispatch.
-
-`atlas.wind.mean_wind_speed(height, **kwargs)`
-- Convenience wrapper for `compute("mean_wind_speed", ...)`.
-
-`atlas.wind.capacity_factors(turbines=None, height=100, air_density=False, loss_factor=1.0, mode="direct_cf_quadrature", rews_n=12, **kwargs)`
-- Convenience wrapper for `compute("capacity_factors", ...)`.
-
-`atlas.wind.rews_mps(turbines=None, air_density=False, rews_n=12, **kwargs)`
-- Convenience wrapper for `compute("rews_mps", ...)`.
+- `atlas.wind.turbines`
+  - available turbine IDs in active wind store.
+- `atlas.wind.selected_turbines`
+  - persistent selection or `None` (all turbines).
+- `atlas.wind.select(turbines=[...] | None, turbine_indices=[...] | None)`
+  - set persistent turbine selection by IDs (`turbines`) or by positional indices into `atlas.wind.turbines` (`turbine_indices`).
+  - exactly one of `turbines` or `turbine_indices` must be provided.
+  - example: `atlas.wind.select(turbine_indices=[1, 3, 4])`
+- `atlas.wind.clear_selection()`
+  - clear persistent selection.
+- `atlas.wind.compute(metric, **kwargs)`
+  - generic metric entrypoint.
+- `atlas.wind.mean_wind_speed(height, **kwargs)`
+- `atlas.wind.capacity_factors(turbines=None, air_density=False, loss_factor=1.0, mode="direct_cf_quadrature", rews_n=12, **kwargs)`
+  - does not accept `height`; hub height is derived from each turbine definition.
+- `atlas.wind.rews_mps(turbines=None, air_density=False, rews_n=12, **kwargs)`
 
 `compute(...)` returns `DomainResult`:
 
 - `.data`
-  - Lazy/eager xarray `DataArray` depending on backing.
+  - computed `xarray.DataArray` (lazy when backed by dask).
 - `.cache(overwrite=True, allow_mode_change=False)`
-  - `overwrite`: replace existing variable in active wind store.
-  - `allow_mode_change`: required when replacing cached `capacity_factors` with different mode (`hub` vs `rews`).
-  - Good for making results part of active domain state.
+  - writes metric to active wind store and reloads surfaced domain state.
+  - `allow_mode_change` is required to replace existing `capacity_factors` with a different `cleo:cf_mode`.
 - `.persist(run_id=None, params=None, metric_name=None)`
-  - `run_id`: explicit run id (or auto-generate).
-  - `params`: metadata dict to store in attrs.
-  - `metric_name`: override default metric variable name.
-  - Good for run-tracked artifacts under `results_root`.
+  - writes standalone result artifact under `results_root`.
 
 ### Supported Wind Metrics
 
@@ -175,82 +144,50 @@ Good for:
   - Required: `height` (int)
 - `capacity_factors`
   - Requires turbines via selection or `turbines=[...]`
-  - Optional: `mode="direct_cf_quadrature"|"momentmatch_weibull"|"hub"|"rews"`, `rews_n`, `air_density`, `loss_factor`
-  - `mode="direct_cf_quadrature"` is the rotor-aware default (node-wise rotor integration).
-  - `mode="momentmatch_weibull"` computes a rotor-equivalent Weibull first, then integrates CF.
-  - `mode="rews"` is the legacy approximation mode.
+  - Options: `mode="direct_cf_quadrature"|"momentmatch_weibull"|"hub"|"rews"`, `rews_n`, `air_density`, `loss_factor`
 - `rews_mps`
   - Requires turbines via selection or `turbines=[...]`
-  - Optional: `rews_n`, `air_density`
+  - Options: `rews_n`, `air_density`
 - `lcoe`
-  - Requires turbines and:
-  - `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`
-  - Optional: `turbine_cost_share`, `hours_per_year`, plus capacity-factor options
+  - Requires turbines and: `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`
+  - Optional: `turbine_cost_share`, `hours_per_year`, plus `capacity_factors` options (`mode`, `rews_n`, `air_density`, `loss_factor`)
 - `min_lcoe_turbine`
+  - Same parameter requirements/options as `lcoe`
 - `optimal_power`
+  - Same parameter requirements/options as `lcoe`
 - `optimal_energy`
+  - Same parameter requirements/options as `lcoe`
 
-### REWS and Rotor-Aware CF
+### LandscapeDomain
 
-`rews_mps` returns rotor-equivalent wind speed (m/s) on `(turbine, y, x)`.
-It uses rotor quadrature across turbine disk heights, including above-200m vertical evaluation when needed.
+- `atlas.landscape.data`
+  - active landscape dataset.
+- `atlas.landscape.add(name, source_path, *, kind="raster", params=None, materialize=True, if_exists="error")`
+  - register and optionally materialize landscape rasters.
+  - `if_exists`: `"error"|"replace"|"noop"`.
+- `atlas.materialize_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
+  - prepares CLC cache aligned to wind/GWA grid.
+- `atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error", materialize=True)`
+  - `categories="all"`: full categorical layer (`land_cover` default name).
+  - `categories=int`: single binary CLC-code mask.
+  - `categories=list[int]`: combined binary mask (requires `name`).
 
-Use this when you need an explicit REWS layer, and use `capacity_factors(..., mode="direct_cf_quadrature")` for the most faithful rotor-aware CF path.
+### Results and Cleanup
 
-```python
-# Select turbines once
-atlas.wind.select(turbines=["Enercon.E40.500", "Vestas.V112.3075", "Vestas.V150.4200"])
+- `atlas.new_run_id(prefix=None)`
+  - creates sortable run ID with optional safe prefix.
+- `atlas.persist(metric_name, obj, run_id=None, params=None)`
+  - low-level persistence API; `DomainResult.persist(...)` is preferred.
+- `atlas.open_result(run_id, metric_name)`
+  - open persisted result store lazily.
+- `atlas.export_result_netcdf(run_id, metric_name, out_path, encoding=None)`
+  - export persisted result store to `.nc`.
+- `atlas.clean_results(run_id=None, older_than=None, metric_name=None)`
+  - cleanup persisted result stores.
+- `atlas.clean_regions(region=None, older_than=None, include_incomplete=True)`
+  - cleanup region materialization stores.
 
-# Rotor-aware capacity factors (default mode shown explicitly)
-cf = atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=True, rews_n=12).data
-
-# First-class REWS output
-rews = atlas.wind.rews_mps(air_density=True, rews_n=12).data
-```
-
-### LandscapeDomain APIs
-
-`atlas.landscape.data`
-- Active landscape dataset.
-
-`atlas.landscape.add(name, source_path, *, kind="raster", params=None, materialize=True, if_exists="error")`
-- `name`: output variable name in landscape store.
-- `source_path`: input source path.
-- `kind`: currently only `"raster"`.
-- `params`: source-specific params (e.g. `{"categorical": True}`).
-- `materialize`: if `True`, immediately writes variable into landscape store.
-- `if_exists`: `"error"|"replace"|"noop"` conflict policy.
-- Good for incrementally enriching landscape layers.
-
-`atlas.materialize_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
-- Downloads CLC source raster (if missing) and prepares a country-cropped cache aligned to wind/GWA grid.
-- For first-time download, provide a direct raster URL via `url=...` (if cache is already present, `url` is optional).
-- Returns path to prepared CLC raster cache.
-
-`atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error", materialize=True)`
-- Adds CLC data into the active landscape store via the same clipping/masking pipeline as other landscape rasters.
-- `categories="all"`: adds categorical `land_cover` layer (or `name` override).
-- `categories=int`: adds one binary CLC-code mask variable (`0/1`, NaN outside valid mask).
-- `categories=list[int]`: adds combined binary mask for those codes; requires `name`.
-
-### Results API
-
-`atlas.new_run_id(prefix=None)`
-- Creates sortable run ID string; optional safe prefix.
-
-`atlas.persist(metric_name, obj, run_id=None, params=None)` (transitional low-level API)
-- Persists arbitrary `Dataset`/`DataArray` into results store.
-- Prefer fluent `DomainResult.persist(...)` when available.
-- `run_id` and `metric_name` must be simple path tokens (no `/`, `\\`, `.` or `..`).
-
-`atlas.open_result(run_id, metric_name)`
-- Opens a persisted result store lazily.
-- `run_id` and `metric_name` use the same path-token validation as `persist`.
-
-`atlas.export_result_netcdf(run_id, metric_name, out_path, encoding=None)`
-- Exports a persisted result store to `.nc`.
-- `encoding`: optional xarray encoding overrides.
-- `run_id` and `metric_name` use the same path-token validation as `persist`.
+Example:
 
 ```python
 run = atlas.wind.compute("capacity_factors", mode="hub", air_density=True)
@@ -259,43 +196,29 @@ opened = atlas.open_result(store_path.parent.name, "capacity_factors")
 atlas.export_result_netcdf(store_path.parent.name, "capacity_factors", "cf.nc")
 ```
 
-### Cleanup APIs
-
-`atlas.clean_results(run_id=None, older_than=None, metric_name=None)`
-- Remove persisted result stores by run/age/metric filters.
-- When provided, `run_id`/`metric_name` use the same path-token validation as `persist`.
-
-`atlas.clean_regions(region=None, older_than=None, include_incomplete=True)`
-- Remove materialized region stores under `<workdir>/regions`.
-- `include_incomplete=False` keeps partial/incomplete region stores untouched.
-
 ## Dask and Chunking
 
 CLEO does not expose a `DaskConfig` object in the public API.
-Chunking behavior is controlled by `chunk_policy` and by how xarray opens data.
+Chunking and execution behavior are controlled via `chunk_policy`, dataset chunking, and `compute_backend`.
 
-- If `dask` is installed and arrays are chunked, computations can remain lazy.
-- If data is unchunked/eager, computations execute eagerly.
-- For local schedulers, set `compute_workers` on `Atlas(...)` to cap worker count.
+- Dask-backed arrays can stay lazy until materialization paths (`cache`, `persist`, export).
+- Local backend worker cap is controlled by `compute_workers`.
 - `compute_backend="distributed"` requires an active `dask.distributed.Client`.
-  In distributed mode, worker count is managed by the client/cluster (not `Atlas`).
-  If no active client exists, CLEO raises a clear `RuntimeError`.
-  Local worker cap example:
 
 ```python
 atlas = Atlas(..., compute_backend="processes", compute_workers=4)
 ```
-  Typical setup:
 
 ```python
 from dask.distributed import Client
-Client()  # start and register active client
+
+Client()
 atlas = Atlas(..., compute_backend="distributed")
 ```
 
-## Benchmarking Variants
+## Benchmarking
 
-Use `cleo.bench.benchmark_metric_variants(...)` to compare algorithmic variants of the same metric side-by-side under one benchmark harness.
+Use `cleo.bench.benchmark_metric_variants(...)` for side-by-side metric variant comparisons.
 
 ```python
 from cleo.bench import benchmark_metric_variants
@@ -313,38 +236,17 @@ df = benchmark_metric_variants(
     baseline_label="baseline",
 )
 
-# Per-run columns include:
-# - label, run, seconds, ok, error
-# - proc_tree_peak_rss_mb (if psutil installed)
-# - speedup_vs_baseline (median baseline / median variant)
 print(df)
 ```
 
-For temporary capacity-factor kernel experiments (without changing production API), use:
+Temporary algorithm experiments:
 
 ```bash
 python usage/benchmark_capacity_factor_algorithms.py --atlas-root /path/to/atlas
 ```
 
-Define/edit temporary candidates in `usage/cf_algorithm_variants.py`.
-
-## Remaining Issues
-
-These are known and intentionally left as follow-up work:
-
-- Core orchestration modules are large (`unify.py`, `atlas.py`) and could be split to reduce maintenance risk.
-- Core orchestration modules are still large (`cleo/unification/unifier.py`, `atlas.py`) and could be split further to reduce maintenance risk.
-
 ## Testing
 
-Test suite location:
-
-- `tests/unit/`
-- `tests/integration/`
-- `tests/smoke/`
-
-Run:
-
 ```bash
-python -m pytest tests/ -v
+python -m pytest -q
 ```

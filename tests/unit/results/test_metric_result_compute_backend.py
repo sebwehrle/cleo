@@ -11,6 +11,20 @@ import xarray as xr
 from cleo.results import DomainResult
 
 
+class _DomainDouble:
+    """Minimal domain double exposing `_atlas`, `_data`, and `.data`."""
+
+    def __init__(self, atlas):
+        self._atlas = atlas
+        self._data = None
+
+    @property
+    def data(self) -> xr.Dataset:
+        if self._data is None:
+            self._data = xr.open_zarr(self._atlas._active_wind_store_path(), consolidated=False)
+        return self._data
+
+
 def _seed_wind_store(path) -> None:
     ds = xr.Dataset(
         {"template": (("y", "x"), np.ones((2, 2), dtype=np.float32))},
@@ -43,7 +57,7 @@ def test_domain_result_cache_uses_atlas_compute_backend(monkeypatch, tmp_path) -
         compute_workers=3,
         _active_wind_store_path=lambda: store_path,
     )
-    domain = SimpleNamespace(_atlas=atlas, _data=None)
+    domain = _DomainDouble(atlas)
     da = xr.DataArray(
         np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64),
         dims=("y", "x"),
@@ -72,7 +86,7 @@ def test_domain_result_cache_defaults_to_serial_backend(monkeypatch, tmp_path) -
     atlas = SimpleNamespace(
         _active_wind_store_path=lambda: store_path,
     )
-    domain = SimpleNamespace(_atlas=atlas, _data=None)
+    domain = _DomainDouble(atlas)
     da = xr.DataArray(
         np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64),
         dims=("y", "x"),
@@ -108,7 +122,7 @@ def test_domain_result_cache_prefers_atlas_evaluate_for_io(monkeypatch, tmp_path
         _active_wind_store_path=lambda: store_path,
         _evaluate_for_io=_evaluate_for_io,
     )
-    domain = SimpleNamespace(_atlas=atlas, _data=None)
+    domain = _DomainDouble(atlas)
     da = xr.DataArray(
         np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64),
         dims=("y", "x"),

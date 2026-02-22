@@ -83,6 +83,39 @@ class TestReplaceDirAtomic:
         assert (dst_dir / "root.txt").read_text() == "root"
         assert (dst_dir / "subdir" / "nested.txt").read_text() == "nested"
 
+    def test_rolls_back_backup_if_swap_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If tmp->dst replace fails, old dst content is restored from backup."""
+        import os
+
+        dst_dir = tmp_path / "dst"
+        dst_dir.mkdir()
+        (dst_dir / "old.txt").write_text("old")
+
+        tmp_dir = tmp_path / "tmp"
+        tmp_dir.mkdir()
+        (tmp_dir / "new.txt").write_text("new")
+
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def _replace_with_failure(src, dst):
+            calls["n"] += 1
+            # 1st call moves dst->backup, 2nd call should fail tmp->dst
+            if calls["n"] == 2:
+                raise OSError("simulated swap failure")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr("cleo.store.os.replace", _replace_with_failure)
+
+        with pytest.raises(OSError, match="Failed to atomically replace directory"):
+            replace_dir_atomic(tmp_dir, dst_dir)
+
+        assert dst_dir.exists()
+        assert (dst_dir / "old.txt").read_text() == "old"
+        assert not (dst_dir / "new.txt").exists()
+        # tmp should be cleaned up on failure
+        assert not tmp_dir.exists()
+
 
 class TestAtomicDirContextManager:
     """Tests for atomic_dir context manager."""
@@ -143,3 +176,45 @@ class TestAtomicDirContextManager:
 
         assert dst_dir.exists()
         assert (dst_dir / "file.txt").read_text() == "content"
+
+    def test_cleanup_runs_when_replace_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Temp directory is cleaned when replacement phase fails."""
+        dst_dir = tmp_path / "store"
+        captured = {}
+
+        def _fail_replace(tmp_dir, dst):
+            captured["tmp_dir"] = tmp_dir
+            raise OSError("replace failed")
+
+        monkeypatch.setattr("cleo.store.replace_dir_atomic", _fail_replace)
+
+        with pytest.raises(OSError, match="replace failed"):
+            with atomic_dir(dst_dir) as tmp:
+                (tmp / "file.txt").write_text("content")
+
+        assert "tmp_dir" in captured
+        assert not captured["tmp_dir"].exists()
+        assert not dst_dir.exists()
+
+    def test_cleanup_rmtree_failure_does_not_mask_original_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cleanup errors are swallowed; original error from context is preserved."""
+        import shutil
+
+        dst_dir = tmp_path / "store"
+        real_rmtree = shutil.rmtree
+        calls = {"n": 0}
+
+        def _rmtree_once_fails(path, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("cleanup failed")
+            return real_rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr("cleo.store.shutil.rmtree", _rmtree_once_fails)
+
+        with pytest.raises(ValueError, match="original error"):
+            with atomic_dir(dst_dir) as tmp:
+                (tmp / "file.txt").write_text("content")
+                raise ValueError("original error")

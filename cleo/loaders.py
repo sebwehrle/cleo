@@ -29,7 +29,7 @@ def _maybe_chunk_auto(x):
         return x
     try:
         return x.chunk("auto")
-    except (TypeError, ValueError, AttributeError):
+    except (TypeError, ValueError, AttributeError, RuntimeError, OSError):
         logger.debug("Automatic chunking unavailable; returning unchunked object.", exc_info=True)
         return x
 

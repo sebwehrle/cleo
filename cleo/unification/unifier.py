@@ -1014,6 +1014,16 @@ class Unifier:
         da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan)
         da = da.rename(variable_name)
 
+        # Optional CLC category extraction: derive binary indicator from CLC codes.
+        clc_codes_raw = params.get("clc_codes")
+        if clc_codes_raw is not None:
+            if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
+                raise ValueError(
+                    "params['clc_codes'] must be a non-empty list of integer CLC codes."
+                )
+            clc_codes = [int(code) for code in clc_codes_raw]
+            da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
+
         # Enforce y/x coords EXACT match to wind reference coords
         wind_y = wind_ref.coords["y"].values
         wind_x = wind_ref.coords["x"].values

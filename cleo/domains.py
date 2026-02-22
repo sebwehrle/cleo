@@ -418,6 +418,89 @@ class LandscapeDomain:
                 if_exists=if_exists,
             )
 
+    def add_clc_category(
+        self,
+        categories: str | int | list[int],
+        *,
+        name: str | None = None,
+        source: str = "clc2018",
+        if_exists: str = "error",
+        materialize: bool = True,
+    ) -> None:
+        """Add CLC-coded layer or CLC-derived category variable(s).
+
+        - ``categories=\"all\"`` adds the full CLC categorical layer
+          (default variable name ``\"land_cover\"``).
+        - ``categories=int`` adds a single binary category mask.
+        - ``categories=list[int]`` adds a combined binary category mask
+          for the specified codes.
+
+        The resulting variable is materialized through the same landscape
+        pipeline as other raster additions (AOI clip, wind-grid match, valid_mask).
+
+        :param categories: ``\"all\"`` or one/many numeric CLC codes.
+        :param name: Output variable name. Required for multi-code lists.
+            For a single known code, defaults to a normalized code label.
+        :param source: CLC source identifier (currently ``\"clc2018\"``).
+        :param if_exists: Conflict policy: ``\"error\"``, ``\"replace\"``, or ``\"noop\"``.
+        :param materialize: If ``True``, materialize immediately.
+        :returns: ``None``
+        """
+        from cleo.clc import default_category_name
+
+        atlas = self._atlas
+        prepared_path = atlas.materialize_clc(source=source)
+
+        if categories == "all":
+            variable_name = name or "land_cover"
+            params = {"categorical": True, "clc_source": source}
+            self.add(
+                variable_name,
+                prepared_path,
+                kind="raster",
+                params=params,
+                materialize=materialize,
+                if_exists=if_exists,
+            )
+            return
+
+        if isinstance(categories, int):
+            codes = [int(categories)]
+        elif isinstance(categories, list) and categories:
+            codes = [int(c) for c in categories]
+        else:
+            raise ValueError(
+                "categories must be 'all', an int code, or a non-empty list of int codes."
+            )
+
+        if name is None:
+            if len(codes) > 1:
+                raise ValueError(
+                    "name is required when adding multiple CLC codes in one variable."
+                )
+            inferred = default_category_name(atlas.path, codes[0])
+            if inferred is None:
+                raise ValueError(
+                    f"No default variable name known for CLC code {codes[0]!r}; pass name=..."
+                )
+            variable_name = inferred
+        else:
+            variable_name = name
+
+        params = {
+            "categorical": True,
+            "clc_source": source,
+            "clc_codes": codes,
+        }
+        self.add(
+            variable_name,
+            prepared_path,
+            kind="raster",
+            params=params,
+            materialize=materialize,
+            if_exists=if_exists,
+        )
+
     @property
     def data(self) -> xr.Dataset:
         """

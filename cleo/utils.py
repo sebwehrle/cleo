@@ -49,7 +49,31 @@ def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
         return converted_arrays
 
 
-def flatten(self, digits=5, exclude_template=True):
+def _cast_binary_series_to_int(s: pd.Series) -> pd.Series:
+    """Cast binary series (0/1 or bool) to nullable integer, else return unchanged."""
+    if pd.api.types.is_bool_dtype(s.dtype):
+        return s.astype("Int8")
+
+    if not pd.api.types.is_numeric_dtype(s.dtype):
+        return s
+
+    non_na = s.dropna()
+    if non_na.empty:
+        return s
+
+    vals = set(np.unique(non_na.to_numpy(dtype=np.float64)))
+    if vals.issubset({0.0, 1.0}):
+        return s.astype("Int8")
+    return s
+
+
+def flatten(
+    self,
+    digits=5,
+    exclude_template=True,
+    cast_binary_to_int=False,
+    include_only=None,
+):
     """
     Converts data in a xarray.Dataset to a pandas.DataFrame in a slower but more memory efficient way than
     xarray.Dataset.to_dataframe. Rounding of coordinates facilitates merging across data variables. The default
@@ -59,6 +83,10 @@ def flatten(self, digits=5, exclude_template=True):
     :param self: an instance of the WindResourceAtlas- or SiteData-class
     :param digits: number of digits to round x and y coordinates to
     :param exclude_template: a boolean flag to exclude the template-data variable
+    :param cast_binary_to_int: if True, cast binary columns (bool or {0,1}) to nullable Int8.
+        Continuous/non-binary columns are left unchanged.
+    :param include_only: optional list of output column names to keep. Raises if any
+        requested column is not present in the flattened output.
     :return: a pandas.Dataframe with one column per data variable and non-spatial coordinate
     """
 
@@ -112,4 +140,17 @@ def flatten(self, digits=5, exclude_template=True):
         empty_index = pd.MultiIndex.from_arrays([[], []], names=["y", "x"])
         return pd.DataFrame(index=empty_index)
 
-    return pd.concat(collect_df, axis=1)
+    out = pd.concat(collect_df, axis=1)
+    if cast_binary_to_int:
+        for col in out.columns:
+            out[col] = _cast_binary_series_to_int(out[col])
+    if include_only is not None:
+        include_only = list(include_only)
+        missing = [c for c in include_only if c not in out.columns]
+        if missing:
+            raise ValueError(
+                f"include_only contains unknown columns: {sorted(missing)!r}. "
+                f"Available columns: {sorted(map(str, out.columns))!r}"
+            )
+        out = out.loc[:, include_only]
+    return out

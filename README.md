@@ -115,12 +115,18 @@ Good for:
 `atlas.wind_data` / `atlas.landscape_data`
 - Direct dataset access shortcuts.
 
-`atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True)`
+`atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True, cast_binary_to_int=False, include_only=None)`
 - `domain`: select source dataset(s).
 - `digits`: coordinate rounding precision for `(y, x)` index.
 - `exclude_template`: omit template variable from output columns.
 - `include_domain_prefix`: for `domain="both"`, prefix columns with `wind__` / `landscape__`.
+- `cast_binary_to_int`: if `True`, cast binary columns (`bool` or numeric `{0,1}`) to nullable `Int8`.
+- `include_only`: optional list of output columns to keep; raises if any requested column is missing.
 - Good for exporting tidy tabular data (e.g. econometric pipelines).
+
+`Atlas.validate_flatten_schema(df, required_columns)`
+- Validates that flattened output contains all required columns.
+- Raises with missing column names; does not mutate/filter data.
 
 ### WindDomain APIs
 
@@ -189,6 +195,17 @@ Good for:
 - `if_exists`: `"error"|"replace"|"noop"` conflict policy.
 - Good for incrementally enriching landscape layers.
 
+`atlas.materialize_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
+- Downloads CLC source raster (if missing) and prepares a country-cropped cache aligned to wind/GWA grid.
+- For first-time download, provide a direct raster URL via `url=...` (if cache is already present, `url` is optional).
+- Returns path to prepared CLC raster cache.
+
+`atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error", materialize=True)`
+- Adds CLC data into the active landscape store via the same clipping/masking pipeline as other landscape rasters.
+- `categories="all"`: adds categorical `land_cover` layer (or `name` override).
+- `categories=int`: adds one binary CLC-code mask variable (`0/1`, NaN outside valid mask).
+- `categories=list[int]`: adds combined binary mask for those codes; requires `name`.
+
 ### Results API
 
 `atlas.new_run_id(prefix=None)`
@@ -254,7 +271,6 @@ atlas = Atlas(..., compute_backend="distributed")
 These are known and intentionally left as follow-up work:
 
 - Broad exception handling (`except Exception`) still exists in several internal modules (`atlas`, `unify`, `spatial`, `loaders`) and can hide root causes.
-- `loaders.add_corine_land_cover` remains experimental and contains TODO-marked performance/workflow gaps.
 - Core orchestration modules are large (`unify.py`, `atlas.py`) and could be split to reduce maintenance risk.
 
 ## Testing

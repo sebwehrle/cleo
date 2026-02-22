@@ -209,6 +209,8 @@ class Atlas:
         digits: int = 5,
         exclude_template: bool = True,
         include_domain_prefix: bool = True,
+        cast_binary_to_int: bool = False,
+        include_only: Sequence[str] | None = None,
     ):
         """Flatten atlas domain data to a pandas DataFrame for downstream models.
 
@@ -221,6 +223,10 @@ class Atlas:
         :param exclude_template: If ``True``, skip the ``template`` data variable.
         :param include_domain_prefix: When ``domain="both"``, prefix columns with
             ``"wind__"`` / ``"landscape__"`` to avoid collisions.
+        :param cast_binary_to_int: If ``True``, cast binary columns (bool or
+            numeric ``{0,1}``) to nullable integer ``Int8``.
+        :param include_only: Optional list of output columns to keep. Raises if
+            any requested column is missing.
         :returns: Flattened :class:`pandas.DataFrame`.
         :raises ValueError: If ``domain`` is unsupported.
         """
@@ -234,8 +240,20 @@ class Atlas:
         elif domain == "both":
             wind_proxy = SimpleNamespace(data=self.wind_data)
             land_proxy = SimpleNamespace(data=self.landscape_data)
-            wind_df = flatten_data(wind_proxy, digits=digits, exclude_template=exclude_template)
-            land_df = flatten_data(land_proxy, digits=digits, exclude_template=exclude_template)
+            wind_df = flatten_data(
+                wind_proxy,
+                digits=digits,
+                exclude_template=exclude_template,
+                cast_binary_to_int=cast_binary_to_int,
+                include_only=None,
+            )
+            land_df = flatten_data(
+                land_proxy,
+                digits=digits,
+                exclude_template=exclude_template,
+                cast_binary_to_int=cast_binary_to_int,
+                include_only=None,
+            )
 
             if include_domain_prefix:
                 wind_df = wind_df.rename(columns={c: f"wind__{c}" for c in wind_df.columns})
@@ -247,12 +265,48 @@ class Atlas:
                         "Column name collision when flattening both domains: "
                         f"{sorted(overlap)}. Set include_domain_prefix=True."
                     )
-            return wind_df.join(land_df, how="outer")
+            out = wind_df.join(land_df, how="outer")
+            if include_only is not None:
+                include_only = list(include_only)
+                missing = [c for c in include_only if c not in out.columns]
+                if missing:
+                    raise ValueError(
+                        f"include_only contains unknown columns: {sorted(missing)!r}. "
+                        f"Available columns: {sorted(map(str, out.columns))!r}"
+                    )
+                out = out.loc[:, include_only]
+            return out
         else:
             raise ValueError(f"Unsupported domain {domain!r}; expected 'wind', 'landscape', or 'both'.")
 
         proxy = SimpleNamespace(data=data)
-        return flatten_data(proxy, digits=digits, exclude_template=exclude_template)
+        return flatten_data(
+            proxy,
+            digits=digits,
+            exclude_template=exclude_template,
+            cast_binary_to_int=cast_binary_to_int,
+            include_only=include_only,
+        )
+
+    @staticmethod
+    def validate_flatten_schema(df, required_columns: Sequence[str]) -> None:
+        """Validate flattened DataFrame contains required model columns.
+
+        This helper performs schema checks only. It does not filter rows,
+        cast values, or modify the DataFrame.
+
+        :param df: Flattened DataFrame to validate.
+        :param required_columns: Columns required by downstream modeling.
+        :returns: ``None``
+        :raises ValueError: If required columns are missing.
+        """
+        required = list(required_columns)
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Missing required flatten columns: {sorted(missing)!r}. "
+                f"Available columns: {sorted(map(str, df.columns))!r}"
+            )
 
     @property
     def wind_zarr(self) -> xr.Dataset:
@@ -721,6 +775,35 @@ class Atlas:
         u.materialize_wind(self)
         u.materialize_landscape(self)
         self._canonical_ready = True
+
+    def materialize_clc(
+        self,
+        *,
+        source: str = "clc2018",
+        url: str | None = None,
+        force_download: bool = False,
+        force_prepare: bool = False,
+    ) -> Path:
+        """Prepare country CLC cache aligned to wind/GWA grid.
+
+        Downloads CLC source data if missing, then creates a prepared GeoTIFF
+        clipped/cropped to country coverage and aligned to the canonical wind grid.
+
+        :param source: CLC source identifier (currently ``"clc2018"``).
+        :param url: Optional source URL override.
+        :param force_download: If ``True``, re-download source raster.
+        :param force_prepare: If ``True``, rebuild prepared country cache.
+        :returns: Path to prepared CLC GeoTIFF.
+        """
+        from cleo.clc import materialize_clc
+
+        return materialize_clc(
+            self,
+            source=source,
+            url=url,
+            force_download=force_download,
+            force_prepare=force_prepare,
+        )
 
     # -------------------------------------------------------------------------
     # Results API v1

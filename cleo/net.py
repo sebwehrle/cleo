@@ -11,6 +11,7 @@ No other Cleo module should import requests/urllib/httpx/aiohttp directly.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,8 @@ from requests.exceptions import RequestException as _RequestException
 # Re-export for use by other modules
 HTTPProxyAuth = _HTTPProxyAuth
 RequestException = _RequestException
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from requests import Response
@@ -120,18 +123,26 @@ def download_to_path(
         tmp_path.replace(dest)
         return dest
 
-    except Exception:
+    except (RequestException, FileNotFoundError, OSError, ValueError, RuntimeError, TypeError):
         # Best-effort cleanup of partial file
         try:
             if tmp_path.exists():
                 tmp_path.unlink()
-        except Exception:
-            pass
+        except OSError:
+            logger.debug(
+                "Failed to remove temporary download file during cleanup.",
+                extra={"tmp_path": str(tmp_path), "url": url},
+                exc_info=True,
+            )
         raise
 
     finally:
         if response is not None:
             try:
                 response.close()
-            except Exception:
-                pass
+            except (RequestException, OSError, ValueError, RuntimeError):
+                logger.debug(
+                    "Failed to close HTTP response cleanly after download.",
+                    extra={"url": url, "dest": str(dest)},
+                    exc_info=True,
+                )

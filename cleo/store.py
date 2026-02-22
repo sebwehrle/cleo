@@ -9,9 +9,12 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
+import logging
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
+
+logger = logging.getLogger(__name__)
 
 
 def _unique_tmp_sibling(path: Path) -> Path:
@@ -57,13 +60,17 @@ def replace_dir_atomic(tmp_dir: Path, dst_dir: Path) -> None:
         if backup_dir is not None and backup_dir.exists():
             shutil.rmtree(backup_dir)
 
-    except Exception as e:
+    except OSError as e:
         # Best-effort cleanup
         if tmp_dir.exists():
             try:
                 shutil.rmtree(tmp_dir)
-            except Exception:
-                pass
+            except OSError:
+                logger.debug(
+                    "Failed to clean temporary directory after atomic replace failure.",
+                    extra={"tmp_dir": str(tmp_dir), "dst_dir": str(dst_dir)},
+                    exc_info=True,
+                )
 
         if backup_dir is not None and backup_dir.exists():
             try:
@@ -72,8 +79,16 @@ def replace_dir_atomic(tmp_dir: Path, dst_dir: Path) -> None:
                     os.replace(backup_dir, dst_dir)
                 else:
                     shutil.rmtree(backup_dir)
-            except Exception:
-                pass
+            except OSError:
+                logger.debug(
+                    "Failed to restore/remove backup directory during atomic replace rollback.",
+                    extra={
+                        "backup_dir": str(backup_dir),
+                        "dst_dir": str(dst_dir),
+                        "tmp_dir": str(tmp_dir),
+                    },
+                    exc_info=True,
+                )
 
         raise OSError(
             f"Failed to atomically replace directory '{dst_dir}' with '{tmp_dir}': {e}"
@@ -98,16 +113,19 @@ def atomic_dir(dst_dir: Path) -> Generator[Path, None, None]:
     :raises OSError: If directory creation or replacement fails.
     """
     tmp_dir = _unique_tmp_sibling(dst_dir)
-
+    committed = False
+    tmp_dir.mkdir(parents=True, exist_ok=True)
     try:
-        tmp_dir.mkdir(parents=True, exist_ok=True)
         yield tmp_dir
         replace_dir_atomic(tmp_dir, dst_dir)
-    except Exception:
-        # Clean up tmp_dir on any failure
-        if tmp_dir.exists():
+        committed = True
+    finally:
+        if not committed and tmp_dir.exists():
             try:
                 shutil.rmtree(tmp_dir)
-            except Exception:
-                pass
-        raise
+            except OSError:
+                logger.debug(
+                    "Failed to clean temporary directory in atomic_dir context cleanup.",
+                    extra={"tmp_dir": str(tmp_dir), "dst_dir": str(dst_dir)},
+                    exc_info=True,
+                )

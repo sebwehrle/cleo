@@ -413,8 +413,12 @@ class Unifier:
                 ):
                     # Already up-to-date
                     return
-            except Exception:
-                pass
+            except (OSError, ValueError, TypeError, KeyError):
+                logger.debug(
+                    "Failed to read existing wind store attrs for idempotency check; rebuilding.",
+                    extra={"store_path": str(store_path)},
+                    exc_info=True,
+                )
 
         # 15. Get git info
         git_info = get_git_info(Path.cwd())
@@ -458,7 +462,12 @@ class Unifier:
         """
         try:
             rows = _read_nuts_region_catalog(atlas)
-        except Exception:
+        except (FileNotFoundError, OSError, ValueError, TypeError, KeyError):
+            logger.debug(
+                "Failed to build region-name index from NUTS catalog.",
+                extra={"country": getattr(atlas, "country", None), "atlas_path": str(atlas.path)},
+                exc_info=True,
+            )
             return {}
 
         # Legacy index is default NUTS-2 only to keep name resolution deterministic.
@@ -596,8 +605,12 @@ class Unifier:
                     and g.attrs.get("grid_id") == wind_grid_id
                 ):
                     return
-            except Exception:
-                pass
+            except (OSError, ValueError, TypeError, KeyError):
+                logger.debug(
+                    "Failed to read existing landscape store attrs for idempotency check; rebuilding.",
+                    extra={"store_path": str(store_path)},
+                    exc_info=True,
+                )
 
         # Atomic write full landscape store
         git = get_git_info(repo_root=Path(__file__).resolve().parents[1])
@@ -619,7 +632,12 @@ class Unifier:
             # Build and store region-name metadata for selection/discovery.
             try:
                 region_catalog = _read_nuts_region_catalog(atlas)
-            except Exception:
+            except (FileNotFoundError, OSError, ValueError, TypeError, KeyError):
+                logger.debug(
+                    "Failed to load NUTS region catalog for landscape attrs; continuing without catalog attrs.",
+                    extra={"atlas_path": str(atlas.path), "country": getattr(atlas, "country", None)},
+                    exc_info=True,
+                )
                 region_catalog = []
 
             if region_catalog:
@@ -1251,8 +1269,16 @@ class Unifier:
                     # Region stores already complete
                     logger.info(f"Region stores for {region_id!r} already complete, skipping.")
                     return
-            except Exception:
-                pass  # Need to recreate
+            except (OSError, ValueError, TypeError, KeyError):
+                logger.debug(
+                    "Failed to verify existing region stores; recreating.",
+                    extra={
+                        "region_id": region_id,
+                        "wind_region_path": str(wind_region_path),
+                        "land_region_path": str(land_region_path),
+                    },
+                    exc_info=True,
+                )
 
         # 1) Open base stores (must be complete)
         wind_base = xr.open_zarr(wind_base_path, consolidated=False, chunks=self.chunk_policy)

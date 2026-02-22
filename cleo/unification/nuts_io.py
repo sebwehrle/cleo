@@ -57,7 +57,7 @@ def _read_nuts_region_catalog(atlas) -> list[dict[str, Any]]:
             continue
         try:
             level = int(level_raw)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if level not in (1, 2, 3):
             continue

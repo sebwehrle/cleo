@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 from pathlib import Path
 
 import zarr
+
+logger = logging.getLogger(__name__)
 
 
 # Manifest is stored in zarr root attrs:
@@ -30,7 +33,12 @@ def _read_manifest(store_path: Path) -> dict:
             "sources": json.loads(sources_json),
             "variables": json.loads(variables_json),
         }
-    except Exception:
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        logger.debug(
+            "Failed to read manifest attrs; returning empty manifest defaults.",
+            extra={"store_path": str(store_path)},
+            exc_info=True,
+        )
         return {"version": 1, "sources": [], "variables": []}
 
 
@@ -53,8 +61,12 @@ def init_manifest(store_path: Path) -> None:
             root.attrs["cleo_manifest_sources_json"] = "[]"
         if "cleo_manifest_variables_json" not in root.attrs:
             root.attrs["cleo_manifest_variables_json"] = "[]"
-    except Exception:
-        pass  # Store may not exist yet; will be initialized on first write
+    except (OSError, ValueError, TypeError, KeyError):
+        logger.debug(
+            "Manifest init skipped; store not writable yet (will initialize on first write).",
+            extra={"store_path": str(store_path)},
+            exc_info=True,
+        )
 
 
 def write_manifest_sources(store_path: Path, sources: list[dict]) -> None:

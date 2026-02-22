@@ -255,7 +255,7 @@ def canonical_crs_str(crs_input) -> str:
     """
     try:
         crs = pyproj.CRS.from_user_input(crs_input)
-    except Exception as e:
+    except (pyproj.exceptions.CRSError, TypeError, ValueError) as e:
         raise ValueError(f"Cannot parse CRS from input: {crs_input!r}") from e
 
     epsg = crs.to_epsg()
@@ -279,7 +279,7 @@ def crs_equal(a, b) -> bool:
         crs_a = pyproj.CRS.from_user_input(a)
         crs_b = pyproj.CRS.from_user_input(b)
         return crs_a == crs_b
-    except Exception:
+    except (pyproj.exceptions.CRSError, TypeError, ValueError):
         return False
 
 
@@ -405,7 +405,7 @@ def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False
     # Import lazily so cleo can still import in minimal envs/tests if needed
     try:
         from rioxarray.exceptions import NoDataInBounds
-    except Exception:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         NoDataInBounds = ()  # fallback type, will never match
 
     try:
@@ -483,11 +483,11 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.Geo
             try:
                 from shapely.make_valid import make_valid  # shapely>=2
                 return make_valid(geom)
-            except Exception:
+            except ImportError:
                 # buffer(0) is a common repair for self-intersections
                 try:
                     return geom.buffer(0)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     return geom
 
         clip_shape = clip_shape.copy()
@@ -503,7 +503,7 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.Geo
     raster_crs = self.data.rio.crs
     try:
         clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
-    except Exception as e:
+    except (ValueError, TypeError, pyproj.exceptions.CRSError) as e:
         raise ValueError(f"Error reprojecting clipping geometry to {self.parent.crs}") from e
 
     # Clip each DataArray in the Dataset using the clip_shape geometry
@@ -526,7 +526,7 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.Geo
     # Import lazily so cleo can still import in minimal envs/tests if needed
     try:
         from rioxarray.exceptions import NoDataInBounds
-    except Exception:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         NoDataInBounds = ()  # fallback type, will never match
 
     for var_name, var in self.data.data_vars.items():
@@ -536,7 +536,7 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.Geo
             raise ValueError(
                 f"Clipping geometry does not overlap raster bounds for variable '{var_name}'."
             ) from e
-        except Exception as e:
+        except (ValueError, TypeError, RuntimeError) as e:
             raise ValueError(f"Error clipping data variable '{var_name}'") from e
 
     logger.info("Data clipped")
@@ -597,8 +597,12 @@ def reproject(self, new_crs: str) -> None:
         # Also update self.crs if it exists (for backwards compatibility)
         if hasattr(self, 'crs'):
             self.crs = dst_crs
-    except Exception as e:
-        logger.error(f"Error during reprojecting atlas: {e}")
+    except (ValueError, TypeError, RuntimeError, OSError):
+        logger.error(
+            "Error during atlas reprojection.",
+            extra={"dst_crs": dst_crs},
+            exc_info=True,
+        )
 
 
 # %%

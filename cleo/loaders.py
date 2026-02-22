@@ -29,7 +29,8 @@ def _maybe_chunk_auto(x):
         return x
     try:
         return x.chunk("auto")
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
+        logger.debug("Automatic chunking unavailable; returning unchunked object.", exc_info=True)
         return x
 
 
@@ -212,8 +213,12 @@ def load_elevation(base_dir, iso3, reference_da):
 
             logger.info(f"Loaded local elevation from {local_path} and matched to reference grid.")
             return elevation
-        except Exception as e:
-            logger.warning(f"Local elevation file exists but failed to open/match: {e}")
+        except (OSError, ValueError, RuntimeError, TypeError):
+            logger.warning(
+                "Local elevation file exists but failed to open/match; falling back to CopDEM.",
+                extra={"local_path": str(local_path), "iso3": iso3},
+                exc_info=True,
+            )
 
     # Fall back to CopDEM
     logger.info("Local elevation not available, building from Copernicus DEM")
@@ -301,7 +306,7 @@ def get_powercurves(self):
                     columns=[f"{data['manufacturer']}.{data['model']}.{data['capacity']}"],
                 )
             )
-        except Exception as e:
+        except (KeyError, TypeError, ValueError) as e:
             raise ValueError(f"Invalid power curve YAML schema in {path}: {e}") from e
 
     self.power_curves = pd.concat(frames, axis=1)
@@ -422,7 +427,7 @@ def load_weibull_parameters(self, height):
             k = k.rio.clip(clip_shape.geometry)
 
         return a, k
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, TypeError) as e:
         raise RuntimeError(f"Failed to load Weibull parameters for height {height}: {e}") from e
 
 
@@ -469,7 +474,7 @@ def load_air_density(self, height):
             rho = rho.rio.clip(clip_shape.geometry)
 
         return rho
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, TypeError) as e:
         raise RuntimeError(f"Failed to load air density for height {height}: {e}") from e
 
 

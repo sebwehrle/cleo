@@ -266,12 +266,47 @@ Client()  # start and register active client
 atlas = Atlas(..., compute_backend="distributed")
 ```
 
+## Benchmarking Variants
+
+Use `cleo.bench.benchmark_metric_variants(...)` to compare algorithmic variants of the same metric side-by-side under one benchmark harness.
+
+```python
+from cleo.bench import benchmark_metric_variants
+
+df = benchmark_metric_variants(
+    atlas,
+    "capacity_factors",
+    variants=[
+        {"label": "baseline", "kwargs": {"mode": "hub"}},
+        {"label": "candidate_rews7", "kwargs": {"mode": "rews", "rews_n": 7}},
+    ],
+    repeats=3,
+    warmup=1,
+    cache=True,
+    baseline_label="baseline",
+)
+
+# Per-run columns include:
+# - label, run, seconds, ok, error
+# - proc_tree_peak_rss_mb (if psutil installed)
+# - speedup_vs_baseline (median baseline / median variant)
+print(df)
+```
+
+For temporary capacity-factor kernel experiments (without changing production API), use:
+
+```bash
+python usage/benchmark_capacity_factor_algorithms.py --atlas-root /path/to/atlas
+```
+
+Define/edit temporary candidates in `usage/cf_algorithm_variants.py`.
+
 ## Remaining Issues
 
 These are known and intentionally left as follow-up work:
 
-- Broad exception handling (`except Exception`) still exists in several internal modules (`atlas`, `unify`, `spatial`, `loaders`) and can hide root causes.
 - Core orchestration modules are large (`unify.py`, `atlas.py`) and could be split to reduce maintenance risk.
+- Core orchestration modules are still large (`cleo/unification/unifier.py`, `atlas.py`) and could be split further to reduce maintenance risk.
 
 ## Testing
 

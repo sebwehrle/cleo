@@ -26,7 +26,7 @@ def _safe_basename(path) -> str:
     """Return basename of path, or '?' on any error."""
     try:
         return Path(path).name if path else "?"
-    except Exception:
+    except (TypeError, ValueError, OSError):
         return "?"
 
 
@@ -144,7 +144,7 @@ class Atlas:
 
             region_part = f", region={region_name!r}" if region_name else ""
             return f"Atlas(country={country!r}{region_part}, crs={crs!r}, path={path!r}, stores={canonical})"
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return "Atlas(?)"
 
     __str__ = __repr__
@@ -362,7 +362,7 @@ class Atlas:
         """Validate and normalize NUTS level."""
         try:
             level_i = int(level)
-        except Exception as e:
+        except (TypeError, ValueError) as e:
             raise ValueError(f"NUTS level must be an integer, got {level!r}.") from e
         if level_i not in self._VALID_NUTS_LEVELS:
             raise ValueError(
@@ -389,7 +389,7 @@ class Atlas:
                                 continue
                             try:
                                 level = int(row.get("level"))
-                            except Exception:
+                            except (TypeError, ValueError):
                                 continue
                             if level not in self._VALID_NUTS_LEVELS:
                                 continue
@@ -414,7 +414,7 @@ class Atlas:
                 if legacy_index_json:
                     try:
                         legacy_index = json.loads(legacy_index_json)
-                    except Exception:
+                    except json.JSONDecodeError:
                         legacy_index = None
                     if isinstance(legacy_index, dict) and legacy_index:
                         catalog = []
@@ -434,10 +434,11 @@ class Atlas:
                         if catalog:
                             self._nuts_region_catalog_cache = tuple(catalog)
                             return [dict(row) for row in catalog]
-            except Exception:
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
                 logger.debug(
                     "Failed to load NUTS region catalog from landscape store attrs; "
                     "falling back to raw NUTS catalog loading.",
+                    extra={"landscape_store_path": str(self.landscape_store_path)},
                     exc_info=True,
                 )
 
@@ -722,8 +723,13 @@ class Atlas:
         err_id: Exception | None = None
         try:
             u.materialize_region(self, self._region_id)
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, FileNotFoundError, OSError) as e:
             err_id = e
+            logger.warning(
+                "materialize_region(region_id) failed; retrying with region name for compatibility.",
+                extra={"region_id": self._region_id, "region_name": self._region_name},
+                exc_info=True,
+            )
             # Backwards-compat: older Unifier versions may expect region name.
             u.materialize_region(self, self._region_name)
 
@@ -943,7 +949,16 @@ class Atlas:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             ds.to_netcdf(tmp, encoding=final_encoding)
             os.replace(tmp, out_path)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, TypeError):
+            logger.error(
+                "Failed to export result to NetCDF.",
+                extra={
+                    "run_id": run_id,
+                    "metric_name": metric_name,
+                    "out_path": str(out_path),
+                },
+                exc_info=True,
+            )
             if tmp.exists():
                 tmp.unlink()
             raise
@@ -1012,8 +1027,12 @@ class Atlas:
                             store_dt = datetime.datetime.fromisoformat(
                                 created_at.replace("Z", "+00:00")
                             )
-                    except Exception:
-                        pass
+                    except (OSError, ValueError, TypeError, KeyError):
+                        logger.debug(
+                            "Falling back to mtime for result-store age check.",
+                            extra={"store": str(store)},
+                            exc_info=True,
+                        )
 
                     # Fallback to mtime
                     if store_dt is None:
@@ -1140,15 +1159,25 @@ class Atlas:
                 try:
                     g_wind = zarr.open_group(wind_store, mode="r")
                     wind_complete = g_wind.attrs.get("store_state") == "complete"
-                except Exception:
+                except (OSError, ValueError, TypeError, KeyError):
                     wind_complete = False
+                    logger.debug(
+                        "Failed to read wind region store_state; treating as incomplete.",
+                        extra={"wind_store": str(wind_store)},
+                        exc_info=True,
+                    )
 
             if land_exists:
                 try:
                     g_land = zarr.open_group(land_store, mode="r")
                     land_complete = g_land.attrs.get("store_state") == "complete"
-                except Exception:
+                except (OSError, ValueError, TypeError, KeyError):
                     land_complete = False
+                    logger.debug(
+                        "Failed to read landscape region store_state; treating as incomplete.",
+                        extra={"land_store": str(land_store)},
+                        exc_info=True,
+                    )
 
             is_complete_region = wind_exists and land_exists and wind_complete and land_complete
             if not include_incomplete and not is_complete_region:
@@ -1167,7 +1196,12 @@ class Atlas:
                                 str(created_at).replace("Z", "+00:00")
                             )
                             break
-                    except Exception:
+                    except (OSError, ValueError, TypeError, KeyError):
+                        logger.debug(
+                            "Failed to read region store created_at; trying next fallback.",
+                            extra={"store_path": str(store_path)},
+                            exc_info=True,
+                        )
                         continue
 
                 # Fallback to region directory mtime.

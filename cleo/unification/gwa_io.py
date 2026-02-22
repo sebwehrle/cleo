@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,9 @@ import rioxarray as rxr
 import xarray as xr
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
+from cleo.net import RequestException
+
+logger = logging.getLogger(__name__)
 
 # Public constant kept for backward-compatible imports from ``cleo.unify``
 GWA_HEIGHTS = [10, 50, 100, 150, 200]
@@ -58,7 +62,12 @@ def _load_or_fetch_gwa_crs(atlas, iso3: str) -> CRS:
     try:
         crs_str = cleo.loaders.fetch_gwa_crs(iso3)
         crs = CRS.from_string(crs_str)
-    except Exception as e:
+    except (RequestException, RuntimeError, ValueError, TypeError, OSError) as e:
+        logger.error(
+            "Failed to fetch GWA CRS and cache is unavailable.",
+            extra={"iso3": iso3, "cache_path": str(cache)},
+            exc_info=True,
+        )
         raise RuntimeError(
             f"Failed to fetch GWA CRS for {iso3}; cache missing at {cache}. Error: {e}"
         ) from e
@@ -66,7 +75,12 @@ def _load_or_fetch_gwa_crs(atlas, iso3: str) -> CRS:
     # Persist to cache
     try:
         cache.write_text(crs.to_wkt(), encoding="utf-8")
-    except Exception as e:
+    except (OSError, UnicodeError, ValueError) as e:
+        logger.error(
+            "Fetched CRS but failed to persist CRS cache.",
+            extra={"iso3": iso3, "cache_path": str(cache)},
+            exc_info=True,
+        )
         raise RuntimeError(
             f"Fetched CRS but failed to persist cache at {cache}: {e}"
         ) from e

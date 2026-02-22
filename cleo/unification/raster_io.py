@@ -222,7 +222,7 @@ def _build_copdem_mosaic(
         for ds in tile_datasets:
             try:
                 ds.close()
-            except Exception:
+            except (OSError, RuntimeError, ValueError):
                 logger.debug("Failed to close temporary raster tile dataset.", exc_info=True)
 
     mosaic_2d = mosaic_arr[0]

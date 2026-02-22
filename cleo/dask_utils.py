@@ -123,11 +123,11 @@ def _is_duck_dask_array(arr: Any) -> bool:
     """Return ``True`` if ``arr`` behaves like a dask-backed array."""
     try:
         from xarray.core.utils import is_duck_dask_array  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return False
     try:
         return bool(is_duck_dask_array(arr))
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return False
 
 
@@ -199,7 +199,7 @@ def maybe_chunk(
     if chunks == "auto":
         try:
             return obj.chunk("auto")  # type: ignore[arg-type]
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError, RuntimeError) as e:
             raise ValueError(
                 "Failed to chunk object with chunks='auto'. "
                 f"Available dims: {tuple(obj.dims)!r}"
@@ -213,7 +213,7 @@ def maybe_chunk(
 
     try:
         return obj.chunk(chunks_n)  # type: ignore[arg-type]
-    except Exception as e:
+    except (ValueError, TypeError, AttributeError, RuntimeError) as e:
         raise ValueError(
             f"Failed to chunk object with chunks={chunks_n!r}. "
             f"Available dims: {tuple(obj.dims)!r}"
@@ -228,14 +228,14 @@ def get_distributed_client_and_dashboard() -> tuple[Any, str | None]:
     ensure_dask_available(feature="distributed scheduler")
     try:
         from dask.distributed import get_client
-    except Exception as e:
+    except (ImportError, ModuleNotFoundError) as e:
         raise RuntimeError(
             "compute_backend='distributed' requires 'dask[distributed]' installed."
         ) from e
 
     try:
         client = get_client()
-    except Exception as e:
+    except (ValueError, RuntimeError) as e:
         raise RuntimeError(
             "compute_backend='distributed' requires an active dask.distributed Client. "
             "Start one first, e.g. `from dask.distributed import Client; Client()`"

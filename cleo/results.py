@@ -119,9 +119,10 @@ def persist_result(
                 l = atlas.landscape_zarr
                 g.attrs["wind_grid_id"] = w.attrs.get("grid_id", "")
                 g.attrs["landscape_grid_id"] = l.attrs.get("grid_id", "")
-        except Exception:
+        except (AttributeError, OSError, ValueError, TypeError, KeyError):
             logger.debug(
                 "Failed to attach canonical provenance attrs to persisted result store.",
+                extra={"run_id": run_id, "metric_name": metric_name},
                 exc_info=True,
             )
 

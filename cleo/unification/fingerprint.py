@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ def get_git_info(repo_root: Path) -> dict[str, Any]:
         from importlib.metadata import version
 
         package_version = version("cleo")
-    except Exception:
+    except (ImportError, ModuleNotFoundError, PackageNotFoundError):
         package_version = "unknown"
 
     result: dict[str, Any] = {

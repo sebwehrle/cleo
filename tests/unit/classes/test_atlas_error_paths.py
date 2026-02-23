@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -25,12 +24,12 @@ def test_repr_falls_back_to_minimal_when_repr_components_fail(tmp_path: Path, mo
     assert repr(atlas) == "Atlas(?)"
 
 
-def test_load_nuts_region_catalog_falls_back_when_legacy_index_json_is_invalid(
+def test_load_nuts_region_catalog_falls_back_when_catalog_json_is_invalid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     atlas = Atlas(tmp_path, "AUT", "epsg:3035")
     g = zarr.open_group(str(tmp_path / "landscape.zarr"), mode="w")
-    g.attrs["cleo_region_name_to_id_json"] = "{invalid-json"
+    g.attrs["cleo_region_catalog_json"] = "{invalid-json"
 
     fallback_catalog = [
         {"name": "Wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2},
@@ -83,7 +82,7 @@ def test_clean_regions_treats_unreadable_store_state_as_incomplete(
     assert region_dir.exists()
 
 
-def test_ensure_region_stores_retries_with_region_name_and_migrates_legacy_dir(
+def test_ensure_region_stores_requires_region_id_store_layout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     atlas = Atlas(tmp_path, "AUT", "epsg:3035")
@@ -95,16 +94,11 @@ def test_ensure_region_stores_retries_with_region_name_and_migrates_legacy_dir(
             pass
 
         def materialize_region(self, atlas_obj, region):  # noqa: ANN001
-            if region == "AT12":
-                raise RuntimeError("legacy unifier expects region name")
-            # Write to legacy region-name directory
+            assert region == "AT12"
             legacy = atlas_obj.path / "regions" / "Niederösterreich"
             (legacy / "wind.zarr").mkdir(parents=True, exist_ok=True)
             (legacy / "landscape.zarr").mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr("cleo.unification.Unifier", FakeUnifier)
-    atlas._ensure_region_stores()
-
-    expected = tmp_path / "regions" / "AT12"
-    assert (expected / "wind.zarr").exists()
-    assert (expected / "landscape.zarr").exists()
+    with pytest.raises(RuntimeError, match="Region stores are still missing after materialize_region\\('AT12'\\)"):
+        atlas._ensure_region_stores()

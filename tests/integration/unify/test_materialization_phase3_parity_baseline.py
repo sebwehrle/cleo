@@ -233,7 +233,7 @@ class TestPhase3MaterializationBaseline:
         atlas.select(region="Niederösterreich", inplace=True)
         atlas.materialize()
 
-        region_root = Path(atlas.path) / "regions" / "Niederösterreich"
+        region_root = Path(atlas.path) / "regions" / atlas._region_id
         wind = xr.open_zarr(region_root / "wind.zarr", consolidated=False)
         land = xr.open_zarr(region_root / "landscape.zarr", consolidated=False)
 

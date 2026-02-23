@@ -1,4 +1,4 @@
-"""Import smoke tests for Phase-3 materializer scaffolding."""
+"""Import smoke tests for materializer modules."""
 
 from __future__ import annotations
 

@@ -22,7 +22,9 @@ import zarr
 from rasterio.crs import CRS
 
 import cleo
-from cleo.unify import Unifier, GWA_HEIGHTS, _default_turbines_from_resources
+from cleo.unification.gwa_io import GWA_HEIGHTS
+from cleo.unification.turbines import _default_turbines_from_resources
+from cleo.unification.unifier import Unifier
 
 
 class MockAtlas:

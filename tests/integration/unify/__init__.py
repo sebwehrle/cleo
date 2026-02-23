@@ -1,1 +1,1 @@
-# Integration tests for cleo.unify module
+# Integration tests for unification/materialization workflows

@@ -1,4 +1,4 @@
-"""GWA-specific I/O and CRS helper functions extracted from ``cleo.unify``."""
+"""GWA-specific I/O and CRS helper functions."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import cleo.net
 
 logger = logging.getLogger(__name__)
 
-# Public constant kept for backward-compatible imports from ``cleo.unify``
 GWA_HEIGHTS = [10, 50, 100, 150, 200]
 
 

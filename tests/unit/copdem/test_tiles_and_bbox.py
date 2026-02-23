@@ -13,7 +13,6 @@ from pathlib import Path
 from affine import Affine
 from cleo.copdem import tiles_for_bbox
 
-# --- merged from tests/_staging/test_copdem_bbox_transform.py ---
 
 def _create_reference_da_with_crs(crs, x_range, y_range):
     """Create a minimal DataArray with specified CRS and coordinate ranges."""
@@ -144,7 +143,6 @@ def test_epsg4326_bounds_passed_unchanged(tmp_path, monkeypatch):
     assert captured["max_lat"] == actual_bounds[3], f"max_lat mismatch: {captured['max_lat']} != {actual_bounds[3]}"
 
 
-# --- merged from tests/_staging/test_copdem_tile_selection.py ---
 
 def test_tiles_for_bbox_austria():
     """

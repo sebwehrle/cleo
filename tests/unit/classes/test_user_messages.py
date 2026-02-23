@@ -6,7 +6,6 @@ import pytest
 from pathlib import Path
 from cleo.atlas import Atlas
 
-# --- merged from tests/_staging/test_get_nuts_missing_shapefile_message.py ---
 
 def test_get_nuts_country_missing_shapefile_is_actionable(tmp_path):
     atlas = Atlas.__new__(Atlas)

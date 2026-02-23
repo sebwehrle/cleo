@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 from pathlib import Path
 
@@ -19,45 +18,11 @@ from cleo.unification.materializers.shared import _stable_json
 logger = logging.getLogger(__name__)
 
 
-def _slugify_region_dir(name: str) -> str:
-    """Best-effort filesystem-safe region directory name (ASCII-ish)."""
-    import unicodedata as _ud
-    import re as _re
-
-    # Normalize + drop diacritics
-    norm = _ud.normalize("NFKD", name)
-    asciiish = "".join(ch for ch in norm if not _ud.combining(ch))
-    # Keep reasonably portable characters
-    slug = _re.sub(r"[^A-Za-z0-9._-]+", "_", asciiish).strip("_")
-    return slug or "region"
-
-
-def _region_dir_candidates(region_name: str) -> list[str]:
-    """Candidate directory names a region might have been stored under."""
-    cand: list[str] = []
-    s = region_name.strip()
-    if not s:
-        return cand
-    cand.append(s)
-    cand.append(re.sub(r"\s+", " ", s).casefold())
-    cand.append(_slugify_region_dir(s))
-    cand.append(_slugify_region_dir(re.sub(r"\s+", " ", s).casefold()))
-    # Unique, stable order
-    out: list[str] = []
-    seen = set()
-    for c in cand:
-        if c not in seen:
-            out.append(c)
-            seen.add(c)
-    return out
-
-
 def _ensure_region_stores_ready(
     *,
     atlas,
     unifier,
     region_id: str,
-    region_name: str,
     logger,
 ) -> None:
     """Ensure region stores exist for current region selection."""
@@ -77,34 +42,7 @@ def _ensure_region_stores_ready(
         )
         shutil.rmtree(expected_root)
 
-    # Prefer region_id to avoid name-vs-id directory mismatches.
-    err_id: Exception | None = None
-    try:
-        unifier.materialize_region(atlas, region_id)
-    except (RuntimeError, ValueError, TypeError, FileNotFoundError, OSError) as e:
-        err_id = e
-        logger.warning(
-            "materialize_region(region_id) failed; retrying with region name for compatibility.",
-            extra={"region_id": region_id, "region_name": region_name},
-            exc_info=True,
-        )
-        # Backwards-compat: older Unifier versions may expect region name.
-        unifier.materialize_region(atlas, region_name)
-
-    # If Unifier wrote into a legacy directory name, migrate to the canonical region_id layout.
-    if not (expected_wind.exists() and expected_land.exists()):
-        for cand in _region_dir_candidates(region_name):
-            alt_root = atlas.path / "regions" / cand
-            if alt_root == expected_root:
-                continue
-            alt_wind = alt_root / "wind.zarr"
-            alt_land = alt_root / "landscape.zarr"
-            if alt_wind.exists() and alt_land.exists():
-                logger.warning(f"Found region stores under legacy directory {alt_root}; moving to {expected_root}.")
-                if expected_root.exists():
-                    shutil.rmtree(expected_root)
-                shutil.move(str(alt_root), str(expected_root))
-                break
+    unifier.materialize_region(atlas, region_id)
 
     if not (expected_wind.exists() and expected_land.exists()):
         details = {
@@ -112,12 +50,10 @@ def _ensure_region_stores_ready(
             "expected_wind_exists": expected_wind.exists(),
             "expected_landscape_exists": expected_land.exists(),
         }
-        cand_roots = [str(atlas.path / "regions" / c) for c in _region_dir_candidates(region_name)[:8]]
-        details["candidate_roots"] = cand_roots
-        msg = (f"Region stores are still missing after materialize_region(). Details: {details}")
-        if err_id is not None:
-            msg += f" (materialize_region(region_id) failed with: {type(err_id).__name__}: {err_id})"
-        raise RuntimeError(msg)
+        raise RuntimeError(
+            f"Region stores are still missing after materialize_region({region_id!r}). "
+            f"Details: {details}"
+        )
 
 
 def materialize_region(unifier, atlas, region_id: str) -> None:

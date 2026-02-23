@@ -11,6 +11,7 @@ These tests verify that:
 from __future__ import annotations
 
 import datetime
+import json
 import shutil
 from pathlib import Path
 
@@ -22,7 +23,8 @@ import zarr
 from rasterio.crs import CRS
 
 import cleo
-from cleo.unify import Unifier, GWA_HEIGHTS
+from cleo.unification.gwa_io import GWA_HEIGHTS
+from cleo.unification.unifier import Unifier
 
 
 def _copy_default_turbine(atlas_path: Path) -> None:
@@ -135,18 +137,11 @@ class MockAtlas:
             g.attrs["run_id"] = run_id
             g.attrs["metric_name"] = metric_name
 
-            try:
-                from cleo.unify import _now_iso, _stable_json
-                g.attrs["created_at"] = _now_iso()
-                if params is not None:
-                    g.attrs["params_json"] = _stable_json(params)
-            except ImportError:
-                import datetime
-                g.attrs["created_at"] = datetime.datetime.utcnow().isoformat()
-                if params is not None:
-                    g.attrs["params_json"] = json.dumps(
-                        params, sort_keys=True, separators=(",", ":")
-                    )
+            g.attrs["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            if params is not None:
+                g.attrs["params_json"] = json.dumps(
+                    params, sort_keys=True, separators=(",", ":")
+                )
 
             try:
                 if self._canonical_ready:

@@ -18,7 +18,6 @@ from cleo.spatial import bbox
 from cleo.class_helpers import set_attributes
 from cleo.spatial import clip_to_geometry
 
-# --- merged from tests/_staging/test_bbox_returns_floats.py ---
 
 def test_bbox_returns_floats():
     """bbox() should return a tuple of Python floats."""
@@ -88,7 +87,6 @@ def test_bbox_with_data_attribute():
     assert ymax == 20.0
 
 
-# --- merged from tests/_staging/test_crs_equivalence_semantic.py ---
 
 def test_set_attributes_accepts_case_mismatched_crs():
     """

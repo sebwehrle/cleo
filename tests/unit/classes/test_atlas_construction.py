@@ -12,15 +12,19 @@ import json
 from pathlib import Path
 from cleo.atlas import Atlas
 
-def _mock_region_index(tmp_path: Path) -> None:
-    # Create minimal landscape.zarr root group with attrs only (no arrays needed)
+def _mock_region_catalog(tmp_path: Path) -> None:
+    # Create minimal landscape.zarr root group with attrs only (no arrays needed).
     g = zarr.open_group(str(tmp_path / "landscape.zarr"), mode="w")
-    name_to_id = {
-        # keys must match whatever _normalize_region_name() produces
-        "niederösterreich": "AT13",
-    }
-    g.attrs["cleo_region_name_to_id_json"] = json.dumps(
-        name_to_id, sort_keys=True, separators=(",", ":")
+    catalog = [
+        {
+            "name": "Niederösterreich",
+            "name_norm": "niederösterreich",
+            "nuts_id": "AT13",
+            "level": 2,
+        }
+    ]
+    g.attrs["cleo_region_catalog_json"] = json.dumps(
+        catalog, sort_keys=True, separators=(",", ":")
     )
 
 class TestAtlasConstructorContractA2:
@@ -60,7 +64,7 @@ class TestAtlasConstructorContractA2:
         )
         assert atlas.region is None
 
-        _mock_region_index(tmp_path)
+        _mock_region_catalog(tmp_path)
 
         # Contract A4: region must be changeable at any time
         atlas.region = "Niederösterreich"

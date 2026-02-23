@@ -240,12 +240,6 @@ df = benchmark_metric_variants(
 print(df)
 ```
 
-Temporary algorithm experiments:
-
-```bash
-python usage/benchmark_capacity_factor_algorithms.py --atlas-root /path/to/atlas
-```
-
 ## Testing
 
 ```bash

@@ -23,3 +23,7 @@ dependencies:
   - pint
   - pycountry
   - pyyaml
+  - pyproj
+  - zarr
+
+  - requests

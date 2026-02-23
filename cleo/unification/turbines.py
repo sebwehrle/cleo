@@ -1,4 +1,4 @@
-"""Turbine and cost ingestion helpers extracted from ``cleo.unify``."""
+"""Turbine and cost ingestion helpers."""
 
 from __future__ import annotations
 

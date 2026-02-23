@@ -24,7 +24,6 @@ def test_import_key_modules() -> None:
         "cleo.results",
         "cleo.spatial",
         "cleo.store",
-        "cleo.unify",
         "cleo.utils",
         "cleo.wind_metrics",
     ]:

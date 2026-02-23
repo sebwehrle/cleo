@@ -1,7 +1,8 @@
 # Copernicus DEM helpers
 #
 # This module provides planning, metadata, and downloading utilities for CopDEM tiles.
-# Raw I/O operations (rasterio.open, mosaicing) are centralized in cleo.unify.
+# Raw I/O operations (rasterio.open, mosaicing) are centralized in
+# cleo.unification.raster_io.
 import math
 from pathlib import Path
 

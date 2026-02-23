@@ -25,7 +25,8 @@ from rasterio.crs import CRS
 import cleo
 from cleo.dask_utils import compute as dask_compute
 from cleo.domains import WindDomain
-from cleo.unify import Unifier, GWA_HEIGHTS
+from cleo.unification.gwa_io import GWA_HEIGHTS
+from cleo.unification.unifier import Unifier
 
 
 def _copy_default_turbine(atlas_path: Path) -> None:

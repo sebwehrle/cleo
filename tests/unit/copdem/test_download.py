@@ -16,7 +16,6 @@ from cleo.copdem import (
     tiles_for_bbox,
 )
 
-# --- merged from tests/_staging/test_copdem_download_cache.py ---
 
 
 TILE_ID = "Copernicus_DSM_COG_10_N46_00_E009_00_DEM"
@@ -125,7 +124,6 @@ def test_download_copdem_tile_not_found(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert "404" in str(exc_info.value)
 
 
-# --- merged from tests/_staging/test_copdem_download_cleans_part_on_failure.py ---
 
 
 def test_download_copdem_tile_cleans_part(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -148,7 +146,6 @@ def test_download_copdem_tile_cleans_part(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert not part.exists()
 
 
-# --- merged from tests/_staging/test_copdem_download_tiles_for_bbox.py ---
 
 
 def test_download_copdem_tiles_for_bbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

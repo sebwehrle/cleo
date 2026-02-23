@@ -13,7 +13,7 @@ from rasterio.crs import CRS
 
 from cleo import Atlas
 from cleo.clc import CLC_SOURCES
-from cleo.unify import GWA_HEIGHTS
+from cleo.unification.gwa_io import GWA_HEIGHTS
 
 
 def _create_raster(

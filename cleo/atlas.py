@@ -536,11 +536,6 @@ class Atlas:
 
         Creates region stores by subsetting from country stores if needed.
         Does nothing if no region selected.
-
-        Robustness:
-        - materialize_region is called with region_id (NUTS) first to match store layout
-        - if a legacy directory exists under a different name, it is migrated to region_id
-        - if a stale / partial region directory exists, it is removed and rebuilt
         """
         if self._region_name is None:
             return
@@ -556,7 +551,6 @@ class Atlas:
             atlas=self,
             unifier=u,
             region_id=self._region_id,
-            region_name=self._region_name,
             logger=logger,
         )
 
@@ -1002,21 +996,14 @@ class Atlas:
 
     def _setup_directories(self) -> None:
         """
-        Create directories for raw and processed data if they do not exist
+        Create required workspace directories if they do not exist.
         """
         path_raw = self.path / "data" / "raw" / self.country
-        path_processed = self.path / "data" / "processed"
         path_logging = self.path / "logs"
 
-        for path in [path_raw, path_processed, path_logging]:
+        for path in [path_raw, path_logging]:
             if not path.is_dir():
                 path.mkdir(parents=True)
-
-        # Create the index file in the data directory if it doesn't exist
-        index_file_path = self.path / "data" / "index.jsonl"
-        if not index_file_path.exists():
-            index_file_path.touch()  # Create an empty file
-            logger.info(f"Created new index file: {index_file_path}")
 
     def get_nuts_region(self, region, merged_name=None, to_atlascrs=True):
         """Return dissolved NUTS geometry for one or more regions.

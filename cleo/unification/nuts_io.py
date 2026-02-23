@@ -1,4 +1,4 @@
-"""NUTS vector and catalog I/O helpers extracted from ``cleo.unify``."""
+"""NUTS vector and catalog I/O helpers."""
 
 from __future__ import annotations
 

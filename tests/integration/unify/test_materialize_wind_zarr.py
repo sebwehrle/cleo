@@ -19,12 +19,8 @@ from rasterio.crs import CRS
 import cleo
 import json
 
-from cleo.unify import (
-    GWA_HEIGHTS,
-    Unifier,
-    _assert_all_required_gwa_present,
-    _required_gwa_files,
-)
+from cleo.unification.gwa_io import GWA_HEIGHTS, _assert_all_required_gwa_present, _required_gwa_files
+from cleo.unification.unifier import Unifier
 
 
 def _copy_default_turbine(atlas_path: Path) -> None:

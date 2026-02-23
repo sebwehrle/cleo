@@ -7,7 +7,6 @@ import pytest
 from pathlib import Path
 from cleo.atlas import Atlas
 
-# --- merged from tests/_staging/test_atlas_smoke_no_network.py ---
 
 def test_atlas_init_creates_expected_dirs_offline(tmp_path, monkeypatch):
     """
@@ -26,12 +25,7 @@ def test_atlas_init_creates_expected_dirs_offline(tmp_path, monkeypatch):
 
     # Verify expected directories exist
     assert (tmp_path / "data" / "raw" / "AUT").is_dir(), "raw/AUT directory missing"
-    assert (tmp_path / "data" / "processed").is_dir(), "processed directory missing"
     assert (tmp_path / "logs").is_dir(), "logs directory missing"
-
-    # Verify index file is created (may be empty)
-    index_file = tmp_path / "data" / "index.jsonl"
-    assert index_file.exists(), "index.jsonl file missing"
 
     # Verify resources were deployed
     resources_dir = tmp_path / "resources"
@@ -96,7 +90,6 @@ def test_atlas_materialize_deferred(tmp_path, monkeypatch):
         _ = atlas.landscape.data
 
 
-# --- merged from tests/_staging/test_no_gwa_elevation_download.py ---
 
 class MockParent:
     """Minimal mock of the Atlas parent object."""

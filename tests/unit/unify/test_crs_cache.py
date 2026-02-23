@@ -1,4 +1,4 @@
-"""Tests for CRS cache functionality in unify module.
+"""Tests for CRS cache functionality in unification GWA helpers.
 
 Tests are offline-only: network calls are mocked.
 """
@@ -13,7 +13,7 @@ import pytest
 import rasterio
 from rasterio.crs import CRS
 
-from cleo.unify import _crs_cache_path, _load_or_fetch_gwa_crs, _open_gwa_raster
+from cleo.unification.gwa_io import _crs_cache_path, _load_or_fetch_gwa_crs, _open_gwa_raster
 
 
 class MockAtlas:

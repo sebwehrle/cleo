@@ -50,24 +50,7 @@ def test_load_nuts_region_catalog_uses_attrs_fast_path(tmp_path: Path) -> None:
     assert cache == tuple(rows)
 
 
-def test_load_nuts_region_catalog_uses_legacy_attrs_mapping(tmp_path: Path) -> None:
-    landscape = tmp_path / "landscape.zarr"
-    landscape.mkdir(parents=True, exist_ok=True)
-
-    rows, cache = load_nuts_region_catalog(
-        cached_rows=None,
-        landscape_store_path=landscape,
-        valid_levels=(1, 2, 3),
-        read_store_attrs=lambda _p: {"cleo_region_name_to_id_json": json.dumps({"wien": "AT13"})},
-        read_raw_catalog=lambda: pytest.fail("fallback should not be used"),
-        log_debug=lambda _msg: None,
-    )
-
-    assert rows == [{"name": "wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2}]
-    assert cache == tuple(rows)
-
-
-def test_load_nuts_region_catalog_falls_back_when_legacy_json_invalid(tmp_path: Path) -> None:
+def test_load_nuts_region_catalog_falls_back_when_catalog_json_invalid(tmp_path: Path) -> None:
     landscape = tmp_path / "landscape.zarr"
     landscape.mkdir(parents=True, exist_ok=True)
     fallback = [{"name": "Wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2}]
@@ -76,7 +59,7 @@ def test_load_nuts_region_catalog_falls_back_when_legacy_json_invalid(tmp_path: 
         cached_rows=None,
         landscape_store_path=landscape,
         valid_levels=(1, 2, 3),
-        read_store_attrs=lambda _p: {"cleo_region_name_to_id_json": "{invalid-json"},
+        read_store_attrs=lambda _p: {"cleo_region_catalog_json": "{invalid-json"},
         read_raw_catalog=lambda: fallback,
         log_debug=lambda _msg: None,
     )
@@ -95,4 +78,3 @@ def test_load_nuts_region_catalog_raises_when_empty(tmp_path: Path) -> None:
             read_raw_catalog=lambda: [],
             log_debug=lambda _msg: None,
         )
-

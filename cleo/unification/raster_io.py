@@ -1,4 +1,4 @@
-"""Raster and local elevation I/O helpers extracted from ``cleo.unify``."""
+"""Raster and local elevation I/O helpers."""
 
 from __future__ import annotations
 

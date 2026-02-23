@@ -1,42 +1,16 @@
-"""
-Unified Atlas foundations: Unifier and __manifest__ schema helpers.
-
-Phase 3 status:
-- Unifier is a thin coordination facade.
-- Materialization/store I/O semantics are owned by cleo.unification.materializers.*.
-- Compatibility helper paths are preserved via forwarders.
-"""
+"""Unified Atlas foundations: Unifier and manifest/store coordination helpers."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-
 import xarray as xr
 
-from cleo.unification.gwa_io import ensure_crs_from_gwa as ensure_crs_from_gwa_gwaio
 from cleo.unification.materializers.shared import (
-    _aoi_geom_or_none as _aoi_geom_or_none_shared,
-    _get_clip_geometry as _get_clip_geometry_shared,
-    _now_iso as _now_iso_shared,
-    _nuts_region_geom as _nuts_region_geom_shared,
-    _stable_json as _stable_json_shared,
     ensure_store_skeleton as ensure_store_skeleton_shared,
 )
 from cleo.unification.materializers import landscape as landscape_materializer
 from cleo.unification.materializers import region as region_materializer
 from cleo.unification.materializers import wind as wind_materializer
-
-
-# =============================================================================
-# NUTS Region Geometry
-# =============================================================================
-
-
-def _get_clip_geometry(atlas):
-    """Compatibility forwarder to shared helper ownership."""
-    return _get_clip_geometry_shared(atlas)
-
 
 # =============================================================================
 # Unifier Class
@@ -102,10 +76,6 @@ class Unifier:
         """
         wind_materializer.materialize_wind(self, atlas)
 
-    def _build_region_name_index(self, atlas) -> dict[str, str]:
-        """Build region-name to region-id mapping from NUTS metadata."""
-        return landscape_materializer._build_region_name_index(self, atlas)
-
     def materialize_landscape(self, atlas) -> None:
         """Materialize landscape.zarr as a complete canonical store."""
         return landscape_materializer.materialize_landscape(self, atlas)
@@ -164,44 +134,3 @@ class Unifier:
     def materialize_region(self, atlas, region_id: str) -> None:
         """Materialize region stores by subsetting from country stores."""
         return region_materializer.materialize_region(self, atlas, region_id)
-
-    # =========================================================================
-# =============================================================================
-# Helper Functions for Landscape Materialization
-# =============================================================================
-
-
-def _stable_json(obj: Any) -> str:
-    """Compatibility forwarder to shared helper ownership."""
-    return _stable_json_shared(obj)
-
-
-def _now_iso() -> str:
-    """Compatibility forwarder to shared helper ownership."""
-    return _now_iso_shared()
-
-
-def _nuts_region_geom(atlas):
-    """Compatibility forwarder to shared helper ownership."""
-    return _nuts_region_geom_shared(atlas)
-
-
-def _aoi_geom_or_none(atlas):
-    """Compatibility forwarder to shared helper ownership."""
-    return _aoi_geom_or_none_shared(atlas)
-
-
-def _ensure_crs_from_gwa(da: xr.DataArray, iso3: str) -> xr.DataArray:
-    """
-    Ensure a raster DataArray has a CRS set, fetching from GWA if needed.
-
-    Delegates to cleo.unification.gwa_io.ensure_crs_from_gwa.
-
-    Args:
-        da: Raster DataArray.
-        iso3: ISO 3166-1 alpha-3 country code.
-
-    Returns:
-        DataArray with CRS set.
-    """
-    return ensure_crs_from_gwa_gwaio(da, iso3)

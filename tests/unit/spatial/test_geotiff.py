@@ -16,7 +16,6 @@ from pathlib import Path
 from rasterio.transform import Affine
 from cleo.spatial import save_to_geotiff
 
-# --- merged from tests/_staging/test_save_to_geotiff_contract.py ---
 
 def test_save_to_geotiff_3d_raises_typeerror(tmp_path: Path):
     """3D array must be rejected with clear TypeError."""
@@ -101,7 +100,6 @@ def test_save_to_geotiff_with_nans_writes_nodata(tmp_path: Path):
         assert -9999 in data, "Nodata value should appear in raster"
 
 
-# --- merged from tests/_staging/test_save_to_geotiff_dim_check.py ---
 
 def test_save_to_geotiff_rejects_non_2d_xy(tmp_path: Path):
     da = xr.DataArray(
@@ -113,7 +111,6 @@ def test_save_to_geotiff_rejects_non_2d_xy(tmp_path: Path):
         save_to_geotiff(da, "EPSG:4326", tmp_path, "tmp.tif")
 
 
-# --- merged from tests/_staging/test_save_to_geotiff_no_nans.py ---
 
 def test_save_to_geotiff_all_finite_succeeds(tmp_path: Path):
     da = xr.DataArray(np.ones((2, 2)), dims=("y", "x"), coords={"x": [0, 1], "y": [0, 1]})

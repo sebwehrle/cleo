@@ -1,4 +1,4 @@
-"""Internal unification package (Phase 1 extraction in progress)."""
+"""Internal unification package for materialization, I/O, and identity helpers."""
 
 from cleo.unification.fingerprint import (
     fingerprint_file,

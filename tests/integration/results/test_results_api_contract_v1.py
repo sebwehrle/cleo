@@ -20,7 +20,7 @@ import xarray as xr
 from rasterio.crs import CRS
 
 from cleo import Atlas
-from cleo.unify import GWA_HEIGHTS
+from cleo.unification.gwa_io import GWA_HEIGHTS
 
 
 def _create_gwa_raster(

@@ -6,7 +6,6 @@ import pytest
 from types import SimpleNamespace
 import cleo.loaders as L
 
-# --- merged from tests/_staging/test_load_weibull_parameters_missing_files_raises.py ---
 
 def test_load_weibull_parameters_missing_files_raises(tmp_path):
     parent = SimpleNamespace(

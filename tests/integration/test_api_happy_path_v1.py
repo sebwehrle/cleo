@@ -19,7 +19,7 @@ from rasterio.crs import CRS
 
 from cleo import Atlas
 
-# GWA heights constant (same as cleo.unify.GWA_HEIGHTS)
+# GWA heights constant
 GWA_HEIGHTS = [10, 50, 100, 150, 200]
 
 

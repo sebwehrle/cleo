@@ -17,7 +17,6 @@ from rasterio.transform import from_bounds, from_origin
 from cleo.copdem import build_copdem_elevation_like
 from cleo.loaders import load_elevation
 
-# --- merged from tests/_staging/test_copdem_mosaic_reproject_match.py ---
 
 def test_build_copdem_elevation_like(tmp_path):
     """
@@ -120,7 +119,6 @@ def test_build_copdem_elevation_like_empty_tiles():
         build_copdem_elevation_like(reference_da, [])
 
 
-# --- merged from tests/_staging/test_copdem_nodata_masking.py ---
 
 def test_build_copdem_elevation_like_masks_nodata(tmp_path):
     tile_path = tmp_path / "tile.tif"
@@ -159,7 +157,6 @@ def test_build_copdem_elevation_like_masks_nodata(tmp_path):
     assert np.isnan(out.values).any()
 
 
-# --- merged from tests/_staging/test_elevation_reference_from_air_density.py ---
 
 def test_load_elevation_uses_air_density_when_reference_lacks_crs(monkeypatch, tmp_path):
     """
@@ -259,7 +256,6 @@ def test_load_elevation_raises_when_no_crs_and_no_air_density(monkeypatch, tmp_p
     assert "air-density" in str(exc_info.value)
 
 
-# --- merged from tests/_staging/test_elevation_source_selection.py ---
 
 def test_load_elevation_uses_legacy_when_present(monkeypatch, tmp_path):
     """
@@ -427,7 +423,6 @@ def test_load_elevation_uses_copdem_when_legacy_absent(monkeypatch, tmp_path):
     assert np.allclose(elevation.values, 1000.0)
 
 
-# --- merged from tests/_staging/test_load_elevation_legacy_matches_reference.py ---
 
 def test_load_elevation_legacy_matches_reference_grid(tmp_path, monkeypatch):
     iso3 = "AUT"

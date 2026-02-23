@@ -24,7 +24,7 @@ from shapely.geometry import box
 
 from cleo import Atlas
 
-# GWA heights constant (same as cleo.unify.GWA_HEIGHTS)
+# GWA heights constant
 GWA_HEIGHTS = [10, 50, 100, 150, 200]
 
 
@@ -344,8 +344,9 @@ class TestRegionStores:
         atlas.materialize()
 
         # Region stores should exist
-        region_wind_path = atlas.path / "regions" / "Niederösterreich" / "wind.zarr"
-        region_land_path = atlas.path / "regions" / "Niederösterreich" / "landscape.zarr"
+        region_root = atlas.path / "regions" / atlas._region_id
+        region_wind_path = region_root / "wind.zarr"
+        region_land_path = region_root / "landscape.zarr"
 
         assert region_wind_path.exists(), "Region wind store should exist"
         assert region_land_path.exists(), "Region landscape store should exist"
@@ -422,7 +423,7 @@ class TestRegionCaching:
         )
 
         # Verify it was written to region store, NOT base store
-        region_wind_path = atlas.path / "regions" / "Niederösterreich" / "wind.zarr"
+        region_wind_path = atlas.path / "regions" / atlas._region_id / "wind.zarr"
         region_wind = xr.open_zarr(region_wind_path, consolidated=False)
         assert "capacity_factors" in region_wind, (
             "capacity_factors should be in region wind store"

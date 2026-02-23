@@ -1,7 +1,6 @@
 """Shared materializer helpers.
 
-Phase 3 PR2 moves cross-cutting helper ownership here while preserving
-legacy compatibility import paths through thin forwarders in unifier.py.
+Cross-cutting helpers used by multiple materializers live here.
 """
 
 from __future__ import annotations

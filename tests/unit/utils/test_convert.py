@@ -7,7 +7,6 @@ import xarray as xr
 from types import SimpleNamespace
 from cleo.utils import convert
 
-# --- merged from tests/_staging/test_convert_preserves_attrs.py ---
 
 def test_convert_preserves_attrs_and_updates_unit():
     ds = xr.Dataset({"v": (("y", "x"), np.ones((2, 2)))}, coords={"x": [0, 1], "y": [0, 1]})

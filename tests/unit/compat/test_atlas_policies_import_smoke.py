@@ -1,4 +1,4 @@
-"""Import smoke tests for Phase 2 atlas_policies scaffold."""
+"""Import smoke tests for atlas policy modules."""
 
 from __future__ import annotations
 
@@ -15,4 +15,3 @@ def test_atlas_policies_modules_import_smoke() -> None:
     for module in modules:
         imported = importlib.import_module(module)
         assert imported is not None
-

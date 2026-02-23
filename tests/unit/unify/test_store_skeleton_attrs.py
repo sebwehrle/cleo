@@ -6,7 +6,8 @@ from pathlib import Path
 
 import zarr
 
-from cleo.unify import Unifier, get_git_info, hash_grid_id, hash_inputs_id
+from cleo.unification import Unifier, hash_grid_id, hash_inputs_id
+from cleo.unification.fingerprint import get_git_info
 import numpy as np
 
 

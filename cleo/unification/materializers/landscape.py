@@ -39,26 +39,6 @@ from cleo.unification.vertical_policy import HASH_ALGORITHM, HASH_SCHEMA_VERSION
 logger = logging.getLogger(__name__)
 
 
-def _build_region_name_index(unifier, atlas) -> dict[str, str]:
-    """Build region-name to region-id mapping from NUTS shapefile."""
-    try:
-        rows = _read_nuts_region_catalog(atlas)
-    except (FileNotFoundError, OSError, ValueError, TypeError, KeyError):
-        logger.debug(
-            "Failed to build region-name index from NUTS catalog.",
-            extra={"country": getattr(atlas, "country", None), "atlas_path": str(atlas.path)},
-            exc_info=True,
-        )
-        return {}
-
-    # Legacy index is default NUTS-2 only to keep name resolution deterministic.
-    index: dict[str, str] = {}
-    for row in rows:
-        if int(row["level"]) == 2:
-            index[str(row["name_norm"])] = str(row["nuts_id"])
-    return index
-
-
 def materialize_landscape(unifier, atlas) -> None:
     """Materialize landscape.zarr as a complete canonical store."""
     store_path = Path(atlas.path) / "landscape.zarr"
@@ -234,11 +214,6 @@ def materialize_landscape(unifier, atlas) -> None:
 
         if region_catalog:
             g.attrs["cleo_region_catalog_json"] = _stable_json(region_catalog)
-
-        # Build and store region-name index (legacy key: normalized name -> NUTS-2 ID)
-        region_index = _build_region_name_index(unifier, atlas)
-        if region_index:
-            g.attrs["cleo_region_name_to_id_json"] = _stable_json(region_index)
 
         init_manifest(tmp)
 

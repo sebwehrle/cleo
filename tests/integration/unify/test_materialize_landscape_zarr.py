@@ -27,7 +27,8 @@ from shapely.geometry import box
 import cleo
 import json
 
-from cleo.unify import Unifier, GWA_HEIGHTS
+from cleo.unification.gwa_io import GWA_HEIGHTS
+from cleo.unification.unifier import Unifier
 
 
 def _copy_default_turbine(atlas_path: Path) -> None:

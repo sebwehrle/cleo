@@ -46,25 +46,6 @@ def _coerce_catalog_rows(
     return catalog
 
 
-def _coerce_legacy_index_rows(legacy_index: dict[Any, Any]) -> list[CatalogRow]:
-    """Normalize legacy ``cleo_region_name_to_id_json`` mapping rows."""
-    catalog: list[CatalogRow] = []
-    for name_norm, nuts_id in legacy_index.items():
-        name_norm_s = str(name_norm).strip()
-        nuts_id_s = str(nuts_id).strip()
-        if not name_norm_s or not nuts_id_s:
-            continue
-        catalog.append(
-            {
-                "name": name_norm_s,
-                "name_norm": name_norm_s,
-                "nuts_id": nuts_id_s,
-                "level": 2,
-            }
-        )
-    return catalog
-
-
 def load_nuts_region_catalog(
     *,
     cached_rows: tuple[CatalogRow, ...] | None,
@@ -92,18 +73,6 @@ def load_nuts_region_catalog(
                         cache = tuple(catalog)
                         return _catalog_rows_copy(cache), cache
 
-            # Backward-compat for older stores/tests with legacy index only.
-            legacy_index_json = attrs.get("cleo_region_name_to_id_json")
-            if legacy_index_json:
-                try:
-                    legacy_index = json.loads(legacy_index_json)
-                except json.JSONDecodeError:
-                    legacy_index = None
-                if isinstance(legacy_index, dict) and legacy_index:
-                    catalog = _coerce_legacy_index_rows(legacy_index)
-                    if catalog:
-                        cache = tuple(catalog)
-                        return _catalog_rows_copy(cache), cache
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             log_debug(
                 "Failed to load NUTS region catalog from landscape store attrs; "

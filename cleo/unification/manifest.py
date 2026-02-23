@@ -1,4 +1,4 @@
-"""Manifest helpers extracted from ``cleo.unify``."""
+"""Manifest helpers for canonical unification ownership."""
 
 from __future__ import annotations
 

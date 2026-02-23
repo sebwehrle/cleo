@@ -1,4 +1,4 @@
-"""Import smoke tests for Phase 1 unification split."""
+"""Import smoke tests for the canonical unification package."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ def test_unification_module_imports_smoke() -> None:
         "cleo.unification.nuts_io",
         "cleo.unification.gwa_io",
         "cleo.unification.unifier",
-        "cleo.unify",
     ]
     for module in modules:
         imported = importlib.import_module(module)

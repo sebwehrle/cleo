@@ -17,7 +17,6 @@ from shapely.geometry import Polygon
 from cleo.spatial import clip_to_geometry, _rio_clip_robust
 from tests.helpers.factories import wind_speed_axis
 
-# --- merged from tests/_staging/test_clip_to_geometry_bad_path.py ---
 
 def test_clip_to_geometry_rejects_path_string():
     """spatial.py is primitives-only: paths must be handled by caller (classes.py)."""
@@ -29,7 +28,6 @@ def test_clip_to_geometry_rejects_path_string():
         clip_to_geometry(dummy, "nonexistent.shp")
 
 
-# --- merged from tests/_staging/test_clip_to_geometry_invalid_geom_repairs.py ---
 
 def test_clip_to_geometry_repairs_invalid_geometry():
     # self-intersecting polygon (invalid)
@@ -47,7 +45,6 @@ def test_clip_to_geometry_repairs_invalid_geometry():
     assert "a" in clipped.data_vars
 
 
-# --- merged from tests/_staging/test_clip_to_geometry_invalid_geom_repairs_tiny_polygon.py ---
 
 def test_clip_to_geometry_repairs_invalid_geom_tiny_polygon_does_not_raise():
     # Self-intersecting polygon that, after repair, is tiny and may not contain pixel centers

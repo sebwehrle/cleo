@@ -1,4 +1,4 @@
-"""Fingerprint and version helpers extracted from ``cleo.unify``."""
+"""Fingerprint and version helpers for canonical unification ownership."""
 
 from __future__ import annotations
 

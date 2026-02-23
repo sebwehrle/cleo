@@ -1,5 +1,4 @@
 # %% imports
-import os
 import re
 import json
 import zarr
@@ -15,6 +14,7 @@ from typing import Sequence
 
 from cleo.domains import WindDomain, LandscapeDomain
 from cleo.unification.nuts_io import _read_vector_file, _read_nuts_region_catalog
+from cleo.unification.store_io import open_zarr_dataset, write_netcdf_atomic
 from cleo.spatial import to_crs_if_needed
 from cleo.class_helpers import deploy_resources, setup_logging
 from cleo.dask_utils import normalize_compute_backend, normalize_compute_workers
@@ -318,7 +318,7 @@ class Atlas:
             raise RuntimeError(
                 "Canonical stores not ready. Call atlas.materialize() first."
             )
-        return xr.open_zarr(self.wind_store_path, consolidated=False, chunks=self.chunk_policy)
+        return open_zarr_dataset(self.wind_store_path, chunk_policy=self.chunk_policy)
 
     @property
     def landscape_zarr(self) -> xr.Dataset:
@@ -330,7 +330,7 @@ class Atlas:
             raise RuntimeError(
                 "Canonical stores not ready. Call atlas.materialize() first."
             )
-        return xr.open_zarr(self.landscape_store_path, consolidated=False, chunks=self.chunk_policy)
+        return open_zarr_dataset(self.landscape_store_path, chunk_policy=self.chunk_policy)
 
     # -------------------------------------------------------------------------
     # Region selection (contract A4, B1)
@@ -889,7 +889,7 @@ class Atlas:
                 f"Run persist() first."
             )
 
-        return xr.open_zarr(store_path, consolidated=False)
+        return open_zarr_dataset(store_path)
 
     def export_result_netcdf(
         self,
@@ -930,7 +930,7 @@ class Atlas:
             )
 
         # Open source store
-        ds = xr.open_zarr(src_store, consolidated=False)
+        ds = open_zarr_dataset(src_store)
         ds = restore_serialized_string_coords(ds)
         ds = self._evaluate_for_io(ds)
 
@@ -944,12 +944,8 @@ class Atlas:
         # Merge user-provided encoding (takes precedence)
         final_encoding.update(encoding or {})
 
-        # Atomic file write
-        tmp = out_path.with_name(out_path.name + f".__tmp__{uuid4().hex}")
         try:
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            ds.to_netcdf(tmp, encoding=final_encoding)
-            os.replace(tmp, out_path)
+            write_netcdf_atomic(ds, out_path, encoding=final_encoding)
         except (OSError, ValueError, RuntimeError, TypeError):
             logger.error(
                 "Failed to export result to NetCDF.",
@@ -960,8 +956,6 @@ class Atlas:
                 },
                 exc_info=True,
             )
-            if tmp.exists():
-                tmp.unlink()
             raise
 
         return out_path

@@ -5,6 +5,7 @@ import xarray as xr
 from pathlib import Path
 from cleo.results import DomainResult
 from cleo.wind_metrics import _WIND_METRICS
+from cleo.unification.store_io import open_zarr_dataset
 
 
 class WindDomain:
@@ -50,7 +51,7 @@ class WindDomain:
                 f"Wind store missing at {store_path}; call atlas.materialize()."
             )
 
-        ds = xr.open_zarr(store_path, consolidated=False, chunks=self._atlas.chunk_policy)
+        ds = open_zarr_dataset(store_path, chunk_policy=self._atlas.chunk_policy)
 
         state = ds.attrs.get("store_state", "")
         if state != "complete":
@@ -620,7 +621,7 @@ class LandscapeDomain:
                 f"Landscape store missing at {store_path}; call atlas.materialize()."
             )
 
-        ds = xr.open_zarr(store_path, consolidated=False, chunks=self._atlas.chunk_policy)
+        ds = open_zarr_dataset(store_path, chunk_policy=self._atlas.chunk_policy)
 
         state = ds.attrs.get("store_state", "")
         if state != "complete":

@@ -133,7 +133,7 @@ def _align_pdf_to_wind_speed_exact(
     if "wind_speed" not in pdf.dims:
         return pdf
 
-    src = np.asarray(pdf["wind_speed"].values, dtype=np.float64)
+    src = np.asarray(pdf["wind_speed"].data, dtype=np.float64)
     tgt = np.asarray(u, dtype=np.float64)
 
     # Fast path: same logical grid (allow float32/float64 representation noise).
@@ -823,7 +823,7 @@ def _interp_da_to_height_log(
     if "height" not in da.dims:
         raise ValueError("DataArray must have a 'height' dimension")
 
-    heights = da.coords["height"].values
+    heights = np.asarray(da.coords["height"].data)
     if len(heights) < 2:
         raise ValueError(f"At least 2 heights required for interpolation, got {len(heights)}")
 
@@ -912,7 +912,7 @@ def _interp_da_to_heights_log(
     if "height" not in da.dims:
         raise ValueError("DataArray must have a 'height' dimension")
 
-    heights = np.asarray(da.coords["height"].values, dtype=np.float64)
+    heights = np.asarray(da.coords["height"].data, dtype=np.float64)
     if heights.size < 2:
         raise ValueError(f"At least 2 heights required for interpolation, got {heights.size}")
 

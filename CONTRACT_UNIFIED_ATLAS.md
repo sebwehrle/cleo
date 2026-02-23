@@ -34,7 +34,11 @@ atlas = Atlas(
     country="AUT",          # ISO3
     crs="epsg:3035",        # canonical projected CRS for stores
     chunk_policy={"y": 1024, "x": 1024},  # optional
+    compute_backend="serial",             # optional: serial|threads|processes|distributed
+    compute_workers=None,                 # optional local worker cap
     region=None,            # optional initial region selection (see A4)
+    results_root=None,      # optional custom results directory
+    fingerprint_method="path_mtime_size", # optional unification fingerprint policy
 )
 ```
 
@@ -63,12 +67,14 @@ Normative:
 Typical usage:
 
 ```python
-atlas.select(region="Niederösterreich")   # sets the active region selection (persistent)
-atlas.select(region=None)       # clears region selection (full-country view)
+atlas.select(region="Niederösterreich", inplace=True)   # sets active region selection (persistent)
+atlas.select(region=None, inplace=True)       # clears region selection (full-country view)
 ```
 
 Normative:
 - Region selection must be changeable **at any time** after construction.
+- Selection API supports optional disambiguation and copy-vs-inplace semantics:
+  - `select(region=..., region_level=1|2|3|None, inplace=False|True)`
 - Region selection affects:
   - *what computations operate on* (they apply a mask/subset), and
   - *where derived outputs are written on disk* (region-scoped stores).
@@ -110,13 +116,17 @@ Normative:
 
 ```python
 atlas.wind.turbines                 # tuple[str, ...]  (inventory from base store)
-atlas.wind.select(turbines=[...])   # sets persistent selection
+atlas.wind.select(turbines=[...])   # sets persistent selection by turbine IDs
+atlas.wind.select(turbine_indices=[...])  # sets persistent selection by indices into atlas.wind.turbines
 atlas.wind.clear_selection()
 atlas.wind.selected_turbines        # tuple[str, ...] | None
 ```
 
 Normative:
 - Selection is **persistent** (applies to subsequent compute calls) and stored in the `Atlas`/domain state.
+- Exactly one of `turbines` or `turbine_indices` must be provided to `select(...)`.
+- `turbines` accepts non-empty `list|tuple[str]` only (a plain string is invalid).
+- `turbine_indices` accepts non-empty `list|tuple[int]`, with bounds and duplicate checks.
 - Any compute call may also accept an explicit `turbines=[...]` override; explicit arguments override the persistent selection for that call only.
 
 ---
@@ -128,8 +138,9 @@ Normative:
 ```python
 run = atlas.wind.compute(
     metric="capacity_factors",
-    air_density="gwa",
-    hub_height_bins_m=1,
+    mode="direct_cf_quadrature",
+    air_density=False,
+    rews_n=12,
     loss_factor=1.0,
 )
 da = run.data    # xr.DataArray (dask-backed if dask is configured)
@@ -140,20 +151,23 @@ da = run.data    # xr.DataArray (dask-backed if dask is configured)
 ```python
 da_cached = atlas.wind.compute(
     metric="capacity_factors",
-    air_density="gwa",
-    hub_height_bins_m=1,
+    mode="direct_cf_quadrature",
+    air_density=False,
+    rews_n=12,
     loss_factor=1.0,
 ).cache()
 ```
 
 Normative:
-- `WindDomain.compute(metric=..., **kwargs)` returns a **ComputeRun** object (name not user-visible) with:
+- `WindDomain.compute(metric=..., **kwargs)` returns a **DomainResult** object with:
   - `.data -> xr.DataArray` (lazy by default),
-  - `.cache(name: str | None = None, overwrite: bool = False) -> xr.DataArray`.
+  - `.cache(overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray`,
+  - `.persist(run_id: str | None = None, params: dict | None = None, metric_name: str | None = None) -> Path`.
 - `.cache()` must:
-  1) write the result into the **derived region store** for the current region selection, and  
-  2) surface it immediately as `atlas.wind.data[metric_name]` (or `name` if provided), and  
+  1) write the result into the active wind store (region store when a region is selected, base store otherwise), and
+  2) surface it immediately as `atlas.wind.data[metric_name]`, and
   3) return the cached `xr.DataArray`.
+- When replacing cached `capacity_factors`, a mode change requires `allow_mode_change=True`.
 
 Convenience wrappers:
 - `atlas.wind.capacity_factors(...)` is a convenience wrapper equivalent to `compute(metric="capacity_factors", ...)` and returns the same kind of object supporting `.cache()`.
@@ -166,20 +180,18 @@ Convenience wrappers:
 
 Parameters:
 - `turbines`: optional override list (see A7).
-- `air_density`: `"gwa"` (default) or `"none"`.
-- `hub_height_bins_m`: `int | None`, default `1`.
-  - `1` means bin hub heights into 1 m bins (default).
-  - `None` disables binning (each unique hub height is treated separately).
+- `air_density`: `bool`, default `False`.
+- `mode`: `"direct_cf_quadrature"` (default), `"momentmatch_weibull"`, `"hub"`, or `"rews"`.
+- `rews_n`: `int`, default `12` (rotor quadrature points for rotor-aware modes).
 - `loss_factor`: `float`, default `1.0` (applied multiplicatively).
 
 Normative physics/semantics:
 - Capacity factors are computed **per turbine at its hub height**, derived from the turbine definition.
-- Uses **GWA-height interpolation** of Weibull parameters and (if enabled) air density.
-- Binning must be applied **before** interpolation so turbines with the same binned hub height share intermediate fields.
+- Rotor-aware modes use height-continuous evaluation over rotor disk heights.
 - This metric must not accept a free `height=` parameter (hub height is implied by the turbine).
 
 Intermediate requirement:
-- When `air_density="gwa"`, the wind dataset must be able to hold air density fields as:
+- When `air_density=True`, the wind dataset must be able to hold air density fields as:
   - `atlas.wind.data["rho"]` with dims `("height", "y", "x")` (height in meters; values correspond to the hub-height bins used).
 
 ### `metric="mean_wind_speed"`
@@ -190,6 +202,18 @@ Parameters:
 Normative:
 - Must not require turbine selection.
 - Must operate on the current region selection if set (A4).
+
+### Additional wind metrics (implemented)
+
+- `metric="rews_mps"`
+  - Requires turbines via selection or `turbines=[...]`.
+  - Optional: `air_density: bool = False`, `rews_n: int = 12`.
+- `metric="lcoe"`
+  - Requires turbines and cost/economic params:
+    - `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`.
+  - Optional: `turbine_cost_share`, `hours_per_year`, plus capacity-factor options (`mode`, `rews_n`, `air_density`, `loss_factor`).
+- `metric="min_lcoe_turbine"`, `metric="optimal_power"`, `metric="optimal_energy"`
+  - Same turbine/economic parameter contract as `lcoe`.
 
 ---
 
@@ -204,7 +228,7 @@ atlas.landscape.data["valid_mask"]
 Adding rasters (region-scoped derived data):
 
 ```python
-atlas.landscape.add(name="my_raster", path="/path/to/raster.tif")
+atlas.landscape.add(name="my_raster", source_path="/path/to/raster.tif")
 ```
 
 Normative:
@@ -218,24 +242,25 @@ Normative:
 Persist arbitrary results:
 
 ```python
-run_id = atlas.persist(name="capacity_factors", obj=da_or_ds, params={"air_density": "gwa"})
+store_path = atlas.persist(metric_name="capacity_factors", obj=da_or_ds, params={"air_density": False})
 ```
 
 Open:
 
 ```python
-obj = atlas.open_result(run_id, name="capacity_factors")  # xr.DataArray or xr.Dataset
+obj = atlas.open_result(run_id, metric_name="capacity_factors")  # xr.Dataset
 ```
 
 Export NetCDF:
 
 ```python
-atlas.export_result_netcdf(run_id, name="capacity_factors", path="out.nc")
+atlas.export_result_netcdf(run_id, metric_name="capacity_factors", out_path="out.nc")
 ```
 
 Normative:
 - Results are stored under a **results store** keyed by `run_id` (see B4).
 - Export must be NetCDF4-compatible (including handling of non-numeric coordinate types).
+- `run_id`/`metric_name` are validated as path tokens (no separators/traversal).
 
 ---
 
@@ -255,10 +280,10 @@ Derived region stores:
 
 Results stores:
 - `<ROOT>/results/<run_id>/<name>.zarr`
-- `<ROOT>/results/<run_id>/meta.json` (or equivalent single metadata file)
+- metadata/provenance fields are stored in Zarr attrs (no required `meta.json` file).
 
 Region ID rules:
-- If `atlas.region` is `None`, the effective region id is **`"__all__"`** for derived outputs (full-country derived store).
+- If `atlas.region` is `None`, cached wind metrics are written to the base wind store (`<ROOT>/wind.zarr`).
 - Otherwise `region_id` is the provided NUTS id (e.g. `"AT13"`).
 
 ---
@@ -295,7 +320,7 @@ Therefore:
 
 3) **String metadata must be stored in attributes**
 - Any string lists (e.g. turbine ids, manifest sources/variables) must be stored as JSON in root/group attributes, e.g.:
-  - `cleo_turbine_ids_json`
+  - `cleo_turbines_json`
   - `cleo_manifest_sources_json`
   - `cleo_manifest_variables_json`
 
@@ -333,7 +358,17 @@ Landscape materialization must source elevation deterministically using:
 
 ---
 
-## B7. Contract checking
+## B7. I/O Layer Boundaries (normative)
+
+- `cleo/unification/**` is the canonical location for raw geospatial/base-store/region-store I/O.
+- `cleo/results.py` is the canonical location for results-store persistence/open/export internals.
+- `cleo/atlas.py` is orchestration/control-plane only and should delegate storage operations to dedicated I/O helpers.
+- `cleo/domains.py` should access stores through storage helper functions (not direct raw-I/O call sites).
+- `cleo/assess.py` remains pure compute only: no raw/store/network I/O and no eager evaluation triggers.
+
+---
+
+## B8. Contract checking
 
 The repository must provide a contract check that:
 - validates store schemas and required variables,

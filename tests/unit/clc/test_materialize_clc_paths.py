@@ -77,7 +77,10 @@ def test_materialize_clc_raises_when_no_valid_cells(
         def squeeze(self, drop=True):  # noqa: ANN001, ARG002
             return clc
 
-    monkeypatch.setattr("cleo.clc.rxr.open_rasterio", lambda *a, **k: _FakeRaster())
+    monkeypatch.setattr(
+        "cleo.unification.clc_io.rxr.open_rasterio",
+        lambda *a, **k: _FakeRaster(),
+    )
 
     with pytest.raises(RuntimeError, match="No valid wind cells found"):
         materialize_clc(atlas, source="clc2018")

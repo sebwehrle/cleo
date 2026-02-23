@@ -3,30 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from cleo.domains import LandscapeDomain
-
-
-def _fake_atlas(tmp_path: Path):
-    return SimpleNamespace(
-        path=tmp_path,
-        country="AUT",
-        crs="epsg:3035",
-        chunk_policy={"y": 2, "x": 2},
-        _canonical_ready=True,
-        build_canonical=lambda: None,
-        build_clc=lambda source="clc2018": tmp_path / "data" / "raw" / "AUT" / "clc" / f"{source}.tif",
-        fingerprint_method="path_mtime_size",
-    )
+from tests.helpers.domains import make_landscape_domain_atlas_stub
 
 
 def test_add_clc_category_all_routes_to_add_with_categorical_params(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     calls: list[dict] = []
 
@@ -45,7 +32,7 @@ def test_add_clc_category_all_routes_to_add_with_categorical_params(
 def test_add_clc_category_int_uses_default_name_and_clc_codes_param(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     calls: list[dict] = []
 
@@ -64,7 +51,7 @@ def test_add_clc_category_int_uses_default_name_and_clc_codes_param(
 
 
 def test_add_clc_category_requires_name_for_multi_code(tmp_path: Path) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     with pytest.raises(ValueError, match="name is required"):
         domain.add_clc_category([311, 312])
@@ -73,7 +60,7 @@ def test_add_clc_category_requires_name_for_multi_code(tmp_path: Path) -> None:
 def test_add_clc_category_multi_code_with_name_routes_to_add(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     calls: list[dict] = []
 
@@ -90,21 +77,21 @@ def test_add_clc_category_multi_code_with_name_routes_to_add(
 
 
 def test_add_clc_category_raises_for_invalid_categories_type(tmp_path: Path) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     with pytest.raises(ValueError, match="categories must be 'all', an int code"):
         domain.add_clc_category("forest")
 
 
 def test_add_clc_category_raises_for_empty_list(tmp_path: Path) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     with pytest.raises(ValueError, match="categories must be 'all', an int code"):
         domain.add_clc_category([])
 
 
 def test_add_clc_category_raises_for_non_integer_list_entry(tmp_path: Path) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     with pytest.raises(ValueError, match="invalid literal"):
         domain.add_clc_category(["not-an-int"])  # type: ignore[list-item]
@@ -113,7 +100,7 @@ def test_add_clc_category_raises_for_non_integer_list_entry(tmp_path: Path) -> N
 def test_add_clc_category_raises_when_default_name_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     monkeypatch.setattr("cleo.clc.default_category_name", lambda _path, _code: None)
     with pytest.raises(ValueError, match="No default variable name known for CLC code"):
@@ -121,14 +108,14 @@ def test_add_clc_category_raises_when_default_name_unknown(
 
 
 def test_add_rejects_legacy_materialize_kw(tmp_path: Path) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     with pytest.raises(TypeError, match="unexpected keyword argument 'materialize'"):
         domain.add("foo", tmp_path / "foo.tif", materialize=True)  # type: ignore[call-arg]
 
 
 def test_add_clc_category_rejects_legacy_materialize_kw(tmp_path: Path) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     with pytest.raises(TypeError, match="unexpected keyword argument 'materialize'"):
         domain.add_clc_category("all", materialize=True)  # type: ignore[call-arg]

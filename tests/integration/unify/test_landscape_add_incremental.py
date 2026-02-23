@@ -478,7 +478,7 @@ class TestLandscapeAddIncremental:
         assert "extra_layer" not in landscape.data_vars
 
     def test_invalid_kind_raises(self, tmp_path: Path) -> None:
-        """kind != 'raster' raises ValueError in v1."""
+        """landscape_add helper rejects non-raster kind registrations."""
         atlas = MockAtlas(tmp_path)
 
         _create_all_gwa_rasters(tmp_path)
@@ -493,7 +493,7 @@ class TestLandscapeAddIncremental:
             atlas.landscape_add(
                 "extra_layer",
                 extra_path,
-                kind="vector",  # Invalid in v1
+                kind="vector",
                 params={},
                 materialize=False,
             )

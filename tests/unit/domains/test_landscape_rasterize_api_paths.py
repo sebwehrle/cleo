@@ -3,31 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import xarray as xr
 
 from cleo.domains import LandscapeAddResult, LandscapeDomain
-
-
-def _fake_atlas(tmp_path: Path):
-    return SimpleNamespace(
-        path=tmp_path,
-        country="AUT",
-        crs="epsg:3035",
-        chunk_policy={"y": 2, "x": 2},
-        _canonical_ready=True,
-        build_canonical=lambda: None,
-        fingerprint_method="path_mtime_size",
-    )
+from tests.helpers.domains import make_landscape_domain_atlas_stub
 
 
 def test_rasterize_routes_to_vector_registration_and_stages_overlay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path)
     domain = LandscapeDomain(atlas)
 
     base = xr.Dataset(
@@ -89,7 +77,7 @@ def test_rasterize_routes_to_vector_registration_and_stages_overlay(
 def test_rasterize_noop_with_existing_store_var_returns_existing_without_prepare(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path)
     domain = LandscapeDomain(atlas)
 
     existing = xr.DataArray(
@@ -134,7 +122,7 @@ def test_rasterize_noop_with_existing_store_var_returns_existing_without_prepare
 
 
 def test_rasterize_error_when_variable_already_staged(tmp_path: Path) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path)
     domain = LandscapeDomain(atlas)
     domain._store_data = lambda: xr.Dataset(  # noqa: SLF001
         data_vars={"valid_mask": xr.DataArray(np.ones((1, 1), dtype=bool), dims=("y", "x"))}
@@ -154,7 +142,7 @@ def test_rasterize_error_when_variable_already_staged(tmp_path: Path) -> None:
 
 
 def test_add_rejects_non_raster_kind_with_rasterize_hint(tmp_path: Path) -> None:
-    atlas = _fake_atlas(tmp_path)
+    atlas = make_landscape_domain_atlas_stub(tmp_path)
     domain = LandscapeDomain(atlas)
     with pytest.raises(ValueError, match="Use atlas\\.landscape\\.rasterize"):
         domain.add(

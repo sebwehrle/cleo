@@ -24,13 +24,13 @@ atlas = Atlas(
 atlas.configure_turbines(["Enercon.E40.500", "Vestas.V100.2000"])
 
 # Build/update canonical stores (wind.zarr + landscape.zarr)
-atlas.materialize()
+atlas.build()
 
 # Select turbines for turbine-dependent metrics
 atlas.wind.select(turbines=["Enercon.E40.500"])
 
-# Compute + cache into active wind store
-atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=True).cache()
+# Compute + materialize into active wind store
+atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=True).materialize()
 
 # Compute another metric (lazy result)
 mean_ws = atlas.wind.mean_wind_speed(height=100).data
@@ -75,15 +75,15 @@ Atlas(
 - `compute_backend`: eager-materialization backend (`"serial"|"threads"|"processes"|"distributed"`).
 - `compute_workers`: optional worker cap for local backends (`threads`/`processes`).
   Must be `None` or `1` for `serial`; must be `None` for `distributed`.
-- `region`: optional initial region selection (applied on `materialize()`).
+- `region`: optional initial region selection (applied on `build()`).
 - `results_root`: optional custom results directory.
 - `fingerprint_method`: internal fingerprinting policy used by unification internals.
 
 ### Lifecycle and Selection
 
-- `atlas.materialize()`
+- `atlas.build()`
   - Ensures base stores and, when a region is selected, region stores.
-- `atlas.materialize_canonical()`
+- `atlas.build_canonical()`
   - Ensures base stores only (`wind.zarr`, `landscape.zarr`).
 - `atlas.select(region=..., region_level=None, inplace=False)`
   - `region`: region name or `None` to clear selection.
@@ -118,12 +118,17 @@ Atlas(
 - `atlas.wind.select(turbines=[...] | None, turbine_indices=[...] | None)`
   - set persistent turbine selection by IDs (`turbines`) or by positional indices into `atlas.wind.turbines` (`turbine_indices`).
   - exactly one of `turbines` or `turbine_indices` must be provided.
+  - mutates selection in place and returns `None`.
   - example: `atlas.wind.select(turbine_indices=[1, 3, 4])`
 - `atlas.wind.clear_selection()`
-  - clear persistent selection.
+  - clear persistent selection; returns `None`.
+- `atlas.wind.clear_computed()`
+  - clear transient computed overlays from `atlas.wind.data`; returns `None`.
 - `atlas.wind.compute(metric, **kwargs)`
   - generic metric entrypoint.
-  - rejects cache-only kwargs `overwrite` and `allow_mode_change`; pass those to `.cache(...)`.
+  - rejects materialize-only kwargs `overwrite` and `allow_mode_change`; pass those to `.materialize(...)`.
+  - stages a lazy normalized overlay into `atlas.wind.data[metric]` before store writes.
+  - staged wind overlays are cleared by `atlas.select(...)`, `atlas.build()`, `atlas.build_canonical()`, and `atlas.build_clc()`.
 - `atlas.wind.mean_wind_speed(height, **kwargs)`
 - `atlas.wind.capacity_factors(turbines=None, air_density=False, loss_factor=1.0, mode="direct_cf_quadrature", rews_n=12, **kwargs)`
   - does not accept `height`; hub height is derived from each turbine definition.
@@ -133,7 +138,7 @@ Atlas(
 
 - `.data`
   - computed `xarray.DataArray` (lazy when backed by dask).
-- `.cache(overwrite=True, allow_mode_change=False)`
+- `.materialize(overwrite=True, allow_mode_change=False)`
   - writes metric to active wind store and reloads surfaced domain state.
   - `allow_mode_change` is required to replace existing `capacity_factors` with a different `cleo:cf_mode`.
 - `.persist(run_id=None, params=None, metric_name=None)`
@@ -163,15 +168,27 @@ Atlas(
 
 - `atlas.landscape.data`
   - active landscape dataset.
-- `atlas.landscape.add(name, source_path, *, kind="raster", params=None, materialize=True, if_exists="error")`
-  - register and optionally materialize landscape rasters.
+- `atlas.landscape.add(name, source_path, *, kind="raster", params=None, if_exists="error")`
+  - stages a landscape candidate and returns `LandscapeAddResult`.
+  - staged variables are visible in `atlas.landscape.data` before store writes.
   - `if_exists`: `"error"|"replace"|"noop"`.
-- `atlas.materialize_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
+- `atlas.landscape.clear_staged()`
+  - clears staged (not yet materialized) landscape overlays.
+- `atlas.build_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
   - prepares CLC cache aligned to wind/GWA grid.
-- `atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error", materialize=True)`
+- `atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error")`
   - `categories="all"`: full categorical layer (`land_cover` default name).
   - `categories=int`: single binary CLC-code mask.
   - `categories=list[int]`: combined binary mask (requires `name`).
+  - returns `LandscapeAddResult`.
+
+`LandscapeAddResult`:
+
+- `.data`
+  - staged `xarray.DataArray` candidate.
+- `.materialize(if_exists=None)`
+  - commits the staged variable to the active landscape store.
+  - staged landscape overlays are cleared by `atlas.select(...)`, `atlas.build()`, `atlas.build_canonical()`, and `atlas.build_clc()`.
 
 ### Results and Cleanup
 
@@ -202,7 +219,7 @@ atlas.export_result_netcdf(store_path.parent.name, "capacity_factors", "cf.nc")
 CLEO does not expose a `DaskConfig` object in the public API.
 Chunking and execution behavior are controlled via `chunk_policy`, dataset chunking, and `compute_backend`.
 
-- Dask-backed arrays can stay lazy until materialization paths (`cache`, `persist`, export).
+- Dask-backed arrays can stay lazy until materialization paths (`materialize`, `persist`, export).
 - Local backend worker cap is controlled by `compute_workers`.
 - `compute_backend="distributed"` requires an active `dask.distributed.Client`.
 

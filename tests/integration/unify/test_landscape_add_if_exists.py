@@ -79,7 +79,7 @@ class MockAtlas:
         """Return None - no NUTS region for basic tests."""
         return None
 
-    def materialize_canonical(self) -> None:
+    def build_canonical(self) -> None:
         """Materialize both wind.zarr and landscape.zarr."""
         u = Unifier(
             chunk_policy=self.chunk_policy,
@@ -217,7 +217,7 @@ class TestIfExistsError:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -228,8 +228,7 @@ class TestIfExistsError:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
-        )
+        ).materialize()
 
         # Verify variable exists
         landscape = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -242,7 +241,7 @@ class TestIfExistsError:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -253,8 +252,7 @@ class TestIfExistsError:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
-        )
+        ).materialize()
 
         # Try to add again with if_exists='error' - should raise
         with pytest.raises(ValueError, match="already exists"):
@@ -263,7 +261,6 @@ class TestIfExistsError:
                 extra_path,
                 kind="raster",
                 params={"categorical": False},
-                materialize=True,
                 if_exists="error",
             )
 
@@ -278,7 +275,7 @@ class TestIfExistsNoop:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -288,9 +285,8 @@ class TestIfExistsNoop:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
             if_exists="noop",
-        )
+        ).materialize()
 
         landscape = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
         assert "extra_layer" in landscape.data_vars
@@ -302,7 +298,7 @@ class TestIfExistsNoop:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -313,8 +309,7 @@ class TestIfExistsNoop:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
-        )
+        ).materialize()
 
         # Capture original values and inputs_id
         landscape_before = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -327,7 +322,6 @@ class TestIfExistsNoop:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
             if_exists="noop",
         )
 
@@ -353,7 +347,7 @@ class TestIfExistsReplace:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -363,9 +357,8 @@ class TestIfExistsReplace:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
             if_exists="replace",
-        )
+        ).materialize()
 
         landscape = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
         assert "extra_layer" in landscape.data_vars
@@ -377,7 +370,7 @@ class TestIfExistsReplace:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Add variable with fill_value=42.0
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
@@ -388,8 +381,7 @@ class TestIfExistsReplace:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
-        )
+        ).materialize()
 
         # Verify original value
         landscape_before = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -407,9 +399,8 @@ class TestIfExistsReplace:
             extra_path_v2,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
             if_exists="replace",
-        )
+        ).materialize()
 
         # Verify new value - re-open with consolidated=False
         landscape_after = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -424,7 +415,7 @@ class TestIfExistsReplace:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Add variable first time
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
@@ -435,8 +426,7 @@ class TestIfExistsReplace:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
-        )
+        ).materialize()
 
         # Get original fingerprint
         root_before = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
@@ -454,9 +444,8 @@ class TestIfExistsReplace:
             extra_path_v2,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
             if_exists="replace",
-        )
+        ).materialize()
 
         # Get new fingerprint
         root_after = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
@@ -479,7 +468,7 @@ class TestConsolidatedReads:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -489,8 +478,7 @@ class TestConsolidatedReads:
             extra_path,
             kind="raster",
             params={"categorical": False},
-            materialize=True,
-        )
+        ).materialize()
 
         # Open with consolidated=False
         landscape = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -503,13 +491,13 @@ class TestConsolidatedReads:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Add with fill_value=42
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
 
-        atlas.landscape.add("extra_layer", extra_path, materialize=True)
+        atlas.landscape.add("extra_layer", extra_path).materialize()
 
         # Replace with fill_value=99
         extra_path_v2 = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer_v2.tif"
@@ -518,9 +506,8 @@ class TestConsolidatedReads:
         atlas.landscape.add(
             "extra_layer",
             extra_path_v2,
-            materialize=True,
             if_exists="replace",
-        )
+        ).materialize()
 
         # Verify with consolidated=False
         landscape = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -539,7 +526,7 @@ class TestInvalidIfExists:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -548,7 +535,6 @@ class TestInvalidIfExists:
             atlas.landscape.add(
                 "extra_layer",
                 extra_path,
-                materialize=True,
                 if_exists="invalid_option",
             )
 
@@ -563,7 +549,7 @@ class TestExistingVarsUnchanged:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Add two variables
         layer1_path = tmp_path / "data" / "raw" / "AUT" / "AUT_layer1.tif"
@@ -572,8 +558,8 @@ class TestExistingVarsUnchanged:
         layer2_path = tmp_path / "data" / "raw" / "AUT" / "AUT_layer2.tif"
         _create_extra_layer_raster(layer2_path, fill_value=22.0)
 
-        atlas.landscape.add("layer1", layer1_path, materialize=True)
-        atlas.landscape.add("layer2", layer2_path, materialize=True)
+        atlas.landscape.add("layer1", layer1_path).materialize()
+        atlas.landscape.add("layer2", layer2_path).materialize()
 
         # Capture layer1 values
         landscape_before = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -587,9 +573,8 @@ class TestExistingVarsUnchanged:
         atlas.landscape.add(
             "layer2",
             layer2_v2_path,
-            materialize=True,
             if_exists="replace",
-        )
+        ).materialize()
 
         # Verify layer1 and elevation unchanged
         landscape_after = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -615,7 +600,7 @@ class TestNoopExactMatchSemantics:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Create two different source files
         path_a = tmp_path / "data" / "raw" / "AUT" / "AUT_foo_a.tif"
@@ -624,12 +609,12 @@ class TestNoopExactMatchSemantics:
         path_b = tmp_path / "data" / "raw" / "AUT" / "AUT_foo_b.tif"
         _create_extra_layer_raster(path_b, fill_value=99.0)
 
-        # Register with pathA (materialize=False)
-        atlas.landscape.add("foo", path_a, materialize=False)
+        # Register with pathA (staged only, no store write)
+        atlas.landscape.add("foo", path_a)
 
         # Try to register with pathB using noop - should raise
         with pytest.raises(ValueError, match="if_exists='replace'"):
-            atlas.landscape.add("foo", path_b, materialize=False, if_exists="noop")
+            atlas.landscape.add("foo", path_b, if_exists="noop")
 
     def test_noop_repeat_ok_after_replace_and_rejects_old(self, tmp_path: Path) -> None:
         """noop accepts exact match after replace but rejects old config."""
@@ -638,7 +623,7 @@ class TestNoopExactMatchSemantics:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Create two different source files
         path_a = tmp_path / "data" / "raw" / "AUT" / "AUT_foo_a.tif"
@@ -648,20 +633,20 @@ class TestNoopExactMatchSemantics:
         _create_extra_layer_raster(path_b, fill_value=99.0)
 
         # Add with pathA
-        atlas.landscape.add("foo", path_a, materialize=True)
+        atlas.landscape.add("foo", path_a).materialize()
         old_inputs = xr.open_zarr(
             tmp_path / "landscape.zarr", consolidated=False
         ).attrs["inputs_id"]
 
         # Replace with pathB
-        atlas.landscape.add("foo", path_b, materialize=True, if_exists="replace")
+        atlas.landscape.add("foo", path_b, if_exists="replace").materialize()
         mid_inputs = xr.open_zarr(
             tmp_path / "landscape.zarr", consolidated=False
         ).attrs["inputs_id"]
         assert mid_inputs != old_inputs, "inputs_id should change after replace"
 
         # noop with pathB should succeed (exact match)
-        atlas.landscape.add("foo", path_b, materialize=True, if_exists="noop")
+        atlas.landscape.add("foo", path_b, if_exists="noop").materialize()
         after_inputs = xr.open_zarr(
             tmp_path / "landscape.zarr", consolidated=False
         ).attrs["inputs_id"]
@@ -669,4 +654,58 @@ class TestNoopExactMatchSemantics:
 
         # noop with pathA should raise (config mismatch)
         with pytest.raises(ValueError, match="if_exists='replace'"):
-            atlas.landscape.add("foo", path_a, materialize=True, if_exists="noop")
+            atlas.landscape.add("foo", path_a, if_exists="noop")
+
+
+class TestLandscapeStagingFlow:
+    """Operation-object staging and materialization behavior."""
+
+    def test_add_stages_overlay_before_store_write(self, tmp_path: Path) -> None:
+        atlas = MockAtlas(tmp_path)
+
+        _create_all_gwa_rasters(tmp_path)
+        elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
+        _create_elevation_raster(elev_path)
+        atlas.build_canonical()
+
+        path = tmp_path / "data" / "raw" / "AUT" / "AUT_stage_layer.tif"
+        _create_extra_layer_raster(path, fill_value=33.0)
+
+        op = atlas.landscape.add("stage_layer", path)
+        assert hasattr(op, "data")
+        assert hasattr(op, "materialize")
+
+        assert "stage_layer" in atlas.landscape.data
+        before = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
+        assert "stage_layer" not in before.data_vars
+        before.close()
+
+        materialized = op.materialize()
+        assert "stage_layer" in atlas.landscape.data
+        assert materialized.identical(atlas.landscape.data["stage_layer"])
+
+        after = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
+        assert "stage_layer" in after.data_vars
+        after.close()
+
+    def test_clear_staged_removes_overlay(self, tmp_path: Path) -> None:
+        atlas = MockAtlas(tmp_path)
+
+        _create_all_gwa_rasters(tmp_path)
+        elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
+        _create_elevation_raster(elev_path)
+        atlas.build_canonical()
+
+        path = tmp_path / "data" / "raw" / "AUT" / "AUT_stage_layer.tif"
+        _create_extra_layer_raster(path, fill_value=33.0)
+
+        atlas.landscape.add("stage_layer", path)
+        assert "stage_layer" in atlas.landscape.data
+
+        out = atlas.landscape.clear_staged()
+        assert out is None
+        assert "stage_layer" not in atlas.landscape.data
+
+        ds = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
+        assert "stage_layer" not in ds.data_vars
+        ds.close()

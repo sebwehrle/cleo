@@ -94,7 +94,7 @@ def test_materialize_clc_and_add_categories(tmp_path: Path) -> None:
     atlas = _build_atlas(tmp_path)
     _create_clc_source(tmp_path)
 
-    prepared = atlas.materialize_clc()
+    prepared = atlas.build_clc()
     assert prepared.exists()
 
     atlas.landscape.add_clc_category("all")
@@ -116,7 +116,7 @@ def test_materialize_clc_and_add_categories(tmp_path: Path) -> None:
 def test_add_clc_category_requires_name_for_multi_code(tmp_path: Path) -> None:
     atlas = _build_atlas(tmp_path)
     _create_clc_source(tmp_path)
-    atlas.materialize_clc()
+    atlas.build_clc()
 
     with pytest.raises(ValueError, match="name is required"):
         atlas.landscape.add_clc_category([311, 312])
@@ -136,7 +136,7 @@ def test_materialize_clc_downloads_when_source_missing(tmp_path: Path, monkeypat
         )
 
     monkeypatch.setattr("cleo.clc.download_to_path", _fake_download)
-    prepared = atlas.materialize_clc(url="https://example.test/clc.tif")
+    prepared = atlas.build_clc(url="https://example.test/clc.tif")
     assert prepared.exists()
 
     # Prepared raster should be reprojected/cropped relative to wind grid.

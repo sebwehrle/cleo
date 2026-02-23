@@ -413,6 +413,118 @@ def register_landscape_source(
     return True
 
 
+def prepare_landscape_variable_data(
+    unifier,
+    atlas,
+    variable_name: str,
+) -> xr.DataArray:
+    """Prepare a landscape variable DataArray from a registered source without writing."""
+    store_path = Path(atlas.path) / "landscape.zarr"
+    wind_path = Path(atlas.path) / "wind.zarr"
+
+    wind = xr.open_zarr(wind_path, consolidated=False, chunks=unifier.chunk_policy)
+    if wind.attrs.get("store_state") != "complete":
+        raise RuntimeError(
+            "wind.zarr is not complete; run Unifier.materialize_wind(atlas) first."
+        )
+    wind_grid_id = wind.attrs.get("grid_id") or ""
+
+    wind_ref = wind["weibull_A"].isel(height=0)
+    if "height" in wind["weibull_A"].dims:
+        height_values = wind["weibull_A"]["height"].values
+        if 100 in height_values:
+            wind_ref = wind["weibull_A"].sel(height=100)
+
+    if wind_ref.rio.crs is None:
+        if "template" in wind and wind["template"].rio.crs is not None:
+            wind_ref = wind_ref.rio.write_crs(wind["template"].rio.crs)
+        else:
+            wind_ref = wind_ref.rio.write_crs(atlas.crs)
+
+    if wind_ref.rio.transform() is None:
+        wind_ref = wind_ref.rio.write_transform(wind_ref.rio.transform(recalc=True))
+
+    land = xr.open_zarr(store_path, consolidated=False, chunks=unifier.chunk_policy)
+    land_root = zarr.open_group(store_path, mode="r")
+    if land_root.attrs.get("store_state") != "complete":
+        raise RuntimeError(
+            "landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first."
+        )
+    land_grid_id = land_root.attrs.get("grid_id") or ""
+    if land_grid_id != wind_grid_id:
+        raise RuntimeError(
+            f"landscape.zarr grid_id mismatch: {land_grid_id!r} != wind grid_id {wind_grid_id!r}"
+        )
+    if "valid_mask" not in land:
+        raise RuntimeError("landscape.zarr missing valid_mask")
+
+    source_id = f"land:raster:{variable_name}"
+    manifest = _read_manifest(store_path)
+    sources = manifest.get("sources", [])
+    source_by_id = {s["source_id"]: s for s in sources}
+    if source_id not in source_by_id:
+        raise KeyError(
+            f"Source {source_id!r} not registered. "
+            f"Call register_landscape_source first."
+        )
+
+    source_entry = source_by_id[source_id]
+    source_path = Path(source_entry.get("path", ""))
+    params_json = source_entry.get("params_json", "")
+    params = json.loads(params_json) if params_json else {}
+
+    aoi = _aoi_geom_or_none(atlas)
+
+    da = rxr.open_rasterio(source_path, parse_coordinates=True).squeeze(drop=True)
+    if da.rio.crs is None:
+        raise RuntimeError(
+            f"Source raster {source_path} has no CRS; cannot materialize."
+        )
+
+    if aoi is not None:
+        from cleo.spatial import to_crs_if_needed
+
+        aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
+        da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
+
+    categorical = bool(params.get("categorical", False))
+    resampling = Resampling.nearest if categorical else Resampling.bilinear
+
+    da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan)
+    da = da.rename(variable_name)
+
+    clc_codes_raw = params.get("clc_codes")
+    if clc_codes_raw is not None:
+        if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
+            raise ValueError(
+                "params['clc_codes'] must be a non-empty list of integer CLC codes."
+            )
+        clc_codes = [int(code) for code in clc_codes_raw]
+        da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
+
+    wind_y = wind_ref.coords["y"].values
+    wind_x = wind_ref.coords["x"].values
+    da_y = da.coords["y"].values
+    da_x = da.coords["x"].values
+    if not (np.array_equal(da_y, wind_y) and np.array_equal(da_x, wind_x)):
+        raise ValueError(
+            f"Materialized variable {variable_name!r} has y/x coords that do not match "
+            f"wind reference grid exactly.\n"
+            f"  wind_ref y: shape={wind_y.shape}, range=[{wind_y.min()}, {wind_y.max()}]\n"
+            f"  da y: shape={da_y.shape}, range=[{da_y.min()}, {da_y.max()}]\n"
+            f"  wind_ref x: shape={wind_x.shape}, range=[{wind_x.min()}, {wind_x.max()}]\n"
+            f"  da x: shape={da_x.shape}, range=[{da_x.min()}, {da_x.max()}]"
+        )
+
+    valid_mask = land["valid_mask"].load()
+    da = da.where(valid_mask, np.nan)
+
+    chunk_y = unifier.chunk_policy.get("y", 1024)
+    chunk_x = unifier.chunk_policy.get("x", 1024)
+    da = da.chunk({"y": chunk_y, "x": chunk_x})
+    return da
+
+
 def materialize_landscape_variable(
     unifier,
     atlas,
@@ -547,65 +659,9 @@ def materialize_landscape_variable(
     # Use stored fingerprint for inputs_id (consistent with registration)
     fingerprint = stored_fingerprint
 
-    # 4) AOI
-    aoi = _aoi_geom_or_none(atlas)
-
-    # 5) Read + unify raster (raw I/O)
-    da = rxr.open_rasterio(source_path, parse_coordinates=True).squeeze(drop=True)
-
-    if da.rio.crs is None:
-        raise RuntimeError(
-            f"Source raster {source_path} has no CRS; cannot materialize."
-        )
-
-    # Clip to AOI if specified
-    if aoi is not None:
-        from cleo.spatial import to_crs_if_needed
-        aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
-        da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
-
-    # Determine resampling based on categorical flag
+    # Reuse the same preparation path as staged overlays for parity.
     categorical = bool(params.get("categorical", False))
-    resampling = Resampling.nearest if categorical else Resampling.bilinear
-
-    # Reproject to match wind grid
-    da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan)
-    da = da.rename(variable_name)
-
-    # Optional CLC category extraction: derive binary indicator from CLC codes.
-    clc_codes_raw = params.get("clc_codes")
-    if clc_codes_raw is not None:
-        if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
-            raise ValueError(
-                "params['clc_codes'] must be a non-empty list of integer CLC codes."
-            )
-        clc_codes = [int(code) for code in clc_codes_raw]
-        da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
-
-    # Enforce y/x coords EXACT match to wind reference coords
-    wind_y = wind_ref.coords["y"].values
-    wind_x = wind_ref.coords["x"].values
-    da_y = da.coords["y"].values
-    da_x = da.coords["x"].values
-
-    if not (np.array_equal(da_y, wind_y) and np.array_equal(da_x, wind_x)):
-        raise ValueError(
-            f"Materialized variable {variable_name!r} has y/x coords that do not match "
-            f"wind reference grid exactly.\n"
-            f"  wind_ref y: shape={wind_y.shape}, range=[{wind_y.min()}, {wind_y.max()}]\n"
-            f"  da y: shape={da_y.shape}, range=[{da_y.min()}, {da_y.max()}]\n"
-            f"  wind_ref x: shape={wind_x.shape}, range=[{wind_x.min()}, {wind_x.max()}]\n"
-            f"  da x: shape={da_x.shape}, range=[{da_x.min()}, {da_x.max()}]"
-        )
-
-    # Enforce valid_mask semantics: NaN where valid_mask is False
-    valid_mask = land["valid_mask"].load()
-    da = da.where(valid_mask, np.nan)
-
-    # Apply chunking
-    chunk_y = unifier.chunk_policy.get("y", 1024)
-    chunk_x = unifier.chunk_policy.get("x", 1024)
-    da = da.chunk({"y": chunk_y, "x": chunk_x})
+    da = prepare_landscape_variable_data(unifier, atlas, variable_name)
 
     # 6) Preserve existing attrs before appending (to_zarr may overwrite)
     preserve_attrs = dict(land_root.attrs)
@@ -684,12 +740,12 @@ def compute_air_density_correction(
     if not wind_path.exists():
         raise FileNotFoundError(
             f"wind.zarr not found at {wind_path}. "
-            "Run atlas.materialize_canonical() first."
+            "Run atlas.build_canonical() first."
         )
     if not landscape_path.exists():
         raise FileNotFoundError(
             f"landscape.zarr not found at {landscape_path}. "
-            "Run atlas.materialize_canonical() first."
+            "Run atlas.build_canonical() first."
         )
 
     # 2) Open canonical stores
@@ -707,12 +763,12 @@ def compute_air_density_correction(
     if wind_state != "complete":
         raise RuntimeError(
             f"wind.zarr store_state={wind_state!r}, expected 'complete'. "
-            "Run atlas.materialize_canonical() to complete unification."
+            "Run atlas.build_canonical() to complete unification."
         )
     if land_state != "complete":
         raise RuntimeError(
             f"landscape.zarr store_state={land_state!r}, expected 'complete'. "
-            "Run atlas.materialize_canonical() to complete unification."
+            "Run atlas.build_canonical() to complete unification."
         )
 
     # 4) Get template from wind store

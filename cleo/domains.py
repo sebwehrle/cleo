@@ -2,7 +2,7 @@
 import numpy as np
 import xarray as xr
 from pathlib import Path
-from cleo.results import DomainResult
+from cleo.results import DomainResult, normalize_metric_for_active_wind_store
 from cleo.wind_metrics import _WIND_METRICS
 from cleo.unification.store_io import open_zarr_dataset, turbine_ids_from_json
 
@@ -11,8 +11,8 @@ class WindDomain:
     """
     Domain object for wind data access.
 
-    Provides lazy, cached access to the canonical wind.zarr store.
-    The .data property opens the store once and caches the result.
+    Provides lazy, cached access to the active wind.zarr store.
+    The .data property overlays transient computed metrics staged by compute().
 
     Turbine selection is persistent on the Atlas instance, not on this domain.
     """
@@ -20,6 +20,34 @@ class WindDomain:
     def __init__(self, atlas):
         self._atlas = atlas
         self._data = None
+        self._computed_overlays: dict[str, xr.DataArray] = {}
+
+    def _store_data(self) -> xr.Dataset:
+        """Open/cache the active wind store dataset without computed overlays."""
+        if self._data is not None:
+            return self._data
+
+        store_path = self._atlas._active_wind_store_path()
+
+        if not store_path.exists():
+            if self._atlas._region_name is not None:
+                raise FileNotFoundError(
+                    f"Region wind store missing at {store_path}; "
+                    f"call atlas.build() after selecting region."
+                )
+            raise FileNotFoundError(
+                f"Wind store missing at {store_path}; call atlas.build()."
+            )
+
+        ds = open_zarr_dataset(store_path, chunk_policy=self._atlas.chunk_policy)
+        state = ds.attrs.get("store_state", "")
+        if state != "complete":
+            raise RuntimeError(
+                f"Wind store incomplete (store_state={state!r}); "
+                f"call atlas.build()."
+            )
+        self._data = self._apply_public_turbine_index(ds)
+        return self._data
 
     @property
     def data(self) -> xr.Dataset:
@@ -28,39 +56,16 @@ class WindDomain:
 
         Routes to region store when region is selected, otherwise base store.
         Opens the store once and caches it. Validates store_state == "complete".
+        Includes staged computed overlays (if any) from :meth:`compute`.
 
         :returns: Active wind store dataset.
         :raises FileNotFoundError: If wind store does not exist.
         :raises RuntimeError: If ``store_state`` is not ``"complete"``.
         """
-        if self._data is not None:
-            return self._data
-
-        # Route to active store (region or base) per contract B1
-        store_path = self._atlas._active_wind_store_path()
-
-        if not store_path.exists():
-            # Provide helpful message based on whether region is selected
-            if self._atlas._region_name is not None:
-                raise FileNotFoundError(
-                    f"Region wind store missing at {store_path}; "
-                    f"call atlas.materialize() after selecting region."
-                )
-            raise FileNotFoundError(
-                f"Wind store missing at {store_path}; call atlas.materialize()."
-            )
-
-        ds = open_zarr_dataset(store_path, chunk_policy=self._atlas.chunk_policy)
-
-        state = ds.attrs.get("store_state", "")
-        if state != "complete":
-            raise RuntimeError(
-                f"Wind store incomplete (store_state={state!r}); "
-                f"call atlas.materialize()."
-            )
-        ds = self._apply_public_turbine_index(ds)
-        self._data = ds
-        return self._data
+        ds = self._store_data()
+        if not self._computed_overlays:
+            return ds
+        return ds.assign(self._computed_overlays)
 
     @property
     def turbines(self) -> tuple[str, ...]:
@@ -73,12 +78,12 @@ class WindDomain:
         ds = self.data
         if "turbine" not in ds.dims:
             raise RuntimeError(
-                "No turbines in wind store; call Atlas.materialize() to add turbines."
+                "No turbines in wind store; call Atlas.build() to add turbines."
             )
         # Read from cleo_turbines_json attr (avoids string arrays in Zarr v3)
         if "cleo_turbines_json" not in ds.attrs:
             raise RuntimeError(
-                "Wind store missing cleo_turbines_json attr; re-run materialize_canonical()."
+                "Wind store missing cleo_turbines_json attr; re-run build_canonical()."
             )
         return turbine_ids_from_json(ds.attrs["cleo_turbines_json"])
 
@@ -138,7 +143,7 @@ class WindDomain:
             raise RuntimeError(
                 f"Wind store turbine mapping mismatch: "
                 f"len(cleo_turbines_json)={len(names)} != turbine dim size={n}. "
-                f"Re-run atlas.materialize()."
+                f"Re-run atlas.build()."
             )
         if len(set(names)) != len(names):
             raise RuntimeError(
@@ -166,7 +171,7 @@ class WindDomain:
         *,
         turbines: list[str] | tuple[str, ...] | None = None,
         turbine_indices: list[int] | tuple[int, ...] | None = None,
-    ) -> "WindDomain":
+    ) -> None:
         """
         Set persistent turbine selection on the Atlas.
 
@@ -180,7 +185,7 @@ class WindDomain:
         :param turbines: Turbine IDs to select (non-empty list/tuple of strings).
         :param turbine_indices: Positional turbine indices into ``atlas.wind.turbines``
             (non-empty list/tuple of ints).
-        :returns: ``self`` for chaining.
+        :returns: ``None``.
         :raises ValueError: If selection args are invalid, ambiguous, out-of-range,
             duplicate, or unknown.
         """
@@ -221,7 +226,7 @@ class WindDomain:
             # Validate against available turbines
             validated = self._validate_turbines(cleaned)
             self._atlas._wind_selected_turbines = validated
-            return self
+            return None
 
         # turbine_indices path
         if isinstance(turbine_indices, (str, bytes)):
@@ -257,22 +262,33 @@ class WindDomain:
             selected.append(available[idx])
 
         self._atlas._wind_selected_turbines = tuple(selected)
-        return self
+        return None
 
-    def clear_selection(self) -> "WindDomain":
+    def clear_selection(self) -> None:
         """
         Clear persistent turbine selection.
 
-        :returns: ``self`` for chaining.
+        :returns: ``None``.
         """
         self._atlas._wind_selected_turbines = None
-        return self
+        return None
+
+    def clear_computed(self) -> None:
+        """
+        Clear transient computed overlays from ``atlas.wind.data``.
+
+        :returns: ``None``.
+        """
+        self._computed_overlays.clear()
+        return None
 
     def compute(self, metric: str, **kwargs) -> DomainResult:
         """
         Compute a wind metric from canonical data.
 
-        Returns a DomainResult wrapper supporting .data/.cache()/.persist() pattern.
+        Returns a DomainResult wrapper supporting .data/.materialize()/.persist() pattern.
+        Also stages a lazy normalized overlay so the metric is visible immediately
+        in ``atlas.wind.data[metric]`` before materialization.
 
         :param metric: Metric name (see supported metrics below).
         :param kwargs: Metric-specific parameters. For metrics requiring
@@ -297,21 +313,29 @@ class WindDomain:
             - "optimal_energy": same params as lcoe. Returns annual energy (GWh/a)
               of the minimum-LCOE turbine at each pixel.
 
-        :returns: :class:`cleo.results.DomainResult` with ``.data``/``.cache()``/``.persist()``.
+        :returns: :class:`cleo.results.DomainResult` with ``.data``/``.materialize()``/``.persist()``.
         :raises ValueError: If metric is unknown, params are missing, or turbine
             validation fails.
-        :raises ValueError: If cache-only kwargs (``overwrite`` / ``allow_mode_change``)
-            are passed to ``compute(...)`` instead of ``.cache(...)``.
+        :raises ValueError: If materialize-only kwargs (``overwrite`` / ``allow_mode_change``)
+            are passed to ``compute(...)`` instead of ``.materialize(...)``.
+        :raises ValueError: If ``inplace`` is passed; ``compute(...)`` does not
+            mutate stores directly.
         """
-        cache_only_kwargs = tuple(
+        if "inplace" in kwargs:
+            raise ValueError(
+                "compute(...) does not accept inplace. "
+                "Use atlas.wind.compute(...).materialize(...) to write into the active wind store."
+            )
+
+        materialize_only_kwargs = tuple(
             key for key in ("overwrite", "allow_mode_change") if key in kwargs
         )
-        if cache_only_kwargs:
-            keys_text = ", ".join(repr(key) for key in cache_only_kwargs)
+        if materialize_only_kwargs:
+            keys_text = ", ".join(repr(key) for key in materialize_only_kwargs)
             raise ValueError(
-                f"cache-only parameter(s) {keys_text} were passed to compute(...); "
-                "pass them to .cache(...), e.g. "
-                "atlas.wind.compute(...).cache(overwrite=True, allow_mode_change=True)."
+                f"materialize-only parameter(s) {keys_text} were passed to compute(...); "
+                "pass them to .materialize(...), e.g. "
+                "atlas.wind.compute(...).materialize(overwrite=True, allow_mode_change=True)."
             )
 
         if metric not in _WIND_METRICS:
@@ -361,6 +385,12 @@ class WindDomain:
 
         # Compute the metric
         da = fn(wind, land, **kwargs)
+        staged = normalize_metric_for_active_wind_store(
+            metric=metric,
+            da=da,
+            existing_ds=self._store_data(),
+        )
+        self._computed_overlays[metric] = staged
 
         # Build params dict for DomainResult (exclude turbines from kwargs copy)
         params = {k: v for k, v in kwargs.items()}
@@ -372,7 +402,7 @@ class WindDomain:
         Compute mean wind speed at specified height.
 
         Thin wrapper around compute("mean_wind_speed", ...).
-        Returns DomainResult supporting .data/.cache()/.persist() pattern.
+        Returns DomainResult supporting .data/.materialize()/.persist() pattern.
 
         :param height: Height level that must exist in the wind store.
         :param kwargs: Additional parameters forwarded to :meth:`compute`.
@@ -394,7 +424,7 @@ class WindDomain:
         Compute capacity factors for selected turbines.
 
         Thin wrapper around compute("capacity_factors", ...).
-        Returns DomainResult supporting .data/.cache()/.persist() pattern.
+        Returns DomainResult supporting .data/.materialize()/.persist() pattern.
 
         :param turbines: Turbine IDs; if ``None``, uses persistent selection.
         :param air_density: If ``True``, apply air-density correction.
@@ -442,17 +472,154 @@ class WindDomain:
         return self.compute("rews_mps", **compute_kwargs)
 
 
+class LandscapeAddResult:
+    """Result wrapper for staged landscape additions."""
+
+    def __init__(
+        self,
+        domain: "LandscapeDomain",
+        name: str,
+        data: xr.DataArray,
+        if_exists: str,
+        *,
+        noop_existing: bool = False,
+    ):
+        self._domain = domain
+        self._name = name
+        self._data = data
+        self._if_exists = if_exists
+        self._noop_existing = noop_existing
+
+    @property
+    def data(self) -> xr.DataArray:
+        """Staged candidate data."""
+        return self._data
+
+    def materialize(self, *, if_exists: str | None = None) -> xr.DataArray:
+        """Materialize the staged variable into the active landscape store."""
+        effective = self._if_exists if if_exists is None else if_exists
+        return self._domain._materialize_staged(
+            name=self._name,
+            if_exists=effective,
+            noop_existing=self._noop_existing,
+        )
+
+
 class LandscapeDomain:
     """
     Domain object for landscape data access.
 
-    Provides lazy, cached access to the canonical landscape.zarr store.
-    The .data property opens the store once and caches the result.
+    Provides lazy, cached access to the active landscape store.
+    The .data property overlays staged variables from add()/add_clc_category().
     """
 
     def __init__(self, atlas):
         self._atlas = atlas
         self._data = None
+        self._staged_overlays: dict[str, xr.DataArray] = {}
+
+    @staticmethod
+    def _validate_if_exists(if_exists: str) -> None:
+        valid_if_exists = {"error", "replace", "noop"}
+        if if_exists not in valid_if_exists:
+            raise ValueError(
+                f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
+            )
+
+    def _build_unifier(self):
+        from cleo.unification import Unifier
+
+        atlas = self._atlas
+        return Unifier(
+            chunk_policy=atlas.chunk_policy,
+            fingerprint_method=getattr(atlas, "fingerprint_method", "path_mtime_size"),
+        )
+
+    def _store_data(self) -> xr.Dataset:
+        """Open/cache the active landscape store dataset without staged overlays."""
+        if self._data is not None:
+            return self._data
+
+        active_store_path = getattr(self._atlas, "_active_landscape_store_path", None)
+        if callable(active_store_path):
+            store_path = active_store_path()
+        elif hasattr(self._atlas, "landscape_store_path"):
+            store_path = Path(getattr(self._atlas, "landscape_store_path"))
+        else:
+            store_path = Path(self._atlas.path) / "landscape.zarr"
+        if not store_path.exists():
+            if getattr(self._atlas, "_region_name", None) is not None:
+                raise FileNotFoundError(
+                    f"Region landscape store missing at {store_path}; "
+                    f"call atlas.build() after selecting region."
+                )
+            raise FileNotFoundError(
+                f"Landscape store missing at {store_path}; call atlas.build()."
+            )
+
+        ds = open_zarr_dataset(store_path, chunk_policy=self._atlas.chunk_policy)
+        state = ds.attrs.get("store_state", "")
+        if state != "complete":
+            raise RuntimeError(
+                f"Landscape store incomplete (store_state={state!r}); "
+                f"call atlas.build()."
+            )
+        if "valid_mask" not in ds.data_vars:
+            raise RuntimeError(
+                "Landscape store missing valid_mask; call atlas.build()."
+            )
+
+        self._data = ds
+        return self._data
+
+    @property
+    def data(self) -> xr.Dataset:
+        """
+        Lazy access to the active landscape zarr store as xr.Dataset.
+
+        Includes staged overlays from :meth:`add` and :meth:`add_clc_category`.
+        """
+        ds = self._store_data()
+        if not self._staged_overlays:
+            return ds
+        return ds.assign(self._staged_overlays)
+
+    def clear_staged(self) -> None:
+        """
+        Clear staged landscape overlays from ``atlas.landscape.data``.
+
+        :returns: ``None``.
+        """
+        self._staged_overlays.clear()
+        return None
+
+    def _materialize_staged(
+        self,
+        *,
+        name: str,
+        if_exists: str,
+        noop_existing: bool = False,
+    ) -> xr.DataArray:
+        self._validate_if_exists(if_exists)
+        if noop_existing and if_exists == "noop":
+            self._staged_overlays.pop(name, None)
+            self._data = None
+            return self.data[name]
+
+        atlas = self._atlas
+        if not getattr(atlas, "_canonical_ready", False):
+            atlas.build_canonical()
+
+        u = self._build_unifier()
+        u.materialize_landscape_variable(
+            atlas,
+            variable_name=name,
+            if_exists=if_exists,
+        )
+
+        self._staged_overlays.pop(name, None)
+        self._data = None
+        return self.data[name]
 
     def add(
         self,
@@ -461,47 +628,32 @@ class LandscapeDomain:
         *,
         kind: str = "raster",
         params: dict | None = None,
-        materialize: bool = True,
         if_exists: str = "error",
-    ) -> None:
-        """Add a new variable to the landscape store.
+    ) -> LandscapeAddResult:
+        """Stage a landscape variable candidate and return an operation object."""
+        self._validate_if_exists(if_exists)
 
-        Registers the source in __manifest__ and optionally materializes
-        the variable into landscape.zarr without recomputing existing variables.
-
-        :param name: Variable name for the new layer.
-        :param source_path: Path to source raster file.
-        :param kind: Source kind (v1 supports only ``"raster"``).
-        :param params: Optional source parameters (for example ``{"categorical": True}``).
-        :param materialize: If ``True``, materialize immediately.
-        :param if_exists: Conflict policy: ``"error"``, ``"replace"``, or ``"noop"``.
-        :returns: ``None``
-        :raises ValueError: If ``kind``/``if_exists`` is invalid or variable exists
-            with ``if_exists="error"``.
-        :raises RuntimeError: If canonical stores are not ready.
-        """
-        from cleo.unification import Unifier
-
-        # Validate if_exists parameter
-        valid_if_exists = {"error", "replace", "noop"}
-        if if_exists not in valid_if_exists:
-            raise ValueError(
-                f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
-            )
-
-        # Ensure canonical stores exist
         atlas = self._atlas
         if not getattr(atlas, "_canonical_ready", False):
-            atlas.materialize_canonical()
+            atlas.build_canonical()
 
-        u = Unifier(
-            chunk_policy=atlas.chunk_policy,
-            fingerprint_method=getattr(atlas, "fingerprint_method", "path_mtime_size"),
-        )
+        store_ds = self._store_data()
+        staged_exists = name in self._staged_overlays
+        store_exists = name in store_ds.data_vars
 
-        # Invalidate cached data since store may change
-        self._data = None
+        if if_exists == "error":
+            if staged_exists:
+                raise ValueError(
+                    f"Variable {name!r} is already staged. "
+                    "Use if_exists='replace' to overwrite or if_exists='noop' to keep current staged state."
+                )
+            if store_exists:
+                raise ValueError(
+                    f"Variable {name!r} already exists in landscape.zarr.\n"
+                    f"  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
+                )
 
+        u = self._build_unifier()
         u.register_landscape_source(
             atlas,
             name=name,
@@ -511,12 +663,35 @@ class LandscapeDomain:
             if_exists=if_exists,
         )
 
-        if materialize:
-            u.materialize_landscape_variable(
-                atlas,
-                variable_name=name,
-                if_exists=if_exists,
-            )
+        if if_exists == "noop":
+            if staged_exists:
+                return LandscapeAddResult(
+                    self,
+                    name,
+                    self._staged_overlays[name],
+                    if_exists,
+                )
+            if store_exists:
+                return LandscapeAddResult(
+                    self,
+                    name,
+                    store_ds[name],
+                    if_exists,
+                    noop_existing=True,
+                )
+
+        staged = u.prepare_landscape_variable_data(
+            atlas,
+            variable_name=name,
+        )
+        staged = staged.reset_coords(drop=True)
+        self._staged_overlays[name] = staged
+        return LandscapeAddResult(
+            self,
+            name,
+            staged,
+            if_exists,
+        )
 
     def add_clc_category(
         self,
@@ -525,44 +700,23 @@ class LandscapeDomain:
         name: str | None = None,
         source: str = "clc2018",
         if_exists: str = "error",
-        materialize: bool = True,
-    ) -> None:
-        """Add CLC-coded layer or CLC-derived category variable(s).
-
-        - ``categories=\"all\"`` adds the full CLC categorical layer
-          (default variable name ``\"land_cover\"``).
-        - ``categories=int`` adds a single binary category mask.
-        - ``categories=list[int]`` adds a combined binary category mask
-          for the specified codes.
-
-        The resulting variable is materialized through the same landscape
-        pipeline as other raster additions (AOI clip, wind-grid match, valid_mask).
-
-        :param categories: ``\"all\"`` or one/many numeric CLC codes.
-        :param name: Output variable name. Required for multi-code lists.
-            For a single known code, defaults to a normalized code label.
-        :param source: CLC source identifier (currently ``\"clc2018\"``).
-        :param if_exists: Conflict policy: ``\"error\"``, ``\"replace\"``, or ``\"noop\"``.
-        :param materialize: If ``True``, materialize immediately.
-        :returns: ``None``
-        """
+    ) -> LandscapeAddResult:
+        """Stage a CLC-coded layer or CLC-derived category variable."""
         from cleo.clc import default_category_name
 
         atlas = self._atlas
-        prepared_path = atlas.materialize_clc(source=source)
+        prepared_path = atlas.build_clc(source=source)
 
         if categories == "all":
             variable_name = name or "land_cover"
             params = {"categorical": True, "clc_source": source}
-            self.add(
+            return self.add(
                 variable_name,
                 prepared_path,
                 kind="raster",
                 params=params,
-                materialize=materialize,
                 if_exists=if_exists,
             )
-            return
 
         if isinstance(categories, int):
             codes = [int(categories)]
@@ -592,58 +746,10 @@ class LandscapeDomain:
             "clc_source": source,
             "clc_codes": codes,
         }
-        self.add(
+        return self.add(
             variable_name,
             prepared_path,
             kind="raster",
             params=params,
-            materialize=materialize,
             if_exists=if_exists,
         )
-
-    @property
-    def data(self) -> xr.Dataset:
-        """
-        Lazy access to the active landscape zarr store as xr.Dataset.
-
-        Routes to region store when region is selected, otherwise base store.
-        Opens the store once and caches it. Validates store_state == "complete"
-        and presence of valid_mask variable.
-
-        :returns: Active landscape store dataset.
-        :raises FileNotFoundError: If landscape store does not exist.
-        :raises RuntimeError: If store is incomplete or ``valid_mask`` is missing.
-        """
-        if self._data is not None:
-            return self._data
-
-        # Route to active store (region or base) per contract B1
-        store_path = self._atlas._active_landscape_store_path()
-
-        if not store_path.exists():
-            # Provide helpful message based on whether region is selected
-            if self._atlas._region_name is not None:
-                raise FileNotFoundError(
-                    f"Region landscape store missing at {store_path}; "
-                    f"call atlas.materialize() after selecting region."
-                )
-            raise FileNotFoundError(
-                f"Landscape store missing at {store_path}; call atlas.materialize()."
-            )
-
-        ds = open_zarr_dataset(store_path, chunk_policy=self._atlas.chunk_policy)
-
-        state = ds.attrs.get("store_state", "")
-        if state != "complete":
-            raise RuntimeError(
-                f"Landscape store incomplete (store_state={state!r}); "
-                f"call atlas.materialize()."
-            )
-
-        if "valid_mask" not in ds.data_vars:
-            raise RuntimeError(
-                "Landscape store missing valid_mask; call atlas.materialize()."
-            )
-
-        self._data = ds
-        return self._data

@@ -92,7 +92,7 @@ def atlas(tmp_path: Path) -> Atlas:
     _create_elevation_raster(elev_path)
 
     atlas = Atlas(tmp_path, "AUT", "epsg:3035")
-    atlas.materialize_canonical()
+    atlas.build_canonical()
     return atlas
 
 

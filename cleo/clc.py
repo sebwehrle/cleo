@@ -17,7 +17,7 @@ CLC_SOURCES: dict[str, dict[str, str]] = {
     "clc2018": {
         "filename": "U2018_CLC2018_V2020_20u1.tif",
         # Direct download URL is user/environment specific in many setups.
-        # Pass url=... to Atlas.materialize_clc(...) when first populating cache.
+        # Pass url=... to Atlas.build_clc(...) when first populating cache.
         "url": "",
         "crs": "EPSG:3035",
     }
@@ -101,7 +101,7 @@ def materialize_clc(
         download_to_path(download_url, source_path)
 
     if not getattr(atlas, "_canonical_ready", False):
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
     ref = _wind_reference_template(atlas)
     return _prepare_clc_to_wind_grid_io(

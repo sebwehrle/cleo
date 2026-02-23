@@ -92,7 +92,7 @@ class MockAtlas:
     def get_nuts_region(self, region: str):
         return None
 
-    def materialize_canonical(self) -> None:
+    def build_canonical(self) -> None:
         """Materialize both wind.zarr and landscape.zarr."""
         u = Unifier(
             chunk_policy=self.chunk_policy,
@@ -338,7 +338,7 @@ class TestPersist:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Get small aligned coords from landscape
         land = atlas.landscape_zarr
@@ -362,7 +362,7 @@ class TestPersist:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -385,7 +385,7 @@ class TestPersist:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -410,7 +410,7 @@ class TestPersist:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -436,7 +436,7 @@ class TestPersist:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -466,7 +466,7 @@ class TestExportResultNetcdf:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -491,7 +491,7 @@ class TestExportResultNetcdf:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -518,7 +518,7 @@ class TestExportResultNetcdf:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -552,7 +552,7 @@ class TestCleanResults:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -578,7 +578,7 @@ class TestCleanResults:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]
@@ -603,7 +603,7 @@ class TestCleanResults:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         land = atlas.landscape_zarr
         y = land["y"].values[:4]

@@ -9,7 +9,7 @@ Scope: This document defines **both** (A) the stable *user-facing API* and (B) t
 
 ## 0. Core concepts (terminology)
 
-- **Base stores**: country-wide canonical data, written by `Atlas.materialize()`.
+- **Base stores**: country-wide canonical data, written by `Atlas.build()`.
 - **Region selection**: an optional NUTS region identifier (e.g. `"AT13"`) that defines a *subsetting mask*.
 - **Derived region stores**: region-scoped data products (metrics and user-added rasters) written on demand, keyed by the current region selection.
 - **`atlas.<domain>.data` is the primary interface**: computed or loaded data must surface there as an `xarray.Dataset`.
@@ -58,7 +58,7 @@ Normative:
 - This config affects **wind base-store materialization only** (what ends up in `wind.zarr`).
 - If not configured, **all available turbines** (all `*.yml` turbine definitions present in the turbine registry) are materialized.
 - Config validation is syntactic only (non-empty; strings; stripped non-empty; no duplicates; order preserved).
-- Changing configured turbines changes the **wind base-store inputs identity** so the next `materialize()` refreshes wind if needed.
+- Changing configured turbines changes the **wind base-store inputs identity** so the next `build()` refreshes wind if needed.
 
 ---
 
@@ -85,7 +85,7 @@ Normative:
 ### A5. Materialization
 
 ```python
-atlas.materialize()
+atlas.build()
 ```
 
 Normative:
@@ -119,6 +119,7 @@ atlas.wind.turbines                 # tuple[str, ...]  (inventory from base stor
 atlas.wind.select(turbines=[...])   # sets persistent selection by turbine IDs
 atlas.wind.select(turbine_indices=[...])  # sets persistent selection by indices into atlas.wind.turbines
 atlas.wind.clear_selection()
+atlas.wind.clear_computed()
 atlas.wind.selected_turbines        # tuple[str, ...] | None
 ```
 
@@ -127,11 +128,13 @@ Normative:
 - Exactly one of `turbines` or `turbine_indices` must be provided to `select(...)`.
 - `turbines` accepts non-empty `list|tuple[str]` only (a plain string is invalid).
 - `turbine_indices` accepts non-empty `list|tuple[int]`, with bounds and duplicate checks.
+- `select(...)` and `clear_selection()` mutate selection state in place and return `None`.
+- `clear_computed()` clears transient computed overlays from `atlas.wind.data` and returns `None`.
 - Any compute call may also accept an explicit `turbines=[...]` override; explicit arguments override the persistent selection for that call only.
 
 ---
 
-## A8. Wind: single compute entry point + caching into `.data`
+## A8. Wind: single compute entry point + materialization into `.data`
 
 ### Compute (lazy)
 
@@ -146,31 +149,34 @@ run = atlas.wind.compute(
 da = run.data    # xr.DataArray (dask-backed if dask is configured)
 ```
 
-### Cache (materialize result into `.data`)
+### Materialize (write result into `.data`)
 
 ```python
-da_cached = atlas.wind.compute(
+da_materialized = atlas.wind.compute(
     metric="capacity_factors",
     mode="direct_cf_quadrature",
     air_density=False,
     rews_n=12,
     loss_factor=1.0,
-).cache()
+).materialize()
 ```
 
 Normative:
 - `WindDomain.compute(metric=..., **kwargs)` returns a **DomainResult** object with:
   - `.data -> xr.DataArray` (lazy by default),
-  - `.cache(overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray`,
+  - `.materialize(overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray`,
   - `.persist(run_id: str | None = None, params: dict | None = None, metric_name: str | None = None) -> Path`.
-- `.cache()` must:
+- `compute(...)` also stages a lazy normalized overlay immediately in `atlas.wind.data[metric_name]` without writing to the wind store.
+- `.materialize()` must:
   1) write the result into the active wind store (region store when a region is selected, base store otherwise), and
   2) surface it immediately as `atlas.wind.data[metric_name]`, and
-  3) return the cached `xr.DataArray`.
-- When replacing cached `capacity_factors`, a mode change requires `allow_mode_change=True`.
+  3) return the materialized `xr.DataArray`.
+- When replacing materialized `capacity_factors`, a mode change requires `allow_mode_change=True`.
+- Staged wind overlays are transient: `select(...)`, `build()`, `build_canonical()`, and `build_clc()` clear them.
+- Successful `.materialize()` clears the staged overlay for that metric.
 
 Convenience wrappers:
-- `atlas.wind.capacity_factors(...)` is a convenience wrapper equivalent to `compute(metric="capacity_factors", ...)` and returns the same kind of object supporting `.cache()`.
+- `atlas.wind.capacity_factors(...)` is a convenience wrapper equivalent to `compute(metric="capacity_factors", ...)` and returns the same kind of object supporting `.materialize()`.
 
 ---
 
@@ -228,12 +234,19 @@ atlas.landscape.data["valid_mask"]
 Adding rasters (region-scoped derived data):
 
 ```python
-atlas.landscape.add(name="my_raster", source_path="/path/to/raster.tif")
+op = atlas.landscape.add(name="my_raster", source_path="/path/to/raster.tif")
+da_stage = op.data
+da_mat = op.materialize()
+atlas.landscape.clear_staged()
 ```
 
 Normative:
-- Added rasters must surface in `atlas.landscape.data[name]`.
+- `add(...)` stages a lazy candidate and returns an operation object with `.data` and `.materialize(...)`.
+- Staged variables must surface in `atlas.landscape.data[name]` before materialization.
 - If a region selection is active, added rasters must be written to the **derived region store** for that region.
+- `clear_staged()` must remove staged landscape overlays from `atlas.landscape.data`.
+- Staged landscape overlays are transient: `select(...)`, `build()`, `build_canonical()`, and `build_clc()` clear them.
+- Successful landscape `.materialize()` clears the staged overlay for that variable.
 
 ---
 
@@ -283,7 +296,7 @@ Results stores:
 - metadata/provenance fields are stored in Zarr attrs (no required `meta.json` file).
 
 Region ID rules:
-- If `atlas.region` is `None`, cached wind metrics are written to the base wind store (`<ROOT>/wind.zarr`).
+- If `atlas.region` is `None`, materialized wind metrics are written to the base wind store (`<ROOT>/wind.zarr`).
 - Otherwise `region_id` is the provided NUTS id (e.g. `"AT13"`).
 
 ---
@@ -333,7 +346,7 @@ Therefore:
 - It must be possible to:
   - materialize base stores once (e.g. Austria),
   - switch region selection (e.g. `AT12`, then `AT13`),
-  - compute/cache metrics for each region into separate derived region stores.
+  - compute/materialize metrics for each region into separate derived region stores.
 
 ---
 
@@ -354,7 +367,7 @@ Landscape materialization must source elevation deterministically using:
 ## B6. Dask / laziness invariants
 
 - `compute(...).data` must be lazy if Dask is configured (unless the user explicitly requests eager execution).
-- `.cache()` is the canonical user-triggered materialization step that may compute.
+- `.materialize()` is the canonical user-triggered materialization step that may compute.
 
 ---
 

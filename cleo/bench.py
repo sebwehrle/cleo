@@ -232,8 +232,8 @@ def benchmark_case(
     def _run_once() -> Any:
         result = atlas.wind.compute(metric, **params)
         if cache:
-            # Avoid duplicate graph execution: cache() already materializes to disk.
-            result.cache()
+            # Avoid duplicate graph execution: materialize() already computes/writes.
+            result.materialize()
             return None
         return _materialize(result.data)
 

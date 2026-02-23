@@ -188,7 +188,7 @@ class TestPhase3MaterializationBaseline:
 
     def test_base_materialization_golden(self, phase3_baseline_atlas: Atlas) -> None:
         atlas = phase3_baseline_atlas
-        atlas.materialize()
+        atlas.build()
 
         wind = xr.open_zarr(Path(atlas.path) / "wind.zarr", consolidated=False)
         land = xr.open_zarr(Path(atlas.path) / "landscape.zarr", consolidated=False)
@@ -228,10 +228,10 @@ class TestPhase3MaterializationBaseline:
 
     def test_region_materialization_golden(self, phase3_baseline_atlas: Atlas) -> None:
         atlas = phase3_baseline_atlas
-        atlas.materialize()
+        atlas.build()
 
         atlas.select(region="Niederösterreich", inplace=True)
-        atlas.materialize()
+        atlas.build()
 
         region_root = Path(atlas.path) / "regions" / atlas._region_id
         wind = xr.open_zarr(region_root / "wind.zarr", consolidated=False)

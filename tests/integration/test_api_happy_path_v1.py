@@ -1,7 +1,7 @@
 """End-to-end integration test for v1 public API workflow.
 
 Tests the full happy path:
-Atlas.materialize → wind/landscape data access → turbine selection →
+Atlas.build → wind/landscape data access → turbine selection →
 compute → persist → open_result → export_result_netcdf.
 
 Offline-only: no network calls, uses local synthetic fixtures.
@@ -170,7 +170,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     atlas = offline_atlas
 
     # === Materialize (canonical v1 API, offline-safe) ===
-    atlas.materialize_canonical()
+    atlas.build_canonical()
 
     # === Zarr v3 dtype invariant guard: no string/object dtypes ===
     wind_store = Path(atlas.path) / "wind.zarr"
@@ -228,15 +228,15 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     assert len(tids) >= 1, "Fixture must have at least one turbine"
     tid = tids[0]
 
-    # Persistent selection: select() returns self and persists on Atlas
+    # Persistent selection: select() mutates selection state on Atlas
     result = atlas.wind.select(turbines=[tid])
-    assert result is atlas.wind, "select() must return self for chaining"
+    assert result is None, "select() should return None (in-place command)"
     assert atlas.wind.selected_turbines == (tid,), (
         "Selection must persist on Atlas, not ephemeral WindDomain instance"
     )
 
     # === Compute capacity factors (result wrapper API) ===
-    # compute() returns DomainResult with .data and .cache()
+    # compute() returns DomainResult with .data and .materialize()
     metric_result = atlas.wind.capacity_factors(air_density=False)
     cf = metric_result.data  # Access the DataArray
 
@@ -249,25 +249,25 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
         "capacity_factors should have at least one valid (non-NaN) value on valid_mask"
     )
 
-    # === Contract v1: compute().cache() pattern ===
-    # Test the canonical usage: select + compute + cache writes to wind.zarr
+    # === Contract v1: compute().materialize() pattern ===
+    # Test the canonical usage: select + compute + materialize writes to wind.zarr
     atlas.wind.clear_selection()
     assert atlas.wind.selected_turbines is None, "clear_selection() must clear"
 
     atlas.wind.select(turbines=[tid])
-    cached_cf = atlas.wind.compute(
+    materialized_cf = atlas.wind.compute(
         metric="capacity_factors",
         air_density=False,
         height=100,
         loss_factor=1.0,
-    ).cache()
+    ).materialize()
 
-    # Verify metric appears in atlas.wind.data after cache
+    # Verify metric appears in atlas.wind.data after materialize
     assert "capacity_factors" in atlas.wind.data, (
-        "cache() must write metric into wind.zarr and surface in atlas.wind.data"
+        "materialize() must write metric into wind.zarr and surface in atlas.wind.data"
     )
     assert atlas.wind.selected_turbines == (tid,), (
-        "Selection must remain persistent after compute/cache"
+        "Selection must remain persistent after compute/materialize"
     )
 
     # === Persist ===

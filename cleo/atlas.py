@@ -87,12 +87,12 @@ class Atlas:
     ):
         self.path = path
         self.country = country
-        # Region selection state (use select() to set after materialize())
+        # Region selection state (use select() to set after build())
         # _region_name: public human-readable name (or None)
         # _region_id: internal stable id ("__all__" when no region selected)
         self._region_name: str | None = None
         self._region_id: str = "__all__"
-        # _pending_region: region name passed to constructor, applied in materialize()
+        # _pending_region: region name passed to constructor, applied in build()
         self._pending_region: str | None = region
         self.crs = crs
         self._turbines_configured: tuple[str, ...] | None = None
@@ -140,7 +140,7 @@ class Atlas:
 
     __str__ = __repr__
 
-    def materialize(self):
+    def build(self):
         """Materialize stores: base (country-wide) and region (if selected).
 
         - Always creates/updates base stores (wind.zarr, landscape.zarr)
@@ -150,7 +150,7 @@ class Atlas:
         """
         # Always ensure base stores exist
         if not self._canonical_ready:
-            self.materialize_canonical()
+            self.build_canonical()
 
         # Apply pending region from constructor (now that stores exist)
         if self._pending_region is not None:
@@ -160,6 +160,9 @@ class Atlas:
         # If region selected, ensure region stores exist
         if self._region_name is not None:
             self._ensure_region_stores()
+
+        # Build may alter active-store routing/state; clear transient overlays.
+        self._invalidate_domain_views(clear_wind=True, clear_landscape=True)
 
     @property
     def wind(self) -> WindDomain:
@@ -303,11 +306,11 @@ class Atlas:
     def wind_zarr(self) -> xr.Dataset:
         """Open canonical wind zarr store as xr.Dataset.
 
-        Requires prior materialize() call to create the skeleton store.
+        Requires prior build() call to create the skeleton store.
         """
         if not getattr(self, "_canonical_ready", False):
             raise RuntimeError(
-                "Canonical stores not ready. Call atlas.materialize() first."
+                "Canonical stores not ready. Call atlas.build() first."
             )
         return open_zarr_dataset(self.wind_store_path, chunk_policy=self.chunk_policy)
 
@@ -315,11 +318,11 @@ class Atlas:
     def landscape_zarr(self) -> xr.Dataset:
         """Open canonical landscape zarr store as xr.Dataset.
 
-        Requires prior materialize() call to create the skeleton store.
+        Requires prior build() call to create the skeleton store.
         """
         if not getattr(self, "_canonical_ready", False):
             raise RuntimeError(
-                "Canonical stores not ready. Call atlas.materialize() first."
+                "Canonical stores not ready. Call atlas.build() first."
             )
         return open_zarr_dataset(self.landscape_store_path, chunk_policy=self.chunk_policy)
 
@@ -332,11 +335,11 @@ class Atlas:
         """Current region selection (public name or None for full-country).
 
         Returns pending region if passed to constructor but not yet applied
-        (before materialize()), otherwise returns the resolved region name.
+        (before build()), otherwise returns the resolved region name.
         """
         if self._region_name is not None:
             return self._region_name
-        # Return pending region if set but not yet applied (before materialize())
+        # Return pending region if set but not yet applied (before build())
         return self._pending_region
 
     @region.setter
@@ -471,11 +474,8 @@ class Atlas:
         self._region_name = decision.region_name
         self._region_id = decision.region_id
 
-        # Invalidate domain caches so .data reloads from correct store
-        if self._wind_domain is not None:
-            self._wind_domain._data = None
-        if self._landscape_domain is not None:
-            self._landscape_domain._data = None
+        # Region routing changed: invalidate caches and staged overlays.
+        self._invalidate_domain_views(clear_wind=True, clear_landscape=True)
 
         return None
 
@@ -554,7 +554,7 @@ class Atlas:
             logger=logger,
         )
 
-    def materialize_canonical(self) -> None:
+    def build_canonical(self) -> None:
         """Materialize both wind.zarr and landscape.zarr canonical stores.
 
         This provides the canonical pathway for creating fully unified stores.
@@ -574,8 +574,9 @@ class Atlas:
         u.materialize_wind(self)
         u.materialize_landscape(self)
         self._canonical_ready = True
+        self._invalidate_domain_views(clear_wind=True, clear_landscape=True)
 
-    def materialize_clc(
+    def build_clc(
         self,
         *,
         source: str = "clc2018",
@@ -596,13 +597,40 @@ class Atlas:
         """
         from cleo.clc import materialize_clc
 
-        return materialize_clc(
+        out = materialize_clc(
             self,
             source=source,
             url=url,
             force_download=force_download,
             force_prepare=force_prepare,
         )
+        self._invalidate_domain_views(clear_wind=True, clear_landscape=True)
+        return out
+
+    def _invalidate_domain_views(
+        self,
+        *,
+        clear_wind: bool = False,
+        clear_landscape: bool = False,
+    ) -> None:
+        """Invalidate cached domain datasets and optional transient overlays."""
+        if self._wind_domain is not None:
+            self._wind_domain._data = None
+            if clear_wind:
+                clear_wind_fn = getattr(self._wind_domain, "clear_computed", None)
+                if callable(clear_wind_fn):
+                    clear_wind_fn()
+                elif hasattr(self._wind_domain, "_computed_overlays"):
+                    self._wind_domain._computed_overlays.clear()
+
+        if self._landscape_domain is not None:
+            self._landscape_domain._data = None
+            if clear_landscape:
+                clear_land_fn = getattr(self._landscape_domain, "clear_staged", None)
+                if callable(clear_land_fn):
+                    clear_land_fn()
+                elif hasattr(self._landscape_domain, "_staged_overlays"):
+                    self._landscape_domain._staged_overlays.clear()
 
     # -------------------------------------------------------------------------
     # Results API v1
@@ -794,7 +822,7 @@ class Atlas:
             logger.info(
                 "clean_results: deleted=0 (scanned=%d, run_id=%r, metric_name=%r, older_than=%r, results_root=%s). "
                 "No matching persisted result stores were found. "
-                "Note: atlas.wind.compute(...).cache() writes to wind.zarr, not results_root.",
+                "Note: atlas.wind.compute(...).materialize() writes to wind.zarr, not results_root.",
                 scanned,
                 run_id,
                 metric_name_n,
@@ -949,10 +977,10 @@ class Atlas:
         """Configure turbines for wind materialization.
 
         Affects wind materialization into wind.zarr; does not change compute
-        defaults. Call before Atlas.materialize() or materialize_canonical().
+        defaults. Call before Atlas.build() or build_canonical().
 
         Changing configured turbines changes the wind inputs_id, triggering
-        rebuild on next materialize().
+        rebuild on next build().
 
         :param turbines: Non-empty sequence of turbine IDs
             (for example ``["Enercon.E40.500"]``).
@@ -961,7 +989,7 @@ class Atlas:
 
         Example:
             >>> Atlas.configure_turbines(["Enercon.E40.500", "Vestas.V90.2000"])
-            >>> Atlas.materialize()  # Materializes only configured turbines
+            >>> Atlas.build()  # Materializes only configured turbines
         """
         if not turbines:
             raise ValueError("turbines must be a non-empty sequence")

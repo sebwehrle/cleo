@@ -28,10 +28,10 @@ class _LazyValue:
 class _Result:
     def __init__(self):
         self.data = _LazyValue(42)
-        self.cache_calls = 0
+        self.materialize_calls = 0
 
-    def cache(self):
-        self.cache_calls += 1
+    def materialize(self):
+        self.materialize_calls += 1
         return self.data
 
 
@@ -102,7 +102,7 @@ def test_benchmark_case_schema_and_cache_flag():
     assert set(df["ctx_workers"]) == {4}
     assert df["ok"].all()
     assert atlas.wind.calls == 3  # warmup + repeats
-    assert all(res.cache_calls == 1 for res in atlas.wind.results)
+    assert all(res.materialize_calls == 1 for res in atlas.wind.results)
     assert all(res.data.compute_calls == 0 for res in atlas.wind.results)
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import xarray as xr
+import zarr
 from rasterio import features
 from rasterio.transform import Affine
 from shapely.geometry import mapping
@@ -30,9 +31,6 @@ def _ensure_region_stores_ready(
     expected_wind = expected_root / "wind.zarr"
     expected_land = expected_root / "landscape.zarr"
 
-    if expected_wind.exists() and expected_land.exists():
-        return
-
     # If we have a stale/partial directory, remove it so Unifier can't mis-detect completeness.
     if expected_root.exists() and (not expected_wind.exists() or not expected_land.exists()):
         logger.warning(
@@ -42,6 +40,9 @@ def _ensure_region_stores_ready(
         )
         shutil.rmtree(expected_root)
 
+    # Always delegate freshness/completeness decision to materialize_region().
+    # It performs the full compatibility check (including base inputs linkage)
+    # and can no-op when region stores are already up-to-date.
     unifier.materialize_region(atlas, region_id)
 
     if not (expected_wind.exists() and expected_land.exists()):
@@ -65,18 +66,62 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
     wind_region_path = region_root / "wind.zarr"
     land_region_path = region_root / "landscape.zarr"
 
+    # Read current base-store inputs IDs for stale-region detection.
+    base_wind_inputs_id_current: str | None = None
+    base_land_inputs_id_current: str | None = None
+    try:
+        if wind_base_path.exists():
+            base_wind_inputs_id_current = zarr.open_group(wind_base_path, mode="r").attrs.get("inputs_id")
+        if land_base_path.exists():
+            base_land_inputs_id_current = zarr.open_group(land_base_path, mode="r").attrs.get("inputs_id")
+    except (OSError, ValueError, TypeError, KeyError):
+        logger.debug(
+            "Failed to read base store attrs for region freshness check; forcing region rebuild.",
+            extra={
+                "region_id": region_id,
+                "wind_base_path": str(wind_base_path),
+                "land_base_path": str(land_base_path),
+            },
+            exc_info=True,
+        )
+        base_wind_inputs_id_current = None
+        base_land_inputs_id_current = None
+
     # Check if region stores already exist and are complete
     if wind_region_path.exists() and land_region_path.exists():
+        wind_region = None
+        land_region = None
         try:
             wind_region = xr.open_zarr(wind_region_path, consolidated=False)
             land_region = xr.open_zarr(land_region_path, consolidated=False)
-            if (wind_region.attrs.get("store_state") == "complete" and
-                land_region.attrs.get("store_state") == "complete" and
-                wind_region.attrs.get("region_id") == region_id and
-                land_region.attrs.get("region_id") == region_id):
+            stores_complete = (
+                wind_region.attrs.get("store_state") == "complete"
+                and land_region.attrs.get("store_state") == "complete"
+                and wind_region.attrs.get("region_id") == region_id
+                and land_region.attrs.get("region_id") == region_id
+            )
+            base_ids_available = bool(base_wind_inputs_id_current) and bool(base_land_inputs_id_current)
+            base_link_matches = (
+                base_ids_available
+                and wind_region.attrs.get("base_wind_inputs_id") == base_wind_inputs_id_current
+                and land_region.attrs.get("base_land_inputs_id") == base_land_inputs_id_current
+            )
+            if stores_complete and base_link_matches:
                 # Region stores already complete
                 logger.info(f"Region stores for {region_id!r} already complete, skipping.")
                 return
+            if stores_complete and not base_link_matches:
+                logger.info(
+                    "Region stores for %r are stale versus current base inputs_id; rebuilding.",
+                    region_id,
+                    extra={
+                        "region_id": region_id,
+                        "region_base_wind_inputs_id": wind_region.attrs.get("base_wind_inputs_id"),
+                        "region_base_land_inputs_id": land_region.attrs.get("base_land_inputs_id"),
+                        "current_base_wind_inputs_id": base_wind_inputs_id_current,
+                        "current_base_land_inputs_id": base_land_inputs_id_current,
+                    },
+                )
         except (OSError, ValueError, TypeError, KeyError):
             logger.debug(
                 "Failed to verify existing region stores; recreating.",
@@ -87,6 +132,11 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
                 },
                 exc_info=True,
             )
+        finally:
+            if wind_region is not None:
+                wind_region.close()
+            if land_region is not None:
+                land_region.close()
 
     # 1) Open base stores (must be complete)
     wind_base = xr.open_zarr(wind_base_path, consolidated=False, chunks=unifier.chunk_policy)
@@ -94,11 +144,11 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
 
     if wind_base.attrs.get("store_state") != "complete":
         raise RuntimeError(
-            "wind.zarr is not complete; run atlas.materialize() first."
+            "wind.zarr is not complete; run atlas.build() first."
         )
     if land_base.attrs.get("store_state") != "complete":
         raise RuntimeError(
-            "landscape.zarr is not complete; run atlas.materialize() first."
+            "landscape.zarr is not complete; run atlas.build() first."
         )
 
     base_wind_inputs_id = wind_base.attrs.get("inputs_id", "")

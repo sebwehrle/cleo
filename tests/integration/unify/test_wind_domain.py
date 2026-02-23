@@ -4,7 +4,7 @@ Tests are offline-only: uses local test fixtures with no network calls.
 
 Tests verify:
 - WindDomain.turbines property returns turbine IDs from wind store
-- WindDomain.select() is immutable and validates turbine IDs
+- WindDomain.select() mutates persistent Atlas selection state and validates turbine IDs
 - Mean wind speed computation from canonical store is not all-NaN
 """
 
@@ -197,7 +197,7 @@ class TestWindDomainTurbineSelection:
 
         # Test persistent select: selection persists on Atlas
         result = w0.select(turbines=[tids[0]])
-        assert result is w0, "select() must return self for chaining"
+        assert result is None, "select() should return None (in-place command)"
         assert w0.selected_turbines == (tids[0],), "Selection must persist"
 
         # Test selecting multiple turbines

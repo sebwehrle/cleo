@@ -116,6 +116,18 @@ class Unifier:
             if_exists=if_exists,
         )
 
+    def prepare_landscape_variable_data(
+        self,
+        atlas,
+        variable_name: str,
+    ) -> xr.DataArray:
+        """Prepare a landscape variable candidate without writing to store."""
+        return landscape_materializer.prepare_landscape_variable_data(
+            self,
+            atlas,
+            variable_name,
+        )
+
     def compute_air_density_correction(
         self,
         atlas,

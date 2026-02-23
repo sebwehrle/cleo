@@ -29,7 +29,7 @@ def test_materialize_clc_returns_cached_prepared_without_rebuilding(
         crs="epsg:3035",
         chunk_policy={"y": 2, "x": 2},
         _canonical_ready=False,
-        materialize_canonical=lambda: called.__setitem__("canonical", called["canonical"] + 1),
+        build_canonical=lambda: called.__setitem__("canonical", called["canonical"] + 1),
     )
 
     out = materialize_clc(atlas, source="clc2018", force_prepare=False)
@@ -51,7 +51,7 @@ def test_materialize_clc_raises_when_no_valid_cells(
         crs="epsg:3035",
         chunk_policy={"y": 2, "x": 2},
         _canonical_ready=True,
-        materialize_canonical=lambda: None,
+        build_canonical=lambda: None,
     )
 
     # Wind template with all-NaN => no valid cells.
@@ -93,7 +93,7 @@ def test_materialize_clc_raises_for_unknown_source(tmp_path: Path) -> None:
         crs="epsg:3035",
         chunk_policy={"y": 2, "x": 2},
         _canonical_ready=True,
-        materialize_canonical=lambda: None,
+        build_canonical=lambda: None,
     )
     with pytest.raises(ValueError, match="Unsupported CLC source"):
         materialize_clc(atlas, source="clc2099")
@@ -110,7 +110,7 @@ def test_materialize_clc_force_prepare_rebuilds_not_cached(tmp_path: Path) -> No
         crs="epsg:3035",
         chunk_policy={"y": 2, "x": 2},
         _canonical_ready=True,
-        materialize_canonical=lambda: None,
+        build_canonical=lambda: None,
     )
 
     # force_prepare=True must not return cached file directly; it should proceed

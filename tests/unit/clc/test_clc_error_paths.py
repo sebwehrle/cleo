@@ -41,8 +41,7 @@ def test_materialize_clc_requires_url_when_source_missing(tmp_path: Path) -> Non
         crs="epsg:3035",
         chunk_policy={"y": 2, "x": 2},
         _canonical_ready=True,
-        materialize_canonical=lambda: None,
+        build_canonical=lambda: None,
     )
     with pytest.raises(RuntimeError, match="No download URL configured"):
         materialize_clc(atlas, source="clc2018", url=None)
-

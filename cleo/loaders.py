@@ -310,7 +310,7 @@ def get_turbine_attribute(self, turbine_id, attribute_name):
     # Read turbine metadata from cleo_turbines_json attr
     if "cleo_turbines_json" not in self.data.attrs:
         raise ValueError(
-            f"Dataset missing cleo_turbines_json attr; re-run materialize_canonical()."
+            f"Dataset missing cleo_turbines_json attr; re-run build_canonical()."
         )
     turbines_meta = json.loads(self.data.attrs["cleo_turbines_json"])
     turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
@@ -425,7 +425,7 @@ def load_air_density(self, height):
     if not rho_path.is_file():
         raise FileNotFoundError(
             f"Missing air-density raster for height={height}: {rho_path}. "
-            "Run atlas.materialize() to prepare/download required GWA inputs."
+            "Run atlas.build() to prepare/download required GWA inputs."
         )
 
     try:

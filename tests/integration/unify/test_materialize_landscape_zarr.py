@@ -437,11 +437,11 @@ class TestMaterializeLandscapeZarr:
         assert landscape_root.attrs["grid_id"] == wind_root.attrs["grid_id"]
 
 
-class TestMaterializeCanonical:
-    """Tests for Atlas.materialize_canonical method via integration."""
+class TestBuildCanonical:
+    """Tests for Atlas.build_canonical method via integration."""
 
-    def test_materialize_canonical_creates_both_stores(self, tmp_path: Path) -> None:
-        """materialize_canonical creates both wind.zarr and landscape.zarr."""
+    def test_build_canonical_creates_both_stores(self, tmp_path: Path) -> None:
+        """build_canonical creates both wind.zarr and landscape.zarr."""
         # Use a minimal atlas-like object that has the required interface
         atlas = MockAtlas(tmp_path)
 
@@ -449,7 +449,7 @@ class TestMaterializeCanonical:
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
 
-        # Call materialize_canonical directly via Unifier
+        # Call build_canonical logic directly via Unifier
         unifier = Unifier(
             chunk_policy=atlas.chunk_policy,
             fingerprint_method=atlas.fingerprint_method,

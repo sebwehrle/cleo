@@ -298,8 +298,8 @@ class TestCapacityFactorsEnforcement:
         # Should hint at atlas.wind.turbines or atlas.wind.select
         assert "atlas.wind.turbines" in error_msg or "atlas.wind.select" in error_msg
 
-    def test_compute_rejects_cache_only_kwargs(self, tmp_path: Path) -> None:
-        """compute(...) rejects cache-only kwargs and points callers to .cache(...)."""
+    def test_compute_rejects_materialize_only_kwargs(self, tmp_path: Path) -> None:
+        """compute(...) rejects materialize-only kwargs and points callers to .materialize(...)."""
         turbine_names = ["Enercon.E40.500"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)
@@ -314,14 +314,14 @@ class TestCapacityFactorsEnforcement:
         # Ensure compute call would otherwise be valid
         atlas.wind.select(turbines=turbine_names)
 
-        with pytest.raises(ValueError, match="cache-only parameter"):
+        with pytest.raises(ValueError, match="materialize-only parameter"):
             atlas.wind.compute(
                 "capacity_factors",
                 mode="direct_cf_quadrature",
                 allow_mode_change=True,
             )
 
-        with pytest.raises(ValueError, match=r"pass them to \.cache\(\.\.\.\)"):
+        with pytest.raises(ValueError, match=r"pass them to \.materialize\(\.\.\.\)"):
             atlas.wind.compute(
                 "capacity_factors",
                 mode="direct_cf_quadrature",
@@ -334,6 +334,26 @@ class TestCapacityFactorsEnforcement:
                 mode="direct_cf_quadrature",
                 allow_mode_change=True,
                 overwrite=True,
+            )
+
+    def test_compute_rejects_inplace_kwarg(self, tmp_path: Path) -> None:
+        """compute(...) rejects inplace and points callers to .materialize(...)."""
+        turbine_names = ["Enercon.E40.500"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+        atlas.wind.select(turbines=turbine_names)
+
+        with pytest.raises(ValueError, match="does not accept inplace"):
+            atlas.wind.compute(
+                "capacity_factors",
+                mode="direct_cf_quadrature",
+                inplace=True,
             )
 
     def test_capacity_factors_not_all_nan(self, tmp_path: Path) -> None:
@@ -416,11 +436,11 @@ class TestCapacityFactorsEnforcement:
         assert str(da.coords["turbine"].values[0]) == turbine_names[0]
 
 
-class TestDomainResultCacheOverwrite:
-    """Tests for DomainResult.cache() overwrite behavior."""
+class TestDomainResultMaterializeOverwrite:
+    """Tests for DomainResult.materialize() overwrite behavior."""
 
-    def test_cache_overwrite_true_replaces_variable(self, tmp_path: Path) -> None:
-        """cache(overwrite=True) replaces existing variable completely."""
+    def test_materialize_overwrite_true_replaces_variable(self, tmp_path: Path) -> None:
+        """materialize(overwrite=True) replaces existing variable completely."""
         turbine_names = ["Enercon.E40.500"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)
@@ -436,25 +456,25 @@ class TestDomainResultCacheOverwrite:
         atlas.wind.select(turbines=turbine_names)
 
         # Cache capacity_factors first time (air_density=False -> cleo:air_density=0)
-        atlas.wind.compute("capacity_factors", height=100, air_density=False).cache()
+        atlas.wind.compute("capacity_factors", height=100, air_density=False).materialize()
 
-        # Check first cache
+        # Check first materialization
         assert "capacity_factors" in atlas.wind.data
         first_air_density = atlas.wind.data["capacity_factors"].attrs.get("cleo:air_density")
-        assert first_air_density == 0, "First cache should have air_density=0"
+        assert first_air_density == 0, "First materialize should have air_density=0"
 
         # Cache again with air_density=True - should overwrite
         atlas.wind.compute(
             "capacity_factors", height=100, air_density=True
-        ).cache(overwrite=True)
+        ).materialize(overwrite=True)
 
         # Verify overwrite - attrs should be updated
         assert "capacity_factors" in atlas.wind.data
         second_air_density = atlas.wind.data["capacity_factors"].attrs.get("cleo:air_density")
-        assert second_air_density == 1, "cache(overwrite=True) must update attrs (air_density=1)"
+        assert second_air_density == 1, "materialize(overwrite=True) must update attrs (air_density=1)"
 
-    def test_cache_overwrite_true_with_mode_change(self, tmp_path: Path) -> None:
-        """cache(overwrite=True, allow_mode_change=True) allows changing cf mode."""
+    def test_materialize_overwrite_true_with_mode_change(self, tmp_path: Path) -> None:
+        """materialize(overwrite=True, allow_mode_change=True) allows changing cf mode."""
         turbine_names = ["Enercon.E40.500"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)
@@ -470,25 +490,25 @@ class TestDomainResultCacheOverwrite:
         atlas.wind.select(turbines=turbine_names)
 
         # Cache capacity_factors with mode="hub"
-        atlas.wind.compute("capacity_factors", height=100, mode="hub").cache()
+        atlas.wind.compute("capacity_factors", height=100, mode="hub").materialize()
 
         # Verify first mode
         assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_mode") == "hub"
 
         # Cache with mode="rews" should fail without allow_mode_change
         with pytest.raises(ValueError, match="allow_mode_change"):
-            atlas.wind.compute("capacity_factors", height=100, mode="rews").cache()
+            atlas.wind.compute("capacity_factors", height=100, mode="rews").materialize()
 
         # Cache with mode="rews" and allow_mode_change=True should succeed
         atlas.wind.compute(
             "capacity_factors", height=100, mode="rews"
-        ).cache(overwrite=True, allow_mode_change=True)
+        ).materialize(overwrite=True, allow_mode_change=True)
 
         # Verify mode changed
         assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_mode") == "rews"
 
-    def test_cache_overwrite_false_raises_if_exists(self, tmp_path: Path) -> None:
-        """cache(overwrite=False) raises if variable already exists."""
+    def test_materialize_overwrite_false_raises_if_exists(self, tmp_path: Path) -> None:
+        """materialize(overwrite=False) raises if variable already exists."""
         turbine_names = ["Enercon.E40.500"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)
@@ -504,14 +524,16 @@ class TestDomainResultCacheOverwrite:
         atlas.wind.select(turbines=turbine_names)
 
         # Cache first time
-        atlas.wind.compute("capacity_factors", height=100).cache()
+        atlas.wind.compute("capacity_factors", height=100).materialize()
 
-        # Second cache with overwrite=False should raise
+        # Second materialize with overwrite=False should raise
         with pytest.raises(ValueError, match="already exists"):
-            atlas.wind.compute("capacity_factors", height=100).cache(overwrite=False)
+            atlas.wind.compute("capacity_factors", height=100).materialize(overwrite=False)
 
-    def test_cache_returns_store_backed_metric_after_subset_alignment(self, tmp_path: Path) -> None:
-        """cache() returns the surfaced store-backed metric (not pre-write subset object)."""
+    def test_materialize_returns_store_backed_metric_after_subset_alignment(
+        self, tmp_path: Path
+    ) -> None:
+        """materialize() returns the surfaced store-backed metric (not pre-write subset object)."""
         turbine_names = ["Enercon.E40.500", "Vestas.V112.3075"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)
@@ -522,14 +544,74 @@ class TestDomainResultCacheOverwrite:
         unifier.materialize_wind(atlas)
         unifier.materialize_landscape(atlas)
 
-        # Compute only first turbine; cache() expands to full turbine axis in store.
+        # Compute only first turbine; materialize() expands to full turbine axis in store.
         atlas.wind.select(turbines=[turbine_names[0]])
-        cached = atlas.wind.compute("capacity_factors", height=100, mode="hub").cache()
+        materialized = atlas.wind.compute("capacity_factors", height=100, mode="hub").materialize()
         surfaced = atlas.wind.data["capacity_factors"]
 
-        assert cached.identical(surfaced)
-        assert cached.sizes["turbine"] == 2
-        assert bool(cached.sel(turbine=turbine_names[1]).isnull().all().compute()) is True
+        assert materialized.identical(surfaced)
+        assert materialized.sizes["turbine"] == 2
+        assert bool(materialized.sel(turbine=turbine_names[1]).isnull().all().compute()) is True
+
+
+class TestTransientOverlay:
+    """Transient overlay behavior before/after DomainResult.materialize()."""
+
+    def test_compute_stages_metric_in_data_before_store_write(self, tmp_path: Path) -> None:
+        turbine_names = ["Enercon.E40.500", "Vestas.V112.3075"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        atlas.wind.select(turbines=[turbine_names[0]])
+        result = atlas.wind.compute("capacity_factors", height=100, mode="hub")
+
+        assert "capacity_factors" in atlas.wind.data
+        staged = atlas.wind.data["capacity_factors"]
+        assert staged.sizes["turbine"] == 2
+        assert bool(staged.sel(turbine=turbine_names[1]).isnull().all().compute()) is True
+
+        before = xr.open_zarr(atlas.wind_store_path, consolidated=False)
+        assert "capacity_factors" not in before
+        before.close()
+
+        materialized = result.materialize()
+        surfaced = atlas.wind.data["capacity_factors"]
+        after = xr.open_zarr(atlas.wind_store_path, consolidated=False)
+        assert "capacity_factors" in after
+        after.close()
+
+        assert materialized.identical(surfaced)
+        assert materialized.sizes == staged.sizes
+        np.testing.assert_array_equal(
+            materialized.coords["turbine"].values,
+            staged.coords["turbine"].values,
+        )
+
+    def test_clear_computed_removes_staged_metric(self, tmp_path: Path) -> None:
+        atlas = MockAtlas(tmp_path)
+        _create_all_required_gwa_files(atlas)
+        _create_elevation_raster(atlas)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        atlas.wind.compute("mean_wind_speed", height=100)
+        assert "mean_wind_speed" in atlas.wind.data
+
+        store = xr.open_zarr(atlas.wind_store_path, consolidated=False)
+        assert "mean_wind_speed" not in store
+        store.close()
+
+        out = atlas.wind.clear_computed()
+        assert out is None
+        assert "mean_wind_speed" not in atlas.wind.data
 
 
 class TestComputeBackendParity:

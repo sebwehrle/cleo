@@ -33,7 +33,7 @@ def wind_reference_template(atlas) -> xr.DataArray:
     wind_store = Path(atlas.path) / "wind.zarr"
     ds = xr.open_zarr(wind_store, consolidated=False, chunks=atlas.chunk_policy)
     if "weibull_A" not in ds.data_vars:
-        raise RuntimeError("wind.zarr missing weibull_A; run atlas.materialize() first.")
+        raise RuntimeError("wind.zarr missing weibull_A; run atlas.build() first.")
     ref = ds["weibull_A"]
     if "height" in ref.dims:
         heights = np.asarray(ref.coords.get("height", xr.DataArray([])).data)

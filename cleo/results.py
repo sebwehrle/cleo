@@ -298,13 +298,64 @@ def persist_result(
     return store_path
 
 
-# %% DomainResult wrapper for compute(...).cache()/persist() pattern
+def normalize_metric_for_active_wind_store(
+    *,
+    metric: str,
+    da: xr.DataArray,
+    existing_ds: xr.Dataset,
+) -> xr.DataArray:
+    """Normalize a computed metric to the active wind-store schema contract."""
+    out = da.copy()
+
+    if "turbine" in out.dims:
+        meta_json = existing_ds.attrs.get("cleo_turbines_json")
+        if not meta_json:
+            raise RuntimeError(
+                "Wind store missing cleo_turbines_json attr; cannot align turbine coordinates."
+            )
+        turbine_ids = turbine_ids_from_json(meta_json)
+        turbine_id_to_idx = {tid: i for i, tid in enumerate(turbine_ids)}
+        full_turbine_indices = list(range(len(turbine_ids)))
+        if "turbine" in existing_ds.coords and existing_ds.coords["turbine"].dims == ("turbine",):
+            full_turbine_labels = existing_ds.coords["turbine"].values.tolist()
+        else:
+            full_turbine_labels = full_turbine_indices
+
+        if out.coords["turbine"].dtype.kind in ("U", "O", "S"):
+            computed_ids = out.coords["turbine"].values.tolist()
+            try:
+                computed_indices = [turbine_id_to_idx[tid] for tid in computed_ids]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Computed metric includes unknown turbine id {exc.args[0]!r}."
+                ) from exc
+        else:
+            computed_indices = out.coords["turbine"].values.tolist()
+
+        computed_labels = [full_turbine_labels[i] for i in computed_indices]
+        out = out.assign_coords(turbine=computed_labels)
+        out = out.reindex(turbine=full_turbine_labels, fill_value=np.nan)
+
+    existing_dims = set(existing_ds.sizes.keys())
+    coords_to_drop = [
+        coord_name
+        for coord_name in out.coords
+        if coord_name in existing_dims and coord_name not in out.dims
+    ]
+    if coords_to_drop:
+        out = out.drop_vars(coords_to_drop)
+
+    out.name = metric
+    return out
+
+
+# %% DomainResult wrapper for compute(...).materialize()/persist() pattern
 class DomainResult:
     """
-    Wrapper for computed domain results supporting .cache()/.persist() pattern.
+    Wrapper for computed domain results supporting .materialize()/.persist() pattern.
 
     Allows chaining, e.g.:
-    - ``atlas.wind.compute(...).cache()``
+    - ``atlas.wind.compute(...).materialize()``
     - ``atlas.wind.compute(...).persist(run_id=...)``
     """
 
@@ -338,9 +389,9 @@ class DomainResult:
             params=payload_params,
         )
 
-    def cache(self, *, overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray:
+    def materialize(self, *, overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray:
         """
-        Cache the metric into the active wind store and surface in atlas.wind.data.
+        Materialize the metric into the active wind store and surface in atlas.wind.data.
 
         Per contract A8: writes the result into the derived region store for the
         current region selection (or base store if no region), and surfaces it
@@ -375,17 +426,15 @@ class DomainResult:
             if old_mode is not None and old_mode != new_mode and not allow_mode_change:
                 existing_ds.close()
                 raise ValueError(
-                    f"capacity_factors already cached with cleo:cf_mode={old_mode!r}; "
+                    f"capacity_factors already materialized with cleo:cf_mode={old_mode!r}; "
                     f"requested {new_mode!r}; pass allow_mode_change=True (and overwrite=True) to replace."
                 )
 
-        # Get turbine metadata for ID to index mapping
-        turbine_ids = turbine_ids_from_json(existing_ds.attrs["cleo_turbines_json"])
-        turbine_id_to_idx = {tid: i for i, tid in enumerate(turbine_ids)}
-        n_turbines = len(turbine_ids)
-        full_turbine_indices = list(range(n_turbines))
-
-        da = self._data.copy()
+        da = normalize_metric_for_active_wind_store(
+            metric=self._metric,
+            da=self._data,
+            existing_ds=existing_ds,
+        )
         evaluator = getattr(atlas, "_evaluate_for_io", None)
         if callable(evaluator):
             da = evaluator(da)
@@ -393,36 +442,6 @@ class DomainResult:
             backend = getattr(atlas, "compute_backend", "serial")
             workers = getattr(atlas, "compute_workers", None)
             da = dask_compute(da, backend=backend, num_workers=workers)
-
-        # Handle turbine dimension: expand to full turbine set with NaN for uncomputed
-        if "turbine" in da.dims:
-            # Get computed turbine IDs/indices
-            if da.coords["turbine"].dtype.kind in ("U", "O", "S"):
-                # String turbine IDs - convert to indices
-                computed_ids = da.coords["turbine"].values.tolist()
-                computed_indices = [turbine_id_to_idx[tid] for tid in computed_ids]
-            else:
-                # Already integer indices
-                computed_indices = da.coords["turbine"].values.tolist()
-
-            # Create full-sized array with NaN for uncomputed turbines
-            # and reindex to match existing store's turbine dimension
-            da = da.assign_coords(turbine=computed_indices)
-            da = da.reindex(turbine=full_turbine_indices, fill_value=np.nan)
-
-        # Drop scalar/non-dimensional coordinates that conflict with existing dims
-        # (e.g., capacity_factors may have height=100 as scalar coord, but wind.zarr
-        # has height as a dimension with multiple values)
-        existing_dims = set(existing_ds.sizes.keys())
-        coords_to_drop = []
-        for coord_name in da.coords:
-            if coord_name in existing_dims and coord_name not in da.dims:
-                # This coordinate exists as a dimension in existing store
-                # but is a scalar/non-dim coord in da - must drop it
-                coords_to_drop.append(coord_name)
-
-        if coords_to_drop:
-            da = da.drop_vars(coords_to_drop)
 
         # Preserve existing store attributes before writing
         existing_attrs = dict(existing_ds.attrs)
@@ -449,9 +468,13 @@ class DomainResult:
         for key, val in existing_attrs.items():
             root.attrs[key] = val
 
-        # Invalidate cached data so .data reloads with new variable
+        overlays = getattr(self._domain, "_computed_overlays", None)
+        if isinstance(overlays, dict):
+            overlays.pop(self._metric, None)
+
+        # Invalidate cached data so .data reloads with store-backed variable
         self._domain._data = None
 
         # Return the surfaced store-backed variable so callers receive the exact
-        # cached representation (including any alignment/reindexing done for IO).
+        # materialized representation (including any alignment/reindexing done for IO).
         return self._domain.data[self._metric]

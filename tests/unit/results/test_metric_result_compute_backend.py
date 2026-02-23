@@ -1,4 +1,4 @@
-"""Tests for DomainResult cache materialization backend dispatch."""
+"""Tests for DomainResult materialize backend dispatch."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _seed_wind_store(path) -> None:
     ds.to_zarr(path, mode="w", consolidated=False)
 
 
-def test_domain_result_cache_uses_atlas_compute_backend(monkeypatch, tmp_path) -> None:
+def test_domain_result_materialize_uses_atlas_compute_backend(monkeypatch, tmp_path) -> None:
     store_path = tmp_path / "wind.zarr"
     _seed_wind_store(store_path)
 
@@ -66,12 +66,12 @@ def test_domain_result_cache_uses_atlas_compute_backend(monkeypatch, tmp_path) -
     )
     result = DomainResult(domain, "mean_wind_speed", da, {})
 
-    result.cache()
+    result.materialize()
 
     assert calls == [("processes", 3)]
 
 
-def test_domain_result_cache_defaults_to_serial_backend(monkeypatch, tmp_path) -> None:
+def test_domain_result_materialize_defaults_to_serial_backend(monkeypatch, tmp_path) -> None:
     store_path = tmp_path / "wind.zarr"
     _seed_wind_store(store_path)
 
@@ -95,12 +95,12 @@ def test_domain_result_cache_defaults_to_serial_backend(monkeypatch, tmp_path) -
     )
     result = DomainResult(domain, "mean_wind_speed", da, {})
 
-    result.cache()
+    result.materialize()
 
     assert calls == [("serial", None)]
 
 
-def test_domain_result_cache_prefers_atlas_evaluate_for_io(monkeypatch, tmp_path) -> None:
+def test_domain_result_materialize_prefers_atlas_evaluate_for_io(monkeypatch, tmp_path) -> None:
     store_path = tmp_path / "wind.zarr"
     _seed_wind_store(store_path)
 
@@ -131,7 +131,26 @@ def test_domain_result_cache_prefers_atlas_evaluate_for_io(monkeypatch, tmp_path
     )
     result = DomainResult(domain, "mean_wind_speed", da, {})
 
-    result.cache()
+    result.materialize()
 
     assert len(eval_calls) == 1
     assert compute_calls == []
+
+
+def test_domain_result_exposes_materialize_not_cache(tmp_path) -> None:
+    store_path = tmp_path / "wind.zarr"
+    _seed_wind_store(store_path)
+    atlas = SimpleNamespace(
+        _active_wind_store_path=lambda: store_path,
+    )
+    domain = _DomainDouble(atlas)
+    da = xr.DataArray(
+        np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64),
+        dims=("y", "x"),
+        coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
+        name="mean_wind_speed",
+    )
+    result = DomainResult(domain, "mean_wind_speed", da, {})
+
+    assert hasattr(result, "materialize")
+    assert not hasattr(result, "cache")

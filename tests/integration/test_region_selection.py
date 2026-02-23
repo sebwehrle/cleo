@@ -3,7 +3,7 @@
 Tests verify:
 - atlas.select(region=...) persists region selection
 - Region stores are created with smaller y/x than country stores
-- DomainResult.cache() writes to region store (not country store)
+- DomainResult.materialize() writes to region store (not country store)
 - atlas.wind.data surfaces data from region store when region selected
 
 Offline-only: uses local synthetic fixtures with no network calls.
@@ -234,7 +234,7 @@ def region_atlas(tmp_path: Path) -> Atlas:
     atlas = Atlas(tmp_path, country, "epsg:3035")
 
     # Materialize to build region name index (required for select() to work)
-    atlas.materialize()
+    atlas.build()
 
     return atlas
 
@@ -331,7 +331,7 @@ class TestRegionStores:
         atlas = region_atlas
 
         # First materialize base stores
-        atlas.materialize()
+        atlas.build()
 
         # Get base store dims
         base_wind = xr.open_zarr(atlas.wind_store_path, consolidated=False)
@@ -341,7 +341,7 @@ class TestRegionStores:
 
         # Select region and materialize again
         atlas.select(region="Niederösterreich", inplace=True)
-        atlas.materialize()
+        atlas.build()
 
         # Region stores should exist
         region_root = atlas.path / "regions" / atlas._region_id
@@ -369,7 +369,7 @@ class TestRegionStores:
         atlas = region_atlas
 
         # Materialize base stores
-        atlas.materialize()
+        atlas.build()
 
         # Get base dims
         base_data = atlas.wind.data
@@ -380,7 +380,7 @@ class TestRegionStores:
 
         # Select region and materialize
         atlas.select(region="Niederösterreich", inplace=True)
-        atlas.materialize()
+        atlas.build()
 
         # Data should now come from region store (smaller dims)
         region_data = atlas.wind.data
@@ -390,20 +390,59 @@ class TestRegionStores:
             f"Region data y ({region_y_size}) should be smaller than base ({base_y_size})"
         )
 
+    def test_region_stores_rebuild_when_base_inputs_id_changes(self, region_atlas: Atlas) -> None:
+        """Region store freshness tracks base inputs; stale region stores must rebuild."""
+        atlas = region_atlas
 
-class TestRegionCaching:
-    """Tests for DomainResult.cache() with region selection."""
+        # Build initial region stores from default base turbine set.
+        atlas.select(region="Niederösterreich", inplace=True)
+        atlas.build()
+        region_id = atlas._region_id
+        region_wind_path = atlas.path / "regions" / region_id / "wind.zarr"
 
-    def test_cache_writes_to_region_store(self, region_atlas: Atlas) -> None:
-        """DomainResult.cache() writes to region store, not base store."""
+        region_before = xr.open_zarr(region_wind_path, consolidated=False)
+        n_before = int(region_before.sizes["turbine"])
+        base_link_before = region_before.attrs.get("base_wind_inputs_id", "")
+        region_before.close()
+
+        # Rebuild base with a smaller configured turbine set.
+        atlas.select(region=None, inplace=True)
+        subset = list(atlas.wind.turbines[:2])
+        assert len(subset) == 2
+        atlas.configure_turbines(subset)
+        atlas.build_canonical()
+
+        base_after = xr.open_zarr(atlas.wind_store_path, consolidated=False)
+        base_inputs_after = base_after.attrs.get("inputs_id", "")
+        assert int(base_after.sizes["turbine"]) == len(subset)
+        base_after.close()
+
+        # Re-materialize region. Region store must rebuild to track new base inputs.
+        atlas.select(region="Niederösterreich", inplace=True)
+        atlas.build()
+
+        region_after = xr.open_zarr(region_wind_path, consolidated=False)
+        assert int(region_after.sizes["turbine"]) == len(subset)
+        assert region_after.attrs.get("base_wind_inputs_id") == base_inputs_after
+        assert region_after.attrs.get("base_wind_inputs_id") != base_link_before
+        # Ensure this test meaningfully exercised a changed base-set path.
+        assert n_before >= len(subset)
+        region_after.close()
+
+
+class TestRegionMaterialization:
+    """Tests for DomainResult.materialize() with region selection."""
+
+    def test_materialize_writes_to_region_store(self, region_atlas: Atlas) -> None:
+        """DomainResult.materialize() writes to region store, not base store."""
         atlas = region_atlas
 
         # Materialize base stores first
-        atlas.materialize()
+        atlas.build()
 
         # Select region and materialize region stores
         atlas.select(region="Niederösterreich", inplace=True)
-        atlas.materialize()
+        atlas.build()
 
         # Select turbine and compute
         tid = atlas.wind.turbines[0]
@@ -415,11 +454,11 @@ class TestRegionCaching:
             height=100,
             air_density=False,
             loss_factor=1.0,
-        ).cache()
+        ).materialize()
 
         # Verify metric appears in atlas.wind.data (region store)
         assert "capacity_factors" in atlas.wind.data, (
-            "capacity_factors should appear in atlas.wind.data after cache()"
+            "capacity_factors should appear in atlas.wind.data after materialize()"
         )
 
         # Verify it was written to region store, NOT base store
@@ -437,14 +476,14 @@ class TestRegionCaching:
         )
         base_wind.close()
 
-    def test_selection_persists_after_cache(self, region_atlas: Atlas) -> None:
-        """Region and turbine selection persist after cache()."""
+    def test_selection_persists_after_materialize(self, region_atlas: Atlas) -> None:
+        """Region and turbine selection persist after materialize()."""
         atlas = region_atlas
 
         # Materialize
-        atlas.materialize()
+        atlas.build()
         atlas.select(region="Niederösterreich", inplace=True)
-        atlas.materialize()
+        atlas.build()
 
         # Select turbine
         tid = atlas.wind.turbines[0]
@@ -455,7 +494,7 @@ class TestRegionCaching:
             metric="capacity_factors",
             height=100,
             air_density=False,
-        ).cache()
+        ).materialize()
 
         # Selections should persist
         assert atlas.region == "Niederösterreich"
@@ -466,17 +505,17 @@ class TestRegionCaching:
         atlas = region_atlas
 
         # Build base, select small region, and build region stores.
-        atlas.materialize()
+        atlas.build()
         atlas.select(region="Wien", inplace=True)
-        atlas.materialize()
+        atlas.build()
 
         # Limit turbine set for compute workload.
         turbines = list(atlas.wind.turbines[:2])
         assert len(turbines) == 2
         atlas.wind.select(turbines=turbines)
 
-        # Compute + cache and verify surfaced output.
-        cf = atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=False).cache()
+        # Compute + materialize and verify surfaced output.
+        cf = atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=False).materialize()
         assert "capacity_factors" in atlas.wind.data
         assert cf.size > 0
         assert bool(cf.notnull().any().compute()) is True

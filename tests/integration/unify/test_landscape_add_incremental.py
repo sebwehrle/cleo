@@ -72,7 +72,7 @@ class MockAtlas:
         """Return None - no NUTS region for basic tests."""
         return None
 
-    def materialize_canonical(self) -> None:
+    def build_canonical(self) -> None:
         """Materialize both wind.zarr and landscape.zarr."""
         u = Unifier(
             chunk_policy=self.chunk_policy,
@@ -92,7 +92,7 @@ class MockAtlas:
     ) -> None:
         """Add a new variable to the landscape store."""
         if not self._canonical_ready:
-            self.materialize_canonical()
+            self.build_canonical()
 
         u = Unifier(
             chunk_policy=self.chunk_policy,
@@ -235,7 +235,7 @@ class TestLandscapeAddIncremental:
         _create_elevation_raster(elev_path)
 
         # Create and materialize canonical stores
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Create extra layer raster
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
@@ -266,7 +266,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -297,7 +297,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Capture existing data before adding new layer
         landscape_before = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -337,7 +337,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -363,7 +363,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -392,7 +392,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         # Get inputs_id before
         root_before = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
@@ -425,7 +425,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         root_before = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
         grid_id_before = root_before.attrs["grid_id"]
@@ -453,7 +453,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -484,7 +484,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
@@ -505,7 +505,7 @@ class TestLandscapeAddIncremental:
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
-        atlas.materialize_canonical()
+        atlas.build_canonical()
 
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_categorical.tif"
         _create_extra_layer_raster(extra_path, fill_value=5.0)

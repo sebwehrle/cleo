@@ -63,10 +63,10 @@ def test_atlas_init_does_not_modify_root_logger(tmp_path, monkeypatch):
     )
 
 
-def test_atlas_materialize_deferred(tmp_path, monkeypatch):
+def test_atlas_build_deferred(tmp_path, monkeypatch):
     """
-    Atlas.materialize() is where data loading happens.
-    Without calling materialize(), wind/landscape should not be available.
+    Atlas.build() is where data loading happens.
+    Without calling build(), wind/landscape should not be available.
     """
     # Block network during init
     def _block_network(*args, **kwargs):

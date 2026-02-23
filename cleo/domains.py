@@ -303,7 +303,20 @@ class WindDomain:
         :returns: :class:`cleo.results.DomainResult` with ``.data``/``.cache()``/``.persist()``.
         :raises ValueError: If metric is unknown, params are missing, or turbine
             validation fails.
+        :raises ValueError: If cache-only kwargs (``overwrite`` / ``allow_mode_change``)
+            are passed to ``compute(...)`` instead of ``.cache(...)``.
         """
+        cache_only_kwargs = tuple(
+            key for key in ("overwrite", "allow_mode_change") if key in kwargs
+        )
+        if cache_only_kwargs:
+            keys_text = ", ".join(repr(key) for key in cache_only_kwargs)
+            raise ValueError(
+                f"cache-only parameter(s) {keys_text} were passed to compute(...); "
+                "pass them to .cache(...), e.g. "
+                "atlas.wind.compute(...).cache(overwrite=True, allow_mode_change=True)."
+            )
+
         if metric not in _WIND_METRICS:
             supported = sorted(_WIND_METRICS.keys())
             raise ValueError(

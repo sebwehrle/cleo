@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -10,12 +11,54 @@ import rioxarray as rxr
 import xarray as xr
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
-from cleo.net import RequestException
+import cleo.net
 
 logger = logging.getLogger(__name__)
 
 # Public constant kept for backward-compatible imports from ``cleo.unify``
 GWA_HEIGHTS = [10, 50, 100, 150, 200]
+
+
+def fetch_gwa_crs(iso3: str) -> str:
+    """Fetch CRS from Global Wind Atlas GeoJSON API for a given country."""
+    url = f"https://globalwindatlas.info/api/gdal/country/geojson?areaId={iso3}"
+    headers = {
+        "Accept": "application/geo+json,application/json;q=0.9,*/*;q=0.8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://globalwindatlas.info",
+        "Referer": "https://globalwindatlas.info/en/download/gis-files",
+        "User-Agent": "Mozilla/5.0",
+    }
+
+    try:
+        response = cleo.net.http_get(url, headers=headers, timeout=(10, 60), stream=False)
+        response.raise_for_status()
+        payload = response.json()
+    except cleo.net.RequestException as e:
+        raise RuntimeError(f"Failed to fetch GWA CRS for {iso3} from {url}: {e}") from e
+
+    # Handle double-encoded JSON (response.json() returns a string containing JSON)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse GWA GeoJSON response for country {iso3}: {e}") from e
+
+    try:
+        crs = payload["crs"]["properties"]["name"]
+    except (KeyError, TypeError):
+        raise ValueError(f"CRS missing from GWA GeoJSON response for country {iso3}")
+
+    return crs
+
+
+def ensure_crs_from_gwa(ds, iso3: str):
+    """Ensure a raster DataArray/Dataset has a CRS set, fetching from GWA if needed."""
+    if ds.rio.crs is not None:
+        return ds
+
+    crs = fetch_gwa_crs(iso3)
+    return ds.rio.write_crs(crs)
 
 
 def _crs_cache_path(atlas, iso3: str) -> Path:
@@ -47,8 +90,6 @@ def _load_or_fetch_gwa_crs(atlas, iso3: str) -> CRS:
     Raises:
         RuntimeError: If fetch fails or cache is empty/corrupt.
     """
-    import cleo.loaders
-
     cache = _crs_cache_path(atlas, iso3)
     cache.parent.mkdir(parents=True, exist_ok=True)
 
@@ -60,9 +101,9 @@ def _load_or_fetch_gwa_crs(atlas, iso3: str) -> CRS:
 
     # Fetch from network
     try:
-        crs_str = cleo.loaders.fetch_gwa_crs(iso3)
+        crs_str = fetch_gwa_crs(iso3)
         crs = CRS.from_string(crs_str)
-    except (RequestException, RuntimeError, ValueError, TypeError, OSError) as e:
+    except (cleo.net.RequestException, RuntimeError, ValueError, TypeError, OSError) as e:
         logger.error(
             "Failed to fetch GWA CRS and cache is unavailable.",
             extra={"iso3": iso3, "cache_path": str(cache)},

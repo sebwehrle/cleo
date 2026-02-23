@@ -297,6 +297,44 @@ class TestCapacityFactorsEnforcement:
         # Should hint at atlas.wind.turbines or atlas.wind.select
         assert "atlas.wind.turbines" in error_msg or "atlas.wind.select" in error_msg
 
+    def test_compute_rejects_cache_only_kwargs(self, tmp_path: Path) -> None:
+        """compute(...) rejects cache-only kwargs and points callers to .cache(...)."""
+        turbine_names = ["Enercon.E40.500"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        # Materialize stores
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        # Ensure compute call would otherwise be valid
+        atlas.wind.select(turbines=turbine_names)
+
+        with pytest.raises(ValueError, match="cache-only parameter"):
+            atlas.wind.compute(
+                "capacity_factors",
+                mode="direct_cf_quadrature",
+                allow_mode_change=True,
+            )
+
+        with pytest.raises(ValueError, match=r"pass them to \.cache\(\.\.\.\)"):
+            atlas.wind.compute(
+                "capacity_factors",
+                mode="direct_cf_quadrature",
+                overwrite=True,
+            )
+
+        with pytest.raises(ValueError, match="allow_mode_change"):
+            atlas.wind.compute(
+                "capacity_factors",
+                mode="direct_cf_quadrature",
+                allow_mode_change=True,
+                overwrite=True,
+            )
+
     def test_capacity_factors_not_all_nan(self, tmp_path: Path) -> None:
         """capacity_factors computes valid values."""
         turbine_names = ["Enercon.E40.500"]

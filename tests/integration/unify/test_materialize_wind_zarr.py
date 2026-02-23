@@ -358,7 +358,7 @@ class TestMaterializeWindCrsHandling:
         atlas = MockAtlas(tmp_path)
         _create_all_required_gwa_files(atlas, crs_epsg=3035)
 
-        with patch("cleo.loaders.fetch_gwa_crs") as mock_fetch:
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs") as mock_fetch:
             unifier = Unifier()
             unifier.materialize_wind(atlas)
 

@@ -9,7 +9,7 @@ import pandas as pd
 import rioxarray as rxr
 import logging
 from pathlib import Path
-from cleo.assess import turbine_overnight_cost
+from cleo.costs import turbine_overnight_cost
 from cleo.net import download_to_path, RequestException
 from cleo.spatial import reproject_raster_if_needed, to_crs_if_needed
 
@@ -89,37 +89,9 @@ def fetch_gwa_crs(iso3):
     :raises ValueError: If CRS is missing from the GeoJSON response
     :raises RuntimeError: If the HTTP request fails (timeout, DNS, etc.)
     """
-    url = f"https://globalwindatlas.info/api/gdal/country/geojson?areaId={iso3}"
-    headers = {
-        "Accept": "application/geo+json,application/json;q=0.9,*/*;q=0.8",
-        "X-Requested-With": "XMLHttpRequest",
-        "Origin": "https://globalwindatlas.info",
-        "Referer": "https://globalwindatlas.info/en/download/gis-files",
-        "User-Agent": "Mozilla/5.0",
-    }
+    from cleo.unification.gwa_io import fetch_gwa_crs as fetch_gwa_crs_unification
 
-    from cleo.net import http_get, RequestException
-
-    try:
-        response = http_get(url, headers=headers, timeout=(10, 60), stream=False)
-        response.raise_for_status()
-        payload = response.json()
-    except RequestException as e:
-        raise RuntimeError(f"Failed to fetch GWA CRS for {iso3} from {url}: {e}") from e
-
-    # Handle double-encoded JSON (response.json() returns a string containing JSON)
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse GWA GeoJSON response for country {iso3}: {e}") from e
-
-    try:
-        crs = payload["crs"]["properties"]["name"]
-    except (KeyError, TypeError):
-        raise ValueError(f"CRS missing from GWA GeoJSON response for country {iso3}")
-
-    return crs
+    return fetch_gwa_crs_unification(iso3)
 
 
 def ensure_crs_from_gwa(ds, iso3):
@@ -137,11 +109,9 @@ def ensure_crs_from_gwa(ds, iso3):
     :rtype: xarray.DataArray or xarray.Dataset
     :raises ValueError: If CRS is missing from the GeoJSON response
     """
-    if ds.rio.crs is not None:
-        return ds
+    from cleo.unification.gwa_io import ensure_crs_from_gwa as ensure_crs_from_gwa_unification
 
-    crs = fetch_gwa_crs(iso3)
-    return ds.rio.write_crs(crs)
+    return ensure_crs_from_gwa_unification(ds, iso3)
 
 
 def load_elevation(base_dir, iso3, reference_da):

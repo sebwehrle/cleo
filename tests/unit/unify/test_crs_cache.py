@@ -62,7 +62,7 @@ class TestLoadOrFetchGwaCrs:
         test_crs = CRS.from_epsg(3035)
         cache_path.write_text(test_crs.to_wkt(), encoding="utf-8")
 
-        with patch("cleo.loaders.fetch_gwa_crs") as mock_fetch:
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs") as mock_fetch:
             result = _load_or_fetch_gwa_crs(atlas, "AUT")
 
             # Should NOT call fetch
@@ -82,7 +82,7 @@ class TestLoadOrFetchGwaCrs:
         # Mock the fetch to return a CRS string
         test_crs_str = "urn:ogc:def:crs:EPSG::3035"
 
-        with patch("cleo.loaders.fetch_gwa_crs", return_value=test_crs_str) as mock_fetch:
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs", return_value=test_crs_str) as mock_fetch:
             result = _load_or_fetch_gwa_crs(atlas, "AUT")
 
             # Should call fetch exactly once
@@ -102,7 +102,7 @@ class TestLoadOrFetchGwaCrs:
 
         test_crs_str = "urn:ogc:def:crs:EPSG::3035"
 
-        with patch("cleo.loaders.fetch_gwa_crs", return_value=test_crs_str) as mock_fetch:
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs", return_value=test_crs_str) as mock_fetch:
             # First call - should fetch
             result1 = _load_or_fetch_gwa_crs(atlas, "AUT")
             assert mock_fetch.call_count == 1
@@ -122,7 +122,7 @@ class TestLoadOrFetchGwaCrs:
         # Ensure no cache
         assert not cache_path.exists()
 
-        with patch("cleo.loaders.fetch_gwa_crs", side_effect=RuntimeError("Network error")):
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs", side_effect=RuntimeError("Network error")):
             with pytest.raises(RuntimeError, match="Failed to fetch GWA CRS for AUT"):
                 _load_or_fetch_gwa_crs(atlas, "AUT")
 
@@ -193,7 +193,7 @@ class TestOpenGwaRasterWithCrsCache:
         raster_path = tmp_path / "test_with_crs.tif"
         self._create_test_raster(raster_path, with_crs=True, crs_epsg=3035)
 
-        with patch("cleo.loaders.fetch_gwa_crs") as mock_fetch:
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs") as mock_fetch:
             da = _open_gwa_raster(
                 atlas, raster_path,
                 iso3="AUT",
@@ -221,7 +221,7 @@ class TestOpenGwaRasterWithCrsCache:
         raster_path = tmp_path / "test_no_crs.tif"
         self._create_test_raster(raster_path, with_crs=False)
 
-        with patch("cleo.loaders.fetch_gwa_crs") as mock_fetch:
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs") as mock_fetch:
             da = _open_gwa_raster(
                 atlas, raster_path,
                 iso3="AUT",
@@ -245,7 +245,7 @@ class TestOpenGwaRasterWithCrsCache:
 
         test_crs_str = "urn:ogc:def:crs:EPSG::3035"
 
-        with patch("cleo.loaders.fetch_gwa_crs", return_value=test_crs_str) as mock_fetch:
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs", return_value=test_crs_str) as mock_fetch:
             da = _open_gwa_raster(
                 atlas, raster_path,
                 iso3="AUT",

@@ -8,6 +8,7 @@ import logging
 
 from scipy.special import gamma, gammaln
 
+from cleo.costs import turbine_overnight_cost as turbine_overnight_cost_shared
 from cleo.vertical import evaluate_weibull_at_heights
 
 logger = logging.getLogger(__name__)
@@ -1073,10 +1074,7 @@ def turbine_overnight_cost(power, hub_height, rotor_diameter, year):
     :param year: year of first commercial deployment
     :return: overnight investment cost in EUR per kW
     """
-    rotor_area = np.pi * (rotor_diameter / 2) ** 2
-    spec_power = power * 10 ** 6 / rotor_area
-    cost = ((620 * np.log(hub_height)) - (1.68 * spec_power) + (182 * (2016 - year) ** 0.5) - 1005)
-    return cost.astype('float')
+    return turbine_overnight_cost_shared(power, hub_height, rotor_diameter, year)
 
 
 def grid_connect_cost(power):

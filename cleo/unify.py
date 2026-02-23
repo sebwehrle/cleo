@@ -86,7 +86,6 @@ COMPAT_EXPORTS = [
     "_atomic_replace_variable_dir",
     "_open_local_elevation",
     "_build_copdem_elevation",
-    "_default_turbines_from_resources",
     "_ingest_turbines_and_costs",
     "_load_turbine_yaml",
     "_nuts_region_geom",

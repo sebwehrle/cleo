@@ -81,7 +81,7 @@ def test_load_or_fetch_gwa_crs_raises_if_cache_write_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     atlas = SimpleNamespace(path=tmp_path)
-    monkeypatch.setattr("cleo.loaders.fetch_gwa_crs", lambda _iso3: "EPSG:3035")
+    monkeypatch.setattr("cleo.unification.gwa_io.fetch_gwa_crs", lambda _iso3: "EPSG:3035")
 
     def _fail_write(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
         raise OSError("disk full")
@@ -112,4 +112,3 @@ def test_open_gwa_raster_converts_nodata_to_nan(tmp_path: Path) -> None:
     )
     assert np.isnan(da.values[0, 1])
     assert float(da.values[0, 0]) == 1.0
-

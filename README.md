@@ -123,6 +123,7 @@ Atlas(
   - clear persistent selection.
 - `atlas.wind.compute(metric, **kwargs)`
   - generic metric entrypoint.
+  - rejects cache-only kwargs `overwrite` and `allow_mode_change`; pass those to `.cache(...)`.
 - `atlas.wind.mean_wind_speed(height, **kwargs)`
 - `atlas.wind.capacity_factors(turbines=None, air_density=False, loss_factor=1.0, mode="direct_cf_quadrature", rews_n=12, **kwargs)`
   - does not accept `height`; hub height is derived from each turbine definition.

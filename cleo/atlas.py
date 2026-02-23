@@ -1,6 +1,5 @@
 # %% imports
 import re
-import shutil
 import pyproj
 import logging
 import xarray as xr
@@ -53,39 +52,6 @@ def _safe_basename(path) -> str:
         return Path(path).name if path else "?"
     except (TypeError, ValueError, OSError):
         return "?"
-
-
-def _slugify_region_dir(name: str) -> str:
-    """Best-effort filesystem-safe region directory name (ASCII-ish)."""
-    import unicodedata as _ud
-    import re as _re
-
-    # Normalize + drop diacritics
-    norm = _ud.normalize("NFKD", name)
-    asciiish = "".join(ch for ch in norm if not _ud.combining(ch))
-    # Keep reasonably portable characters
-    slug = _re.sub(r"[^A-Za-z0-9._-]+", "_", asciiish).strip("_")
-    return slug or "region"
-
-
-def _region_dir_candidates(region_name: str) -> list[str]:
-    """Candidate directory names a region might have been stored under."""
-    cand: list[str] = []
-    s = region_name.strip()
-    if not s:
-        return cand
-    cand.append(s)
-    cand.append(re.sub(r"\s+", " ", s).casefold())
-    cand.append(_slugify_region_dir(s))
-    cand.append(_slugify_region_dir(re.sub(r"\s+", " ", s).casefold()))
-    # Unique, stable order
-    out: list[str] = []
-    seen = set()
-    for c in cand:
-        if c not in seen:
-            out.append(c)
-            seen.add(c)
-    return out
 
 
 class NutsRegionName(str):
@@ -579,72 +545,20 @@ class Atlas:
         if self._region_name is None:
             return
 
-        expected_root = self.path / "regions" / self._region_id
-        expected_wind = expected_root / "wind.zarr"
-        expected_land = expected_root / "landscape.zarr"
-
-
-        if expected_wind.exists() and expected_land.exists():
-            return
-
-        # If we have a stale/partial directory, remove it so Unifier can't mis-detect completeness.
-
-        if expected_root.exists() and (not expected_wind.exists() or not expected_land.exists()):
-            logger.warning(
-                f"Region store directory exists but is incomplete: "
-                f"{expected_root} (wind={expected_wind.exists()}, landscape={expected_land.exists()}). "
-                "Removing and rebuilding."
-            )
-            shutil.rmtree(expected_root)
-
         from cleo.unification import Unifier
+        from cleo.unification.materializers.region import _ensure_region_stores_ready
 
         u = Unifier(
             chunk_policy=self.chunk_policy,
             fingerprint_method=self.fingerprint_method,
         )
-        # u.materialize_region(self, self._region_name)
-        # Prefer region_id to avoid name-vs-id directory mismatches.
-        err_id: Exception | None = None
-        try:
-            u.materialize_region(self, self._region_id)
-        except (RuntimeError, ValueError, TypeError, FileNotFoundError, OSError) as e:
-            err_id = e
-            logger.warning(
-                "materialize_region(region_id) failed; retrying with region name for compatibility.",
-                extra={"region_id": self._region_id, "region_name": self._region_name},
-                exc_info=True,
-            )
-            # Backwards-compat: older Unifier versions may expect region name.
-            u.materialize_region(self, self._region_name)
-
-        # If Unifier wrote into a legacy directory name, migrate to the canonical region_id layout.
-        if not (expected_wind.exists() and expected_land.exists()):
-            for cand in _region_dir_candidates(self._region_name):
-                alt_root = self.path / "regions" / cand
-                if alt_root == expected_root:
-                    continue
-                alt_wind = alt_root / "wind.zarr"
-                alt_land = alt_root / "landscape.zarr"
-                if alt_wind.exists() and alt_land.exists():
-                    logger.warning(f"Found region stores under legacy directory {alt_root}; moving to {expected_root}.")
-                    if expected_root.exists():
-                        shutil.rmtree(expected_root)
-                    shutil.move(str(alt_root), str(expected_root))
-                    break
-
-        if not (expected_wind.exists() and expected_land.exists()):
-            details = {
-                "expected_root": str(expected_root),
-                "expected_wind_exists": expected_wind.exists(),
-                "expected_landscape_exists": expected_land.exists(),
-            }
-            cand_roots = [str(self.path / "regions" / c) for c in _region_dir_candidates(self._region_name)[:8]]
-            details["candidate_roots"] = cand_roots
-            msg = (f"Region stores are still missing after materialize_region(). Details: {details}")
-            if err_id is not None:
-                msg += f" (materialize_region(region_id) failed with: {type(err_id).__name__}: {err_id})"
-            raise RuntimeError(msg)
+        _ensure_region_stores_ready(
+            atlas=self,
+            unifier=u,
+            region_id=self._region_id,
+            region_name=self._region_name,
+            logger=logger,
+        )
 
     def materialize_canonical(self) -> None:
         """Materialize both wind.zarr and landscape.zarr canonical stores.

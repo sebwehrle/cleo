@@ -19,6 +19,27 @@ from cleo.unification.materializers.shared import _stable_json
 logger = logging.getLogger(__name__)
 
 
+def _infer_axis_step(subset_coords: np.ndarray, base_coords: np.ndarray, axis_name: str) -> float:
+    """Infer coordinate step for an axis, handling single-cell subsets safely."""
+    subset = np.asarray(subset_coords, dtype=np.float64)
+    base = np.asarray(base_coords, dtype=np.float64)
+
+    if subset.size >= 2:
+        step = float(subset[1] - subset[0])
+    elif base.size >= 2:
+        step = float(base[1] - base[0])
+    else:
+        raise RuntimeError(
+            f"Cannot infer {axis_name}-axis spacing from a single-cell grid."
+        )
+
+    if not np.isfinite(step) or step == 0.0:
+        raise RuntimeError(
+            f"Invalid {axis_name}-axis spacing {step!r}; expected a non-zero finite value."
+        )
+    return step
+
+
 def _ensure_region_stores_ready(
     *,
     atlas,
@@ -203,8 +224,8 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
     x = wind_region_ds.coords["x"].values
     y = wind_region_ds.coords["y"].values
 
-    dx = float(x[1] - x[0])
-    dy = float(y[1] - y[0])  # can be negative if y decreases
+    dx = _infer_axis_step(x, wind_x, "x")
+    dy = _infer_axis_step(y, wind_y, "y")  # can be negative if y decreases
 
     x0 = float(x[0]) - dx / 2.0
     y0 = float(y[0]) - dy / 2.0

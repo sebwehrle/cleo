@@ -1,11 +1,10 @@
 # %% imports
-import json
 import numpy as np
 import xarray as xr
 from pathlib import Path
 from cleo.results import DomainResult
 from cleo.wind_metrics import _WIND_METRICS
-from cleo.unification.store_io import open_zarr_dataset
+from cleo.unification.store_io import open_zarr_dataset, turbine_ids_from_json
 
 
 class WindDomain:
@@ -81,8 +80,7 @@ class WindDomain:
             raise RuntimeError(
                 "Wind store missing cleo_turbines_json attr; re-run materialize_canonical()."
             )
-        turbines_meta = json.loads(ds.attrs["cleo_turbines_json"])
-        return tuple(t["id"] for t in turbines_meta)
+        return turbine_ids_from_json(ds.attrs["cleo_turbines_json"])
 
     @property
     def selected_turbines(self) -> tuple[str, ...] | None:
@@ -133,8 +131,7 @@ class WindDomain:
             # Keep current behavior; cannot label turbine axis without mapping
             return ds
 
-        turbines_meta = json.loads(meta_json)
-        names = [t["id"] for t in turbines_meta]
+        names = list(turbine_ids_from_json(meta_json))
         n = ds.sizes["turbine"]
 
         if len(names) != n:

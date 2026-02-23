@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import os
 import shutil
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -33,6 +35,17 @@ def open_zarr_dataset(
 ) -> xr.Dataset:
     """Open a Zarr store with project-standard settings."""
     return xr.open_zarr(Path(store_path), consolidated=False, chunks=chunk_policy)
+
+
+@lru_cache(maxsize=256)
+def turbine_ids_from_json(payload: str) -> tuple[str, ...]:
+    """Decode ``cleo_turbines_json`` payload into ordered turbine IDs.
+
+    The payload string is used as cache key to avoid repeated JSON parsing in
+    hot domain/result paths.
+    """
+    meta = json.loads(payload)
+    return tuple(t["id"] for t in meta)
 
 
 def write_netcdf_atomic(

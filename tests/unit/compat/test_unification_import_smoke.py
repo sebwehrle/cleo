@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
+from pathlib import Path
 
 
 def test_unification_module_imports_smoke() -> None:
@@ -19,3 +21,16 @@ def test_unification_module_imports_smoke() -> None:
     for module in modules:
         imported = importlib.import_module(module)
         assert imported is not None
+
+
+def test_unification_raster_io_no_copdem_runtime_import() -> None:
+    raster_io_path = Path(__file__).resolve().parents[3] / "cleo" / "unification" / "raster_io.py"
+    tree = ast.parse(raster_io_path.read_text(encoding="utf-8"), filename=str(raster_io_path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name != "cleo.copdem"
+                assert not alias.name.startswith("cleo.copdem.")
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module != "cleo.copdem"
+            assert not node.module.startswith("cleo.copdem.")

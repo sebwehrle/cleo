@@ -10,6 +10,7 @@ import numpy as np
 import xarray as xr
 
 from cleo.dask_utils import compute as dask_compute
+from cleo.unification.store_io import turbine_ids_from_json
 
 logger = logging.getLogger(__name__)
 
@@ -379,9 +380,9 @@ class DomainResult:
                 )
 
         # Get turbine metadata for ID to index mapping
-        turbines_meta = json.loads(existing_ds.attrs["cleo_turbines_json"])
-        turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
-        n_turbines = len(turbines_meta)
+        turbine_ids = turbine_ids_from_json(existing_ds.attrs["cleo_turbines_json"])
+        turbine_id_to_idx = {tid: i for i, tid in enumerate(turbine_ids)}
+        n_turbines = len(turbine_ids)
         full_turbine_indices = list(range(n_turbines))
 
         da = self._data.copy()

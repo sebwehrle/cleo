@@ -183,7 +183,7 @@ def test_download_copdem_tiles_for_bbox(monkeypatch: pytest.MonkeyPatch, tmp_pat
         calls.append((iso3_arg, tile_id, overwrite))
         return Path(base_dir) / "data" / "raw" / iso3_arg / "copdem" / tile_id / f"{tile_id}.tif"
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tile", mock_download_copdem_tile)
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tile", mock_download_copdem_tile)
 
     result_paths = download_copdem_tiles_for_bbox(
         tmp_path,
@@ -221,7 +221,7 @@ def test_download_copdem_tiles_for_bbox_overwrite(monkeypatch: pytest.MonkeyPatc
         calls.append((iso3_arg, tile_id, overwrite))
         return Path(base_dir) / "data" / "raw" / iso3_arg / "copdem" / tile_id / f"{tile_id}.tif"
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tile", mock_download_copdem_tile)
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tile", mock_download_copdem_tile)
 
     download_copdem_tiles_for_bbox(
         tmp_path,
@@ -249,12 +249,12 @@ def test_download_copdem_tiles_for_bbox_determinism(monkeypatch: pytest.MonkeyPa
 
         return mock_download_copdem_tile
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tile", make_mock(calls1))
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tile", make_mock(calls1))
     result1 = download_copdem_tiles_for_bbox(
         tmp_path, "AUT", min_lon=9.2, min_lat=46.0, max_lon=11.1, max_lat=47.0
     )
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tile", make_mock(calls2))
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tile", make_mock(calls2))
     result2 = download_copdem_tiles_for_bbox(
         tmp_path, "AUT", min_lon=9.2, min_lat=46.0, max_lon=11.1, max_lat=47.0
     )

@@ -12,6 +12,7 @@ from cleo.unification.store_io import (
     list_region_dirs,
     read_region_store_meta,
     read_zarr_group_attrs,
+    turbine_ids_from_json,
 )
 
 
@@ -56,3 +57,15 @@ def test_delete_region_dir_removes_directory(tmp_path: Path) -> None:
     (region_dir / "wind.zarr").mkdir(parents=True)
     delete_region_dir(region_dir)
     assert not region_dir.exists()
+
+
+def test_turbine_ids_from_json_decodes_ordered_ids() -> None:
+    payload = '[{"id":"T2"},{"id":"T1"}]'
+    assert turbine_ids_from_json(payload) == ("T2", "T1")
+
+
+def test_turbine_ids_from_json_cache_is_payload_keyed() -> None:
+    first = '[{"id":"A"}]'
+    second = '[{"id":"B"}]'
+    assert turbine_ids_from_json(first) == ("A",)
+    assert turbine_ids_from_json(second) == ("B",)

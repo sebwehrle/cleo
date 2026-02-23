@@ -199,8 +199,8 @@ class TestMaterializeLandscapeCopdemPath:
             # Return paths to synthetic tiles (sorted lexicographically)
             return sorted([tile1_path, tile2_path, tile3_path, tile4_path])
 
-        # Patch at the point of import in unify.py
-        with patch("cleo.copdem.download_copdem_tiles_for_bbox", mock_download_tiles):
+        # Patch canonical CopDEM helper ownership in raster_io.
+        with patch("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download_tiles):
             unifier = Unifier(chunk_policy={"y": 1024, "x": 1024})
             unifier.materialize_wind(atlas)
             unifier.materialize_landscape(atlas)
@@ -251,7 +251,7 @@ class TestMaterializeLandscapeCopdemPath:
         def mock_download_tiles(base_dir, iso3, *, min_lon, min_lat, max_lon, max_lat, overwrite=False):
             return [tile_path]
 
-        with patch("cleo.copdem.download_copdem_tiles_for_bbox", mock_download_tiles):
+        with patch("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download_tiles):
             unifier = Unifier(chunk_policy={"y": 1024, "x": 1024})
             unifier.materialize_wind(atlas)
 
@@ -280,7 +280,7 @@ class TestMaterializeLandscapeCopdemPath:
         def mock_download_tiles(*args, **kwargs):
             pytest.fail("download_copdem_tiles_for_bbox should not be called when local exists")
 
-        with patch("cleo.copdem.download_copdem_tiles_for_bbox", mock_download_tiles):
+        with patch("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download_tiles):
             unifier = Unifier(chunk_policy={"y": 1024, "x": 1024})
             unifier.materialize_wind(atlas)
             unifier.materialize_landscape(atlas)
@@ -319,9 +319,9 @@ class TestMaterializeLandscapeCopdemPath:
         def mock_download_tiles(base_dir, iso3, *, min_lon, min_lat, max_lon, max_lat, overwrite=False):
             return sorted([tile1_path, tile2_path])
 
-        with patch("cleo.copdem.download_copdem_tiles_for_bbox", mock_download_tiles):
+        with patch("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download_tiles):
             # Also patch tiles_for_bbox to return consistent tile IDs
-            with patch("cleo.copdem.tiles_for_bbox") as mock_tiles:
+            with patch("cleo.unification.raster_io.tiles_for_bbox") as mock_tiles:
                 mock_tiles.return_value = [
                     "Copernicus_DSM_COG_10_N46_00_E009_00_DEM",
                     "Copernicus_DSM_COG_10_N47_00_E009_00_DEM",

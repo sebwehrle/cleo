@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,96 @@ import xarray as xr
 from rasterio.enums import Resampling
 
 logger = logging.getLogger(__name__)
+
+
+def copdem_tile_id(lat_deg: int, lon_deg: int, resolution_arcsec: int = 10) -> str:
+    """Generate Copernicus DEM tile ID for a given integer lat/lon degree."""
+    ns = "N" if lat_deg >= 0 else "S"
+    ew = "E" if lon_deg >= 0 else "W"
+    abs_lat = abs(lat_deg)
+    abs_lon = abs(lon_deg)
+    return f"Copernicus_DSM_COG_{resolution_arcsec}_{ns}{abs_lat:02d}_00_{ew}{abs_lon:03d}_00_DEM"
+
+
+def tiles_for_bbox(min_lon: float, min_lat: float, max_lon: float, max_lat: float) -> list[str]:
+    """Return sorted CopDEM tile IDs intersecting bbox (min inclusive, max exclusive)."""
+    if max_lon <= min_lon or max_lat <= min_lat:
+        raise ValueError(
+            f"Degenerate bbox: require max_lon>min_lon and max_lat>min_lat "
+            f"(got min_lon={min_lon}, max_lon={max_lon}, min_lat={min_lat}, max_lat={max_lat}). "
+            "Max bounds are treated as exclusive."
+        )
+
+    lon0 = math.floor(min_lon)
+    lon1 = math.ceil(max_lon) - 1
+    lat0 = math.floor(min_lat)
+    lat1 = math.ceil(max_lat) - 1
+
+    out: list[str] = []
+    for lat_deg in range(lat0, lat1 + 1):
+        for lon_deg in range(lon0, lon1 + 1):
+            out.append(copdem_tile_id(lat_deg, lon_deg))
+    out.sort()
+    return out
+
+
+def copdem_tile_url(tile_id: str) -> str:
+    """Return HTTPS URL for CopDEM tile on public S3 bucket."""
+    return f"https://copernicus-dem-30m.s3.amazonaws.com/{tile_id}/{tile_id}.tif"
+
+
+def copdem_tile_cache_path(base_dir: Path | str, iso3: str, tile_id: str) -> Path:
+    """Return canonical local cache path for a CopDEM tile."""
+    return Path(base_dir) / "data" / "raw" / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
+
+
+def download_copdem_tile(
+    base_dir: Path | str,
+    iso3: str,
+    tile_id: str,
+    *,
+    timeout_s: float = 60.0,
+    overwrite: bool = False,
+) -> Path:
+    """Download a CopDEM tile using the canonical network helper."""
+    from cleo.net import download_to_path
+
+    dest = copdem_tile_cache_path(base_dir, iso3, tile_id)
+    url = copdem_tile_url(tile_id)
+
+    try:
+        return download_to_path(
+            url,
+            dest,
+            timeout=timeout_s,
+            overwrite=overwrite,
+        )
+    except FileNotFoundError:
+        # Re-raise with tile-specific context (historic behavior).
+        raise FileNotFoundError(f"Copernicus DEM tile not found: {tile_id} (HTTP 404)")
+
+
+def download_copdem_tiles_for_bbox(
+    base_dir: Path | str,
+    iso3: str,
+    *,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    overwrite: bool = False,
+) -> list[Path]:
+    """Download all CopDEM tiles needed for bbox in deterministic lexicographic order."""
+    tile_ids = tiles_for_bbox(min_lon, min_lat, max_lon, max_lat)
+    paths: list[Path] = []
+    for tile_id in tile_ids:
+        paths.append(download_copdem_tile(base_dir, iso3, tile_id, overwrite=overwrite))
+    return paths
+
+
+def build_copdem_elevation_like(reference_da: xr.DataArray, tile_paths: list[Path]) -> xr.DataArray:
+    """Build CopDEM elevation aligned to reference DataArray."""
+    return _build_copdem_mosaic(tile_paths, reference_da)
 
 
 def _open_local_elevation(
@@ -86,12 +177,6 @@ def _build_copdem_elevation(
         FileNotFoundError: If CopDEM tiles cannot be downloaded.
     """
     from rasterio.warp import transform_bounds
-
-    from cleo.copdem import (
-        build_copdem_elevation_like,
-        download_copdem_tiles_for_bbox,
-        tiles_for_bbox,
-    )
 
     # Determine bbox in EPSG:4326
     bounds = wind_ref.rio.bounds()

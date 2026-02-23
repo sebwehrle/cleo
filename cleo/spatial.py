@@ -574,6 +574,10 @@ def reproject(self, new_crs: str) -> None:
     :param self: an instance of the Atlas class
     :param new_crs:  The new coordinate reference system to use
     :type new_crs:  str
+    :raises ValueError: If the destination CRS is invalid.
+    :raises TypeError: If data cannot be reprojected due to type issues.
+    :raises RuntimeError: If reprojection fails at runtime.
+    :raises OSError: If underlying raster IO operations fail.
     """
     # Canonicalize destination CRS
     dst_crs = canonical_crs_str(new_crs)
@@ -603,6 +607,7 @@ def reproject(self, new_crs: str) -> None:
             extra={"dst_crs": dst_crs},
             exc_info=True,
         )
+        raise
 
 
 # %%

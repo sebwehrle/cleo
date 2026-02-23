@@ -1,11 +1,8 @@
 # %% imports
 import re
-import json
-import zarr
 import shutil
 import pyproj
 import logging
-import datetime
 import xarray as xr
 import pycountry as pct
 from uuid import uuid4
@@ -13,8 +10,36 @@ from pathlib import Path
 from typing import Sequence
 
 from cleo.domains import WindDomain, LandscapeDomain
+from cleo.atlas_policies.nuts_catalog import load_nuts_region_catalog as load_nuts_region_catalog_policy
+from cleo.atlas_policies.region_selection import (
+    normalize_region_name as normalize_region_name_policy,
+    nuts_regions_level_names as nuts_regions_level_names_policy,
+    resolve_region_name as resolve_region_name_policy,
+    select_region_decision as select_region_decision_policy,
+    validate_nuts_level as validate_nuts_level_policy,
+)
+from cleo.atlas_policies.cleanup import (
+    parse_older_than as parse_older_than_policy,
+    resolve_region_cleanup_id as resolve_region_cleanup_id_policy,
+    select_region_dirs_for_cleanup as select_region_dirs_for_cleanup_policy,
+    select_result_stores_for_cleanup as select_result_stores_for_cleanup_policy,
+)
+from cleo.results import (
+    delete_result_store,
+    list_result_stores,
+    prune_empty_run_dirs,
+    read_result_store_datetime,
+    validate_result_path_token,
+)
 from cleo.unification.nuts_io import _read_vector_file, _read_nuts_region_catalog
-from cleo.unification.store_io import open_zarr_dataset, write_netcdf_atomic
+from cleo.unification.store_io import (
+    delete_region_dir,
+    list_region_dirs,
+    open_zarr_dataset,
+    read_region_store_meta,
+    read_zarr_group_attrs,
+    write_netcdf_atomic,
+)
 from cleo.spatial import to_crs_if_needed
 from cleo.class_helpers import deploy_resources, setup_logging
 from cleo.dask_utils import normalize_compute_backend, normalize_compute_workers
@@ -355,102 +380,31 @@ class Atlas:
 
     def _normalize_region_name(self, name: str) -> str:
         """Normalize region name: strip, collapse whitespace, casefold."""
-        import re as _re
-        return _re.sub(r"\s+", " ", name.strip()).casefold()
+        return normalize_region_name_policy(name)
 
     def _validate_nuts_level(self, level: int) -> int:
         """Validate and normalize NUTS level."""
-        try:
-            level_i = int(level)
-        except (TypeError, ValueError) as e:
-            raise ValueError(f"NUTS level must be an integer, got {level!r}.") from e
-        if level_i not in self._VALID_NUTS_LEVELS:
-            raise ValueError(
-                f"Unsupported NUTS level {level_i!r}; expected one of {self._VALID_NUTS_LEVELS}."
-            )
-        return level_i
+        return validate_nuts_level_policy(level, valid_levels=self._VALID_NUTS_LEVELS)
 
     def _load_nuts_region_catalog(self) -> list[dict]:
         """Load NUTS region catalog from store attrs (fast) or raw NUTS files (fallback)."""
-        if self._nuts_region_catalog_cache is not None:
-            return [dict(row) for row in self._nuts_region_catalog_cache]
-
-        # Fast path: read precomputed catalog from landscape attrs when available.
-        if self.landscape_store_path.exists():
-            try:
-                g = zarr.open_group(self.landscape_store_path, mode="r")
-                catalog_json = g.attrs.get("cleo_region_catalog_json")
-                if catalog_json:
-                    rows = json.loads(catalog_json)
-                    if isinstance(rows, list):
-                        catalog = []
-                        for row in rows:
-                            if not isinstance(row, dict):
-                                continue
-                            try:
-                                level = int(row.get("level"))
-                            except (TypeError, ValueError):
-                                continue
-                            if level not in self._VALID_NUTS_LEVELS:
-                                continue
-                            name = str(row.get("name", "")).strip()
-                            name_norm = str(row.get("name_norm", "")).strip()
-                            nuts_id = str(row.get("nuts_id", "")).strip()
-                            if name and name_norm and nuts_id:
-                                catalog.append(
-                                    {
-                                        "name": name,
-                                        "name_norm": name_norm,
-                                        "nuts_id": nuts_id,
-                                        "level": level,
-                                    }
-                                )
-                        if catalog:
-                            self._nuts_region_catalog_cache = tuple(catalog)
-                            return [dict(row) for row in catalog]
-                # Backward-compat path for tests/older stores that only provide
-                # legacy normalized-name -> NUTS-ID mapping (default level 2).
-                legacy_index_json = g.attrs.get("cleo_region_name_to_id_json")
-                if legacy_index_json:
-                    try:
-                        legacy_index = json.loads(legacy_index_json)
-                    except json.JSONDecodeError:
-                        legacy_index = None
-                    if isinstance(legacy_index, dict) and legacy_index:
-                        catalog = []
-                        for name_norm, nuts_id in legacy_index.items():
-                            name_norm_s = str(name_norm).strip()
-                            nuts_id_s = str(nuts_id).strip()
-                            if not name_norm_s or not nuts_id_s:
-                                continue
-                            catalog.append(
-                                {
-                                    "name": name_norm_s,
-                                    "name_norm": name_norm_s,
-                                    "nuts_id": nuts_id_s,
-                                    "level": 2,
-                                }
-                            )
-                        if catalog:
-                            self._nuts_region_catalog_cache = tuple(catalog)
-                            return [dict(row) for row in catalog]
-            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-                logger.debug(
-                    "Failed to load NUTS region catalog from landscape store attrs; "
-                    "falling back to raw NUTS catalog loading.",
-                    extra={"landscape_store_path": str(self.landscape_store_path)},
-                    exc_info=True,
-                )
-
-        # Fallback: raw I/O delegated to unify helper.
-        catalog = _read_nuts_region_catalog(self)
-        if not catalog:
-            raise ValueError(
-                "No NUTS regions available for this atlas. "
-                "Ensure NUTS data is present (e.g. run cleo.loaders.load_nuts)."
+        def _log_debug(msg: str) -> None:
+            logger.debug(
+                msg,
+                extra={"landscape_store_path": str(self.landscape_store_path)},
+                exc_info=True,
             )
-        self._nuts_region_catalog_cache = tuple(dict(row) for row in catalog)
-        return [dict(row) for row in catalog]
+
+        catalog, cache = load_nuts_region_catalog_policy(
+            cached_rows=self._nuts_region_catalog_cache,
+            landscape_store_path=self.landscape_store_path,
+            valid_levels=self._VALID_NUTS_LEVELS,
+            read_store_attrs=read_zarr_group_attrs,
+            read_raw_catalog=lambda: _read_nuts_region_catalog(self.path, self.country),
+            log_debug=_log_debug,
+        )
+        self._nuts_region_catalog_cache = cache
+        return catalog
 
     @property
     def nuts_regions(self) -> tuple[NutsRegionName, ...]:
@@ -464,76 +418,29 @@ class Atlas:
         :returns: Tuple of region names tagged with level metadata.
         :raises ValueError: If level is invalid or no regions are available.
         """
-        level_i = self._validate_nuts_level(level)
         catalog = self._load_nuts_region_catalog()
-        rows = [row for row in catalog if int(row["level"]) == level_i]
-        if not rows:
-            raise ValueError(
-                f"No NUTS level {level_i} regions found for atlas country {self.country!r}."
-            )
-
-        # Deterministic and unique by normalized name.
-        seen = set()
-        out: list[NutsRegionName] = []
-        for row in sorted(rows, key=lambda r: (str(r["name"]).casefold(), str(r["nuts_id"]))):
-            key = str(row["name_norm"])
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(NutsRegionName(str(row["name"]), level_i))
-        return tuple(out)
+        return nuts_regions_level_names_policy(
+            level=level,
+            country=self.country,
+            catalog_rows=catalog,
+            validate_level=self._validate_nuts_level,
+            make_region_name=lambda name, level_i: NutsRegionName(name, level_i),
+        )
 
     def _resolve_region_name(self, name: str, *, region_level: int | None = None) -> tuple[str, str, int]:
         """
         Resolve region name to ``(normalized_name, region_id, level)``.
         """
-        name_norm = self._normalize_region_name(name)
         catalog = self._load_nuts_region_catalog()
-        matches = [row for row in catalog if row["name_norm"] == name_norm]
-
-        if region_level is not None:
-            level_i = self._validate_nuts_level(region_level)
-            matches_level = [row for row in matches if int(row["level"]) == level_i]
-            if len(matches_level) == 1:
-                row = matches_level[0]
-                return name_norm, str(row["nuts_id"]), level_i
-            if len(matches_level) > 1:
-                raise ValueError(
-                    f"Region '{name}' is ambiguous within NUTS level {level_i}; "
-                    f"matches IDs: {[str(r['nuts_id']) for r in matches_level]}."
-                )
-            raise ValueError(
-                f"Region '{name}' not found in NUTS level {level_i} for country {self.country!r}."
-            )
-
-        # Default resolution: prefer NUTS-2.
-        default_level = self.DEFAULT_NUTS_LEVEL
-        matches_default = [row for row in matches if int(row["level"]) == default_level]
-        if len(matches_default) == 1:
-            row = matches_default[0]
-            return name_norm, str(row["nuts_id"]), default_level
-        if len(matches_default) > 1:
-            raise ValueError(
-                f"Region '{name}' is ambiguous at default NUTS level {default_level}; "
-                f"pass region_level explicitly."
-            )
-
-        # Fallback to unique match across all levels when not found in default level.
-        if len(matches) == 1:
-            row = matches[0]
-            return name_norm, str(row["nuts_id"]), int(row["level"])
-        if len(matches) > 1:
-            levels = sorted({int(r["level"]) for r in matches})
-            raise ValueError(
-                f"Region '{name}' is ambiguous across NUTS levels {levels}; "
-                f"pass region_level explicitly."
-            )
-
-        available = [str(r) for r in self.nuts_regions[:20]]
-        suffix = "..." if len(self.nuts_regions) > 20 else ""
-        raise ValueError(
-            f"Region '{name}' not found at default NUTS level {default_level}. "
-            f"Available level-{default_level} regions: {available}{suffix}"
+        return resolve_region_name_policy(
+            name=name,
+            region_level=region_level,
+            default_level=self.DEFAULT_NUTS_LEVEL,
+            country=self.country,
+            catalog_rows=catalog,
+            normalize_name=self._normalize_region_name,
+            validate_level=self._validate_nuts_level,
+            default_regions_supplier=lambda: self.nuts_regions_level(self.DEFAULT_NUTS_LEVEL),
         )
 
     def _clone_for_selection(self) -> "Atlas":
@@ -588,37 +495,15 @@ class Atlas:
             clone.select(region=region, region_level=region_level, inplace=True)
             return clone
 
-        if region is not None:
-            inferred_level: int | None = None
-            if isinstance(region, NutsRegionName):
-                inferred_level = int(region.level)
-            elif not isinstance(region, str):
-                raise ValueError(f"region must be a string or None, got {type(region).__name__}")
-
-            if region_level is not None:
-                region_level = self._validate_nuts_level(region_level)
-            if inferred_level is not None and region_level is None:
-                region_level = inferred_level
-            elif inferred_level is not None and region_level != inferred_level:
-                raise ValueError(
-                    f"Conflicting NUTS levels for region {region!r}: "
-                    f"region carries level={inferred_level}, but region_level={region_level}."
-                )
-
-            stripped = region.strip()
-            if not stripped:
-                raise ValueError("region cannot be empty or whitespace-only")
-
-            # Resolve region name to (name_norm, region_id)
-            _name_norm, region_id, _resolved_level = self._resolve_region_name(
-                stripped,
-                region_level=region_level,
-            )
-            self._region_name = stripped  # Store original (stripped) name
-            self._region_id = region_id
-        else:
-            self._region_name = None
-            self._region_id = "__all__"
+        decision = select_region_decision_policy(
+            region=region,
+            region_level=region_level,
+            nuts_region_name_type=NutsRegionName,
+            validate_level=self._validate_nuts_level,
+            resolve_name=lambda name, level: self._resolve_region_name(name, region_level=level),
+        )
+        self._region_name = decision.region_name
+        self._region_id = decision.region_id
 
         # Invalidate domain caches so .data reloads from correct store
         if self._wind_domain is not None:
@@ -875,7 +760,7 @@ class Atlas:
         :returns: Lazy :class:`xarray.Dataset` (no compute performed).
         :raises FileNotFoundError: If the store does not exist.
         """
-        from cleo.results import result_store_path, restore_serialized_string_coords
+        from cleo.results import result_store_path
 
         store_path = result_store_path(
             results_root=Path(self.results_root),
@@ -939,7 +824,7 @@ class Atlas:
         for name, var in {**ds.coords, **ds.data_vars}.items():
             if var.dtype == object or (hasattr(var.dtype, "kind") and var.dtype.kind == "U"):
                 # Convert object/unicode strings to fixed-length bytes for NetCDF compat
-                max_len = max((len(str(v)) for v in var.values.ravel()), default=1)
+                max_len = max((len(str(v)) for v in var.to_numpy().ravel()), default=1)
                 final_encoding[name] = {"dtype": f"S{max_len}"}
         # Merge user-provided encoding (takes precedence)
         final_encoding.update(encoding or {})
@@ -977,80 +862,25 @@ class Atlas:
         :returns: Number of stores deleted.
         """
         base = Path(self.results_root)
-        count = 0
-        scanned = 0
 
-        if metric_name is not None:
-            from cleo.results import validate_result_path_token
+        metric_name_n = metric_name
+        if metric_name_n is not None:
+            metric_name_n = validate_result_path_token(metric_name_n, field="metric_name")
 
-            metric_name = validate_result_path_token(metric_name, field="metric_name")
+        threshold_dt = parse_older_than_policy(older_than)
 
-        # Determine which run directories to scan
-        if run_id:
-            from cleo.results import result_run_dir_path
+        stores = list_result_stores(base, run_id=run_id, metric_name=None)
+        selected, scanned = select_result_stores_for_cleanup_policy(
+            stores=stores,
+            metric_name=metric_name_n,
+            threshold_dt=threshold_dt,
+            read_store_datetime=read_result_store_datetime,
+        )
 
-            run_dir = result_run_dir_path(results_root=base, run_id=run_id)
-            runs = [run_dir] if run_dir.exists() else []
-        else:
-            runs = sorted([p for p in base.iterdir() if p.is_dir()])
-
-        # Parse older_than threshold if specified
-        threshold_dt = None
-        if older_than:
-            try:
-                # Try ISO format first
-                threshold_dt = datetime.datetime.fromisoformat(older_than)
-            except ValueError:
-                # Try date-only format
-                threshold_dt = datetime.datetime.strptime(older_than, "%Y-%m-%d")
-
-        for run_dir in runs:
-            for store in sorted(run_dir.glob("*.zarr")):
-                scanned += 1
-                # Filter by metric_name if specified
-                if metric_name and store.name != f"{metric_name}.zarr":
-                    continue
-
-                # Filter by age if older_than specified
-                if threshold_dt:
-                    store_dt = None
-                    # Try to get created_at from zarr attrs
-                    try:
-                        g = zarr.open_group(store, mode="r")
-                        created_at = g.attrs.get("created_at")
-                        if created_at:
-                            store_dt = datetime.datetime.fromisoformat(
-                                created_at.replace("Z", "+00:00")
-                            )
-                    except (OSError, ValueError, TypeError, KeyError):
-                        logger.debug(
-                            "Falling back to mtime for result-store age check.",
-                            extra={"store": str(store)},
-                            exc_info=True,
-                        )
-
-                    # Fallback to mtime
-                    if store_dt is None:
-                        mtime = store.stat().st_mtime
-                        store_dt = datetime.datetime.fromtimestamp(mtime)
-
-                    # Skip if not older than threshold
-                    cmp_threshold = threshold_dt
-                    if store_dt.tzinfo is not None and cmp_threshold.tzinfo is None:
-                        cmp_threshold = cmp_threshold.replace(tzinfo=datetime.timezone.utc)
-                    elif store_dt.tzinfo is None and cmp_threshold.tzinfo is not None:
-                        store_dt = store_dt.replace(tzinfo=datetime.timezone.utc)
-
-                    if store_dt >= cmp_threshold:
-                        continue
-
-                # Delete the store
-                shutil.rmtree(store)
-                count += 1
-
-            # Clean up empty run directories
-            if run_dir.exists() and not any(run_dir.iterdir()):
-                run_dir.rmdir()
+        for store in selected:
+            delete_result_store(store)
+        count = len(selected)
+        prune_empty_run_dirs(base)
 
         if count == 0:
             logger.info(
@@ -1059,7 +889,7 @@ class Atlas:
                 "Note: atlas.wind.compute(...).cache() writes to wind.zarr, not results_root.",
                 scanned,
                 run_id,
-                metric_name,
+                metric_name_n,
                 older_than,
                 base,
             )
@@ -1069,7 +899,7 @@ class Atlas:
                 count,
                 scanned,
                 run_id,
-                metric_name,
+                metric_name_n,
                 older_than,
                 base,
             )
@@ -1104,8 +934,6 @@ class Atlas:
             ``older_than`` has invalid format.
         """
         regions_root = self.path / "regions"
-        deleted = 0
-        scanned = 0
 
         if not regions_root.exists():
             logger.info(
@@ -1118,103 +946,24 @@ class Atlas:
             )
             return 0
 
-        # Determine which region directories to scan.
-        if region is not None:
-            if not isinstance(region, str):
-                raise ValueError(f"region must be a string or None, got {type(region).__name__}")
-            region_stripped = region.strip()
-            if not region_stripped:
-                raise ValueError("region cannot be empty or whitespace-only")
-            _name_norm, region_id, _level = self._resolve_region_name(region_stripped)
-            region_dir = regions_root / region_id
-            region_dirs = [region_dir] if region_dir.exists() and region_dir.is_dir() else []
-        else:
-            region_dirs = sorted([p for p in regions_root.iterdir() if p.is_dir()])
+        region_id_filter = resolve_region_cleanup_id_policy(
+            region=region,
+            resolve_region_name=lambda value: self._resolve_region_name(value),
+        )
+        region_dirs = list_region_dirs(regions_root)
+        if region_id_filter is not None:
+            region_dirs = [p for p in region_dirs if p.name == region_id_filter]
 
-        # Parse older_than threshold if specified.
-        threshold_dt = None
-        if older_than:
-            try:
-                threshold_dt = datetime.datetime.fromisoformat(older_than)
-            except ValueError:
-                threshold_dt = datetime.datetime.strptime(older_than, "%Y-%m-%d")
-
-        for region_dir in region_dirs:
-            scanned += 1
-            wind_store = region_dir / "wind.zarr"
-            land_store = region_dir / "landscape.zarr"
-
-            wind_exists = wind_store.exists() and wind_store.is_dir()
-            land_exists = land_store.exists() and land_store.is_dir()
-
-            wind_complete = False
-            land_complete = False
-
-            if wind_exists:
-                try:
-                    g_wind = zarr.open_group(wind_store, mode="r")
-                    wind_complete = g_wind.attrs.get("store_state") == "complete"
-                except (OSError, ValueError, TypeError, KeyError):
-                    wind_complete = False
-                    logger.debug(
-                        "Failed to read wind region store_state; treating as incomplete.",
-                        extra={"wind_store": str(wind_store)},
-                        exc_info=True,
-                    )
-
-            if land_exists:
-                try:
-                    g_land = zarr.open_group(land_store, mode="r")
-                    land_complete = g_land.attrs.get("store_state") == "complete"
-                except (OSError, ValueError, TypeError, KeyError):
-                    land_complete = False
-                    logger.debug(
-                        "Failed to read landscape region store_state; treating as incomplete.",
-                        extra={"land_store": str(land_store)},
-                        exc_info=True,
-                    )
-
-            is_complete_region = wind_exists and land_exists and wind_complete and land_complete
-            if not include_incomplete and not is_complete_region:
-                continue
-
-            if threshold_dt is not None:
-                store_dt = None
-
-                # Prefer created_at from wind store, then landscape store.
-                for store_path in (wind_store, land_store):
-                    try:
-                        g = zarr.open_group(store_path, mode="r")
-                        created_at = g.attrs.get("created_at")
-                        if created_at:
-                            store_dt = datetime.datetime.fromisoformat(
-                                str(created_at).replace("Z", "+00:00")
-                            )
-                            break
-                    except (OSError, ValueError, TypeError, KeyError):
-                        logger.debug(
-                            "Failed to read region store created_at; trying next fallback.",
-                            extra={"store_path": str(store_path)},
-                            exc_info=True,
-                        )
-                        continue
-
-                # Fallback to region directory mtime.
-                if store_dt is None:
-                    store_dt = datetime.datetime.fromtimestamp(region_dir.stat().st_mtime)
-
-                # Normalize timezone awareness for safe comparison.
-                cmp_threshold = threshold_dt
-                if store_dt.tzinfo is not None and cmp_threshold.tzinfo is None:
-                    cmp_threshold = cmp_threshold.replace(tzinfo=datetime.timezone.utc)
-                elif store_dt.tzinfo is None and cmp_threshold.tzinfo is not None:
-                    store_dt = store_dt.replace(tzinfo=datetime.timezone.utc)
-
-                if store_dt >= cmp_threshold:
-                    continue
-
-            shutil.rmtree(region_dir)
-            deleted += 1
+        threshold_dt = parse_older_than_policy(older_than)
+        selected, scanned = select_region_dirs_for_cleanup_policy(
+            region_dirs=region_dirs,
+            include_incomplete=include_incomplete,
+            threshold_dt=threshold_dt,
+            read_region_meta=read_region_store_meta,
+        )
+        for region_dir in selected:
+            delete_region_dir(region_dir)
+        deleted = len(selected)
 
         if deleted == 0:
             logger.info(
@@ -1400,8 +1149,8 @@ class Atlas:
         name_col = "NAME_LATN"
         id_col = "NUTS_ID" if "NUTS_ID" in feasible_regions.columns else None
 
-        valid_names = set(feasible_regions[name_col].astype(str).values)
-        valid_ids = set(feasible_regions[id_col].astype(str).values) if id_col else set()
+        valid_names = set(feasible_regions[name_col].astype(str).to_numpy())
+        valid_ids = set(feasible_regions[id_col].astype(str).to_numpy()) if id_col else set()
 
         invalid_regions = [
             r for r in region_list

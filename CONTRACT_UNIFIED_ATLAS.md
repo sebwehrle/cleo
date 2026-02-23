@@ -362,6 +362,7 @@ Landscape materialization must source elevation deterministically using:
 
 - `cleo/unification/**` is the canonical location for raw geospatial/base-store/region-store I/O.
 - `cleo/results.py` is the canonical location for results-store persistence/open/export internals.
+- `cleo/atlas_policies/**` is policy-only and must not perform direct raw/store/filesystem I/O.
 - `cleo/atlas.py` is orchestration/control-plane only and should delegate storage operations to dedicated I/O helpers.
 - `cleo/domains.py` should access stores through storage helper functions (not direct raw-I/O call sites).
 - `cleo/assess.py` remains pure compute only: no raw/store/network I/O and no eager evaluation triggers.

@@ -70,3 +70,20 @@ def test_read_nuts_region_catalog_filters_deduplicates_and_sorts(
     assert rows[0]["name_norm"] == "niederösterreich"
     assert rows[1]["name_norm"] == "wien"
 
+
+def test_read_nuts_region_catalog_accepts_explicit_path_and_country(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    shp = tmp_path / "data" / "nuts" / "dummy.shp"
+    shp.parent.mkdir(parents=True, exist_ok=True)
+    shp.write_text("x", encoding="utf-8")
+
+    gdf = gpd.GeoDataFrame(
+        [{"CNTR_CODE": "AT", "NAME_LATN": "Wien", "NUTS_ID": "AT13", "LEVL_CODE": 2}],
+        geometry=[Point(0, 0)],
+        crs="EPSG:4326",
+    )
+    monkeypatch.setattr("cleo.unification.nuts_io._read_vector_file", lambda _p: gdf)
+
+    rows = _read_nuts_region_catalog(tmp_path, "AUT")
+    assert rows == [{"name": "Wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2}]

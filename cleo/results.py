@@ -2,6 +2,7 @@
 import json
 import datetime
 import logging
+import shutil
 from pathlib import Path
 
 import zarr
@@ -147,6 +148,73 @@ def result_store_path(*, results_root: Path, run_id: str, metric_name: str) -> P
             f"result store path resolves outside results_root: run_id={run_id!r}, metric_name={metric_name!r}"
         )
     return store_path
+
+
+def list_result_stores(
+    results_root: Path,
+    *,
+    run_id: str | None = None,
+    metric_name: str | None = None,
+) -> list[Path]:
+    """List candidate result stores under ``results_root``."""
+    base = Path(results_root)
+    metric_filter = None
+    if metric_name is not None:
+        metric_filter = validate_result_path_token(metric_name, field="metric_name")
+
+    if run_id:
+        run_dir = result_run_dir_path(results_root=base, run_id=run_id)
+        runs = [run_dir] if run_dir.exists() and run_dir.is_dir() else []
+    else:
+        runs = sorted([p for p in base.iterdir() if p.is_dir()]) if base.exists() else []
+
+    stores: list[Path] = []
+    for run_dir in runs:
+        for store in sorted(run_dir.glob("*.zarr")):
+            if metric_filter is not None and store.name != f"{metric_filter}.zarr":
+                continue
+            stores.append(store)
+    return stores
+
+
+def read_result_store_datetime(store_path: Path) -> datetime.datetime:
+    """Read result-store timestamp from attrs with mtime fallback."""
+    store_dt: datetime.datetime | None = None
+    try:
+        g = zarr.open_group(store_path, mode="r")
+        created_at = g.attrs.get("created_at")
+        if created_at:
+            store_dt = datetime.datetime.fromisoformat(
+                str(created_at).replace("Z", "+00:00")
+            )
+    except (OSError, ValueError, TypeError, KeyError):
+        logger.debug(
+            "Falling back to mtime for result-store age check.",
+            extra={"store": str(store_path)},
+            exc_info=True,
+        )
+
+    if store_dt is None:
+        store_dt = datetime.datetime.fromtimestamp(store_path.stat().st_mtime)
+    return store_dt
+
+
+def delete_result_store(path: Path) -> None:
+    """Delete a result store directory."""
+    shutil.rmtree(path)
+
+
+def prune_empty_run_dirs(results_root: Path) -> int:
+    """Remove empty run directories under ``results_root``."""
+    base = Path(results_root)
+    if not base.exists():
+        return 0
+    removed = 0
+    for run_dir in sorted([p for p in base.iterdir() if p.is_dir()]):
+        if not any(run_dir.iterdir()):
+            run_dir.rmdir()
+            removed += 1
+    return removed
 
 
 def persist_result(

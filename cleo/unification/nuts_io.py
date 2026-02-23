@@ -22,17 +22,31 @@ def _read_vector_file(path: Path | str) -> gpd.GeoDataFrame:
     return gpd.read_file(path)
 
 
-def _read_nuts_region_catalog(atlas) -> list[dict[str, Any]]:
+def _read_nuts_region_catalog(
+    atlas_or_path,
+    country: str | None = None,
+) -> list[dict[str, Any]]:
     """Read NUTS region catalog for the atlas country from raw NUTS files.
 
     Returns rows with keys: ``name``, ``name_norm``, ``nuts_id``, ``level``.
     Only levels 1, 2, and 3 are included.
 
-    :param atlas: Atlas-like object exposing ``path`` and ``country``.
+    :param atlas_or_path:
+        Atlas-like object exposing ``path``/``country`` or a filesystem path.
+    :param country:
+        ISO3 country code when ``atlas_or_path`` is a path-like value.
     :returns: Deterministically sorted region catalog rows.
     :raises FileNotFoundError: If no NUTS shapefile is available.
     """
-    nuts_dir = Path(atlas.path) / "data" / "nuts"
+    if country is None:
+        atlas_like = atlas_or_path
+        atlas_path = Path(atlas_like.path)
+        country_code = str(atlas_like.country)
+    else:
+        atlas_path = Path(atlas_or_path)
+        country_code = str(country)
+
+    nuts_dir = atlas_path / "data" / "nuts"
     shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
     if not shp_files:
         raise FileNotFoundError(
@@ -41,7 +55,8 @@ def _read_nuts_region_catalog(atlas) -> list[dict[str, Any]]:
         )
 
     nuts = _read_vector_file(shp_files[0])
-    alpha_2 = pct.countries.get(alpha_3=atlas.country).alpha_2
+    country_entry = pct.countries.get(alpha_3=country_code)
+    alpha_2 = country_entry.alpha_2 if country_entry is not None else None
     if alpha_2 is None:
         return []
 

@@ -35,7 +35,7 @@ def test_load_nuts_region_catalog_falls_back_when_legacy_index_json_is_invalid(
     fallback_catalog = [
         {"name": "Wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2},
     ]
-    monkeypatch.setattr("cleo.atlas._read_nuts_region_catalog", lambda _atlas: fallback_catalog)
+    monkeypatch.setattr("cleo.atlas._read_nuts_region_catalog", lambda _path, _country: fallback_catalog)
 
     rows = atlas._load_nuts_region_catalog()
     assert rows == fallback_catalog
@@ -59,7 +59,7 @@ def test_clean_results_falls_back_to_mtime_when_store_attrs_unreadable(
             raise OSError("cannot read attrs")
         return real_open_group(path, *args, **kwargs)
 
-    monkeypatch.setattr("cleo.atlas.zarr.open_group", _open_group_fail_for_store)
+    monkeypatch.setattr("cleo.results.zarr.open_group", _open_group_fail_for_store)
 
     deleted = atlas.clean_results(older_than="2021-01-01")
     assert deleted == 1
@@ -74,7 +74,10 @@ def test_clean_regions_treats_unreadable_store_state_as_incomplete(
     (region_dir / "wind.zarr").mkdir(parents=True, exist_ok=True)
     (region_dir / "landscape.zarr").mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("cleo.atlas.zarr.open_group", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+    monkeypatch.setattr(
+        "cleo.unification.store_io.zarr.open_group",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+    )
     deleted = atlas.clean_regions(include_incomplete=False)
     assert deleted == 0
     assert region_dir.exists()
@@ -105,4 +108,3 @@ def test_ensure_region_stores_retries_with_region_name_and_migrates_legacy_dir(
     expected = tmp_path / "regions" / "AT12"
     assert (expected / "wind.zarr").exists()
     assert (expected / "landscape.zarr").exists()
-

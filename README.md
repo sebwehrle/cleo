@@ -169,7 +169,14 @@ Atlas(
 - `atlas.landscape.data`
   - active landscape dataset.
 - `atlas.landscape.add(name, source_path, *, kind="raster", params=None, if_exists="error")`
-  - stages a landscape candidate and returns `LandscapeAddResult`.
+  - stages a raster landscape candidate and returns `LandscapeAddResult`.
+  - `add(...)` is raster-only (`kind` must be `"raster"`); use `rasterize(...)` for vector sources.
+  - staged variables are visible in `atlas.landscape.data` before store writes.
+  - `if_exists`: `"error"|"replace"|"noop"`.
+- `atlas.landscape.rasterize(shape, *, name, column=None, all_touched=False, if_exists="error")`
+  - stages a vector-rasterized landscape candidate and returns `LandscapeAddResult`.
+  - `shape` accepts path-like vector sources or a `geopandas.GeoDataFrame`.
+  - `column=None` burns binary coverage (`1.0`); otherwise burns numeric values from `column`.
   - staged variables are visible in `atlas.landscape.data` before store writes.
   - `if_exists`: `"error"|"replace"|"noop"`.
 - `atlas.landscape.clear_staged()`
@@ -189,6 +196,19 @@ Atlas(
 - `.materialize(if_exists=None)`
   - commits the staged variable to the active landscape store.
   - staged landscape overlays are cleared by `atlas.select(...)`, `atlas.build()`, `atlas.build_canonical()`, and `atlas.build_clc()`.
+
+Vector rasterization example:
+
+```python
+op = atlas.landscape.rasterize(
+    "/path/to/stays.geojson",
+    name="overnight_stays",
+    column="overnight_stays",
+    all_touched=False,
+    if_exists="replace",
+)
+da = op.materialize()
+```
 
 ### Results and Cleanup
 

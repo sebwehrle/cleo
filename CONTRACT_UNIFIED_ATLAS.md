@@ -240,8 +240,25 @@ da_mat = op.materialize()
 atlas.landscape.clear_staged()
 ```
 
+Rasterizing vector sources (region-scoped derived data):
+
+```python
+op = atlas.landscape.rasterize(
+    "/path/to/stays.geojson",
+    name="overnight_stays",
+    column="overnight_stays",
+    all_touched=False,
+)
+da_stage = op.data
+da_mat = op.materialize()
+```
+
 Normative:
-- `add(...)` stages a lazy candidate and returns an operation object with `.data` and `.materialize(...)`.
+- `add(...)` stages a lazy raster candidate and returns an operation object with `.data` and `.materialize(...)`.
+- `add(...)` is raster-only (`kind="raster"`); vector sources must use `rasterize(...)`.
+- `rasterize(...)` stages a lazy vector-rasterized candidate and returns an operation object with `.data` and `.materialize(...)`.
+- `rasterize(...)` accepts path-like vector sources or `geopandas.GeoDataFrame`.
+- `rasterize(column=None)` burns coverage (`1.0`); `column="<numeric_column>"` burns numeric column values.
 - Staged variables must surface in `atlas.landscape.data[name]` before materialization.
 - If a region selection is active, added rasters must be written to the **derived region store** for that region.
 - `clear_staged()` must remove staged landscape overlays from `atlas.landscape.data`.

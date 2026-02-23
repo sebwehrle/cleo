@@ -101,6 +101,27 @@ class Unifier:
             if_exists=if_exists,
         )
 
+    def register_landscape_vector_source(
+        self,
+        atlas,
+        *,
+        name: str,
+        shape,
+        column: str | None = None,
+        all_touched: bool = False,
+        if_exists: str = "error",
+    ) -> bool:
+        """Register a vector source in __manifest__/sources."""
+        return landscape_materializer.register_landscape_vector_source(
+            self,
+            atlas,
+            name=name,
+            shape=shape,
+            column=column,
+            all_touched=all_touched,
+            if_exists=if_exists,
+        )
+
     def materialize_landscape_variable(
         self,
         atlas,

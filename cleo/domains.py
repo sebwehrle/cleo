@@ -510,7 +510,8 @@ class LandscapeDomain:
     Domain object for landscape data access.
 
     Provides lazy, cached access to the active landscape store.
-    The .data property overlays staged variables from add()/add_clc_category().
+    The .data property overlays staged variables from
+    add()/rasterize()/add_clc_category().
     """
 
     def __init__(self, atlas):
@@ -621,6 +622,47 @@ class LandscapeDomain:
         self._data = None
         return self.data[name]
 
+    def _stage_registered_variable(
+        self,
+        *,
+        name: str,
+        if_exists: str,
+        u,
+        store_ds: xr.Dataset,
+        staged_exists: bool,
+        store_exists: bool,
+    ) -> LandscapeAddResult:
+        """Stage a prepared variable after source registration."""
+        if if_exists == "noop":
+            if staged_exists:
+                return LandscapeAddResult(
+                    self,
+                    name,
+                    self._staged_overlays[name],
+                    if_exists,
+                )
+            if store_exists:
+                return LandscapeAddResult(
+                    self,
+                    name,
+                    store_ds[name],
+                    if_exists,
+                    noop_existing=True,
+                )
+
+        staged = u.prepare_landscape_variable_data(
+            self._atlas,
+            variable_name=name,
+        )
+        staged = staged.reset_coords(drop=True)
+        self._staged_overlays[name] = staged
+        return LandscapeAddResult(
+            self,
+            name,
+            staged,
+            if_exists,
+        )
+
     def add(
         self,
         name: str,
@@ -630,8 +672,17 @@ class LandscapeDomain:
         params: dict | None = None,
         if_exists: str = "error",
     ) -> LandscapeAddResult:
-        """Stage a landscape variable candidate and return an operation object."""
+        """
+        Stage a raster landscape variable candidate and return an operation object.
+
+        Vector sources are exposed via :meth:`rasterize`.
+        """
         self._validate_if_exists(if_exists)
+        if kind != "raster":
+            raise ValueError(
+                "add(...) only supports kind='raster'. "
+                "Use atlas.landscape.rasterize(...) for vector sources."
+            )
 
         atlas = self._atlas
         if not getattr(atlas, "_canonical_ready", False):
@@ -662,35 +713,68 @@ class LandscapeDomain:
             params=params or {},
             if_exists=if_exists,
         )
+        return self._stage_registered_variable(
+            name=name,
+            if_exists=if_exists,
+            u=u,
+            store_ds=store_ds,
+            staged_exists=staged_exists,
+            store_exists=store_exists,
+        )
 
-        if if_exists == "noop":
+    def rasterize(
+        self,
+        shape,
+        *,
+        name: str,
+        column: str | None = None,
+        all_touched: bool = False,
+        if_exists: str = "error",
+    ) -> LandscapeAddResult:
+        """
+        Stage a vector-rasterized landscape variable and return an operation object.
+
+        The input ``shape`` may be a path-like vector source or a GeoDataFrame.
+        Rasterization aligns to the atlas wind/landscape grid.
+        """
+        self._validate_if_exists(if_exists)
+
+        atlas = self._atlas
+        if not getattr(atlas, "_canonical_ready", False):
+            atlas.build_canonical()
+
+        store_ds = self._store_data()
+        staged_exists = name in self._staged_overlays
+        store_exists = name in store_ds.data_vars
+
+        if if_exists == "error":
             if staged_exists:
-                return LandscapeAddResult(
-                    self,
-                    name,
-                    self._staged_overlays[name],
-                    if_exists,
+                raise ValueError(
+                    f"Variable {name!r} is already staged. "
+                    "Use if_exists='replace' to overwrite or if_exists='noop' to keep current staged state."
                 )
             if store_exists:
-                return LandscapeAddResult(
-                    self,
-                    name,
-                    store_ds[name],
-                    if_exists,
-                    noop_existing=True,
+                raise ValueError(
+                    f"Variable {name!r} already exists in landscape.zarr.\n"
+                    "  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
                 )
 
-        staged = u.prepare_landscape_variable_data(
+        u = self._build_unifier()
+        u.register_landscape_vector_source(
             atlas,
-            variable_name=name,
+            name=name,
+            shape=shape,
+            column=column,
+            all_touched=all_touched,
+            if_exists=if_exists,
         )
-        staged = staged.reset_coords(drop=True)
-        self._staged_overlays[name] = staged
-        return LandscapeAddResult(
-            self,
-            name,
-            staged,
-            if_exists,
+        return self._stage_registered_variable(
+            name=name,
+            if_exists=if_exists,
+            u=u,
+            store_ds=store_ds,
+            staged_exists=staged_exists,
+            store_exists=store_exists,
         )
 
     def add_clc_category(

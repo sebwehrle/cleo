@@ -12,8 +12,10 @@ import numpy as np
 import rioxarray as rxr
 import xarray as xr
 import zarr
-from rasterio.enums import Resampling
+from rasterio.enums import MergeAlg, Resampling
+from rasterio.features import rasterize as rio_rasterize
 
+from cleo.spatial import canonical_crs_str, to_crs_if_needed
 from cleo.store import atomic_dir
 from cleo.unification.fingerprint import (
     fingerprint_path_mtime_size,
@@ -37,6 +39,373 @@ from cleo.unification.materializers.shared import _aoi_geom_or_none, _now_iso, _
 from cleo.unification.vertical_policy import HASH_ALGORITHM, HASH_SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
+
+
+def _load_vector_shape(shape):
+    """Load a vector shape from path-like input or GeoDataFrame-like object."""
+    try:
+        import geopandas as gpd
+    except ImportError as exc:  # pragma: no cover - exercised in optional-deps envs
+        raise RuntimeError(
+            "geopandas is required for vector rasterization support."
+        ) from exc
+
+    if isinstance(shape, (str, Path)):
+        return gpd.read_file(shape)
+
+    if isinstance(shape, gpd.GeoDataFrame):
+        return shape.copy()
+
+    raise TypeError(
+        "shape must be a path (str|Path) or a geopandas.GeoDataFrame."
+    )
+
+
+def _vector_values_for_column(gdf, *, column: str | None) -> list[float]:
+    """Return per-feature burn values for vector rasterization."""
+    if column is None:
+        return [1.0] * len(gdf)
+
+    if column not in gdf.columns:
+        available = [c for c in gdf.columns if c != "geometry"]
+        raise ValueError(
+            f"Column {column!r} not found in shape. Available columns: {available!r}"
+        )
+
+    vals = gdf[column].to_numpy()
+    if not np.issubdtype(vals.dtype, np.number):
+        raise TypeError(
+            f"Column {column!r} must be numeric, got dtype={vals.dtype!r}."
+        )
+    out: list[float] = []
+    for idx, raw in enumerate(vals.tolist()):
+        value = float(raw)
+        if not np.isfinite(value):
+            raise ValueError(
+                f"Column {column!r} contains non-finite value at row {idx}: {value!r}."
+            )
+        out.append(value)
+    return out
+
+
+def _vector_semantic_payload(
+    gdf,
+    *,
+    column: str | None,
+    all_touched: bool,
+) -> dict[str, Any]:
+    """Build deterministic semantic payload for vector source hashing."""
+    if gdf.crs is None:
+        raise ValueError("Input shape has no CRS; cannot rasterize safely.")
+
+    values = _vector_values_for_column(gdf, column=column)
+    features: list[dict[str, Any]] = []
+    for geom, value in zip(gdf.geometry.tolist(), values, strict=True):
+        if geom is None:
+            raise ValueError("Input shape contains null geometry; cannot rasterize.")
+        features.append(
+            {
+                "geometry_wkb_hex": geom.wkb_hex,
+                "value": value,
+            }
+        )
+
+    return {
+        "schema_version": 1,
+        "crs": canonical_crs_str(gdf.crs),
+        "column": column,
+        "all_touched": bool(all_touched),
+        "features": features,
+    }
+
+
+def _vector_semantic_hash(
+    gdf,
+    *,
+    column: str | None,
+    all_touched: bool,
+) -> str:
+    """Compute deterministic semantic hash for a vector source."""
+    payload = _vector_semantic_payload(
+        gdf,
+        column=column,
+        all_touched=all_touched,
+    )
+    blob = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _canonical_vector_source_artifact(
+    atlas,
+    *,
+    shape,
+    column: str | None,
+    all_touched: bool,
+) -> tuple[Path, str]:
+    """Normalize vector input to canonical artifact path + semantic fingerprint."""
+    gdf = _load_vector_shape(shape)
+    if gdf.crs is None:
+        raise ValueError("Input shape has no CRS; cannot rasterize safely.")
+
+    gdf = to_crs_if_needed(gdf, atlas.crs)
+    gdf = gdf.reset_index(drop=True)
+
+    semantic_hash = _vector_semantic_hash(
+        gdf,
+        column=column,
+        all_touched=all_touched,
+    )
+
+    out_dir = Path(atlas.path) / "intermediates" / "vector_sources"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{semantic_hash}.geojson"
+
+    if not out_path.exists():
+        cols = ["geometry"] if column is None else [column, "geometry"]
+        gdf.loc[:, cols].to_file(out_path, driver="GeoJSON")
+
+    return out_path, semantic_hash
+
+
+def _register_landscape_source_entry(
+    *,
+    atlas,
+    name: str,
+    kind: str,
+    source_path: Path,
+    params: dict,
+    fingerprint: str,
+    if_exists: str,
+) -> bool:
+    """Register/update one landscape source entry in manifest."""
+    if kind not in {"raster", "vector"}:
+        raise ValueError(f"Unsupported landscape source kind: {kind!r}")
+
+    valid_if_exists = {"error", "replace", "noop"}
+    if if_exists not in valid_if_exists:
+        raise ValueError(
+            f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
+        )
+
+    store_path = Path(atlas.path) / "landscape.zarr"
+    root = zarr.open_group(store_path, mode="r")
+    if root.attrs.get("store_state") != "complete":
+        raise RuntimeError(
+            "landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first."
+        )
+
+    source_id = f"land:{kind}:{name}"
+    other_kind = "vector" if kind == "raster" else "raster"
+    other_source_id = f"land:{other_kind}:{name}"
+    params_json = _stable_json(params)
+
+    init_manifest(store_path)
+    manifest = _read_manifest(store_path)
+    existing_sources = manifest.get("sources", [])
+    source_by_id = {s["source_id"]: s for s in existing_sources}
+
+    if other_source_id in source_by_id:
+        if if_exists != "replace":
+            raise ValueError(
+                f"Variable {name!r} is already registered as {other_kind!r} source.\n"
+                f"  Existing source_id: {other_source_id!r}\n"
+                "  Use if_exists='replace' to replace with new source kind."
+            )
+        existing_sources = [
+            src for src in existing_sources if src["source_id"] != other_source_id
+        ]
+        source_by_id.pop(other_source_id, None)
+
+    if source_id in source_by_id:
+        existing = source_by_id[source_id]
+        existing_kind = existing.get("kind", "")
+        existing_path = existing.get("path", "")
+        existing_params = existing.get("params_json", "")
+        existing_fingerprint = existing.get("fingerprint", "")
+
+        exact_match = (
+            existing_kind == kind
+            and existing_path == str(source_path)
+            and existing_params == params_json
+            and existing_fingerprint == fingerprint
+        )
+
+        if if_exists == "noop":
+            if exact_match:
+                return False
+            raise ValueError(
+                f"Source {source_id!r} already registered with different configuration.\n"
+                f"  Existing: path={existing_path!r}, params={existing_params!r}, "
+                f"fingerprint={existing_fingerprint!r}\n"
+                f"  New: path={str(source_path)!r}, params={params_json!r}, "
+                f"fingerprint={fingerprint!r}\n"
+                "  Use if_exists='replace' to overwrite."
+            )
+
+        if if_exists == "error":
+            config_matches = (
+                existing_path == str(source_path) and existing_params == params_json
+            )
+            if not config_matches:
+                raise ValueError(
+                    f"Source {source_id!r} already registered with different configuration.\n"
+                    f"  Existing: path={existing_path!r}, params={existing_params!r}\n"
+                    f"  New: path={str(source_path)!r}, params={params_json!r}\n"
+                    f"  Use if_exists='replace' to overwrite."
+                )
+            return False
+
+    new_source = {
+        "source_id": source_id,
+        "name": name,
+        "kind": kind,
+        "path": str(source_path),
+        "params_json": params_json,
+        "fingerprint": fingerprint,
+    }
+
+    updated_sources = []
+    source_updated = False
+    for src in existing_sources:
+        if src["source_id"] == source_id:
+            updated_sources.append(new_source)
+            source_updated = True
+        else:
+            updated_sources.append(src)
+    if not source_updated:
+        updated_sources.append(new_source)
+
+    manifest["sources"] = updated_sources
+    _write_manifest_atomic(store_path, manifest)
+    return True
+
+
+def _resolve_landscape_source_for_variable(
+    *,
+    manifest: dict,
+    variable_name: str,
+) -> tuple[str, dict]:
+    """Resolve the registered source for a variable name across source kinds."""
+    sources = manifest.get("sources", [])
+    source_by_id = {s["source_id"]: s for s in sources}
+    candidates = [
+        sid
+        for sid in (
+            f"land:raster:{variable_name}",
+            f"land:vector:{variable_name}",
+        )
+        if sid in source_by_id
+    ]
+
+    if not candidates:
+        raise KeyError(
+            f"No registered source for variable {variable_name!r}. "
+            "Call register_landscape_source/register_landscape_vector_source first."
+        )
+    if len(candidates) > 1:
+        raise ValueError(
+            f"Multiple sources registered for variable {variable_name!r}: {candidates!r}. "
+            "Use if_exists='replace' to keep a single source kind."
+        )
+
+    source_id = candidates[0]
+    return source_id, source_by_id[source_id]
+
+
+def _current_landscape_source_fingerprint(
+    *,
+    atlas,
+    kind: str,
+    source_path: Path,
+    params: dict,
+) -> str:
+    """Compute current source fingerprint for noop/exact-match checks."""
+    if kind == "raster":
+        return fingerprint_path_mtime_size(source_path)
+    if kind != "vector":
+        raise ValueError(f"Unsupported source kind {kind!r}")
+
+    column = params.get("column")
+    if column is not None and not isinstance(column, str):
+        raise TypeError(
+            f"Vector source params['column'] must be str|None, got {type(column).__name__}."
+        )
+    all_touched = bool(params.get("all_touched", False))
+    gdf = _load_vector_shape(source_path)
+    if gdf.crs is None:
+        raise ValueError(
+            f"Vector source {source_path} has no CRS; cannot materialize."
+        )
+    gdf = to_crs_if_needed(gdf, atlas.crs)
+    gdf = gdf.reset_index(drop=True)
+    return _vector_semantic_hash(
+        gdf,
+        column=column,
+        all_touched=all_touched,
+    )
+
+
+def _prepare_vector_landscape_variable_data(
+    *,
+    atlas,
+    variable_name: str,
+    source_path: Path,
+    params: dict,
+    wind_ref: xr.DataArray,
+    valid_mask: xr.DataArray,
+    chunk_policy: dict,
+) -> xr.DataArray:
+    """Prepare a vector-sourced landscape variable without writing to store."""
+    gdf = _load_vector_shape(source_path)
+    if gdf.crs is None:
+        raise RuntimeError(
+            f"Source vector {source_path} has no CRS; cannot materialize."
+        )
+
+    column = params.get("column")
+    if column is not None and not isinstance(column, str):
+        raise TypeError(
+            f"Vector source params['column'] must be str|None, got {type(column).__name__}."
+        )
+    all_touched = bool(params.get("all_touched", False))
+
+    gdf = to_crs_if_needed(gdf, wind_ref.rio.crs)
+    burn_values = _vector_values_for_column(gdf, column=column)
+    shapes = [
+        (geom, value)
+        for geom, value in zip(gdf.geometry.tolist(), burn_values, strict=True)
+    ]
+
+    transform = wind_ref.rio.transform(recalc=True)
+    out_shape = (int(wind_ref.sizes["y"]), int(wind_ref.sizes["x"]))
+    burned = rio_rasterize(
+        shapes=shapes,
+        out_shape=out_shape,
+        transform=transform,
+        fill=0.0,
+        all_touched=all_touched,
+        merge_alg=MergeAlg.replace,
+        dtype="float32",
+    )
+
+    da = xr.DataArray(
+        burned,
+        dims=("y", "x"),
+        coords={"y": wind_ref["y"].values, "x": wind_ref["x"].values},
+        name=variable_name,
+    )
+    da = da.astype(np.float32)
+    da = da.rio.write_transform(transform).rio.write_crs(wind_ref.rio.crs)
+    da = da.where(valid_mask, np.nan)
+
+    chunk_y = chunk_policy.get("y", 1024)
+    chunk_x = chunk_policy.get("x", 1024)
+    return da.chunk({"y": chunk_y, "x": chunk_x})
 
 
 def materialize_landscape(unifier, atlas) -> None:
@@ -308,109 +677,46 @@ def register_landscape_source(
     """Register a new landscape source in __manifest__/sources."""
     if kind != "raster":
         raise ValueError(f"Only kind='raster' supported in v1; got {kind!r}")
-
-    valid_if_exists = {"error", "replace", "noop"}
-    if if_exists not in valid_if_exists:
-        raise ValueError(
-            f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
-        )
-
-    store_path = Path(atlas.path) / "landscape.zarr"
-
-    # Require complete landscape store
-    root = zarr.open_group(store_path, mode="r")
-    if root.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first."
-        )
-
-    source_id = f"land:raster:{name}"
     params = params or {}
-    params_json = _stable_json(params)
-    fingerprint = fingerprint_path_mtime_size(source_path)
+    return _register_landscape_source_entry(
+        atlas=atlas,
+        name=name,
+        kind="raster",
+        source_path=source_path,
+        params=params,
+        fingerprint=fingerprint_path_mtime_size(source_path),
+        if_exists=if_exists,
+    )
 
-    # Ensure manifest JSON exists
-    init_manifest(store_path)
 
-    # Read existing manifest
-    manifest = _read_manifest(store_path)
-    existing_sources = manifest.get("sources", [])
-    source_by_id = {s["source_id"]: s for s in existing_sources}
-
-    # Check if source already exists
-    if source_id in source_by_id:
-        existing = source_by_id[source_id]
-        existing_kind = existing.get("kind", "")
-        existing_path = existing.get("path", "")
-        existing_params = existing.get("params_json", "")
-        existing_fingerprint = existing.get("fingerprint", "")
-
-        # Check for exact match on all fields (kind, path, params_json, fingerprint)
-        exact_match = (
-            existing_kind == kind
-            and existing_path == str(source_path)
-            and existing_params == params_json
-            and existing_fingerprint == fingerprint
-        )
-
-        if if_exists == "noop":
-            if exact_match:
-                # Exact match - skip without any changes
-                return False
-            else:
-                raise ValueError(
-                    f"Source {source_id!r} already registered with different configuration.\n"
-                    f"  Existing: path={existing_path!r}, params={existing_params!r}, "
-                    f"fingerprint={existing_fingerprint!r}\n"
-                    f"  New: path={str(source_path)!r}, params={params_json!r}, "
-                    f"fingerprint={fingerprint!r}\n"
-                    f"  Use atlas.landscape.add(..., if_exists='replace') to overwrite."
-                )
-
-        if if_exists == "error":
-            # For error mode, we check path+params (fingerprint may differ if file changed)
-            config_matches = (
-                existing_path == str(source_path) and existing_params == params_json
-            )
-            if not config_matches:
-                raise ValueError(
-                    f"Source {source_id!r} already registered with different configuration.\n"
-                    f"  Existing: path={existing_path!r}, params={existing_params!r}\n"
-                    f"  New: path={str(source_path)!r}, params={params_json!r}\n"
-                    f"  Use if_exists='replace' to overwrite."
-                )
-            # Config matches - idempotent no-op for error mode
-            return False
-
-        # if_exists == "replace" - fall through to update the source registration
-
-    # Create new/updated source entry
-    new_source = {
-        "source_id": source_id,
-        "name": name,
-        "kind": kind,
-        "path": str(source_path),
-        "params_json": params_json,
-        "fingerprint": fingerprint,
-    }
-
-    # Update or add source
-    updated_sources = []
-    source_updated = False
-    for src in existing_sources:
-        if src["source_id"] == source_id:
-            updated_sources.append(new_source)
-            source_updated = True
-        else:
-            updated_sources.append(src)
-
-    if not source_updated:
-        updated_sources.append(new_source)
-
-    # Write manifest with updated sources
-    manifest["sources"] = updated_sources
-    _write_manifest_atomic(store_path, manifest)
-    return True
+def register_landscape_vector_source(
+    unifier,
+    atlas,
+    *,
+    name: str,
+    shape,
+    column: str | None = None,
+    all_touched: bool = False,
+    if_exists: str = "error",
+) -> bool:
+    """Register a vector source in manifest for later rasterization/materialization."""
+    del unifier
+    source_path, semantic_hash = _canonical_vector_source_artifact(
+        atlas,
+        shape=shape,
+        column=column,
+        all_touched=all_touched,
+    )
+    params = {"column": column, "all_touched": bool(all_touched)}
+    return _register_landscape_source_entry(
+        atlas=atlas,
+        name=name,
+        kind="vector",
+        source_path=source_path,
+        params=params,
+        fingerprint=semantic_hash,
+        if_exists=if_exists,
+    )
 
 
 def prepare_landscape_variable_data(
@@ -458,49 +764,53 @@ def prepare_landscape_variable_data(
     if "valid_mask" not in land:
         raise RuntimeError("landscape.zarr missing valid_mask")
 
-    source_id = f"land:raster:{variable_name}"
     manifest = _read_manifest(store_path)
-    sources = manifest.get("sources", [])
-    source_by_id = {s["source_id"]: s for s in sources}
-    if source_id not in source_by_id:
-        raise KeyError(
-            f"Source {source_id!r} not registered. "
-            f"Call register_landscape_source first."
-        )
-
-    source_entry = source_by_id[source_id]
+    source_id, source_entry = _resolve_landscape_source_for_variable(
+        manifest=manifest,
+        variable_name=variable_name,
+    )
     source_path = Path(source_entry.get("path", ""))
+    source_kind = str(source_entry.get("kind", ""))
     params_json = source_entry.get("params_json", "")
     params = json.loads(params_json) if params_json else {}
 
-    aoi = _aoi_geom_or_none(atlas)
-
-    da = rxr.open_rasterio(source_path, parse_coordinates=True).squeeze(drop=True)
-    if da.rio.crs is None:
-        raise RuntimeError(
-            f"Source raster {source_path} has no CRS; cannot materialize."
+    if source_kind == "vector":
+        da = _prepare_vector_landscape_variable_data(
+            atlas=atlas,
+            variable_name=variable_name,
+            source_path=source_path,
+            params=params,
+            wind_ref=wind_ref,
+            valid_mask=land["valid_mask"].load(),
+            chunk_policy=unifier.chunk_policy,
         )
+    else:
+        aoi = _aoi_geom_or_none(atlas)
 
-    if aoi is not None:
-        from cleo.spatial import to_crs_if_needed
-
-        aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
-        da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
-
-    categorical = bool(params.get("categorical", False))
-    resampling = Resampling.nearest if categorical else Resampling.bilinear
-
-    da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan)
-    da = da.rename(variable_name)
-
-    clc_codes_raw = params.get("clc_codes")
-    if clc_codes_raw is not None:
-        if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
-            raise ValueError(
-                "params['clc_codes'] must be a non-empty list of integer CLC codes."
+        da = rxr.open_rasterio(source_path, parse_coordinates=True).squeeze(drop=True)
+        if da.rio.crs is None:
+            raise RuntimeError(
+                f"Source raster {source_path} has no CRS; cannot materialize."
             )
-        clc_codes = [int(code) for code in clc_codes_raw]
-        da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
+
+        if aoi is not None:
+            aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
+            da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
+
+        categorical = bool(params.get("categorical", False))
+        resampling = Resampling.nearest if categorical else Resampling.bilinear
+
+        da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan)
+        da = da.rename(variable_name)
+
+        clc_codes_raw = params.get("clc_codes")
+        if clc_codes_raw is not None:
+            if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
+                raise ValueError(
+                    "params['clc_codes'] must be a non-empty list of integer CLC codes."
+                )
+            clc_codes = [int(code) for code in clc_codes_raw]
+            da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
 
     wind_y = wind_ref.coords["y"].values
     wind_x = wind_ref.coords["x"].values
@@ -516,12 +826,13 @@ def prepare_landscape_variable_data(
             f"  da x: shape={da_x.shape}, range=[{da_x.min()}, {da_x.max()}]"
         )
 
-    valid_mask = land["valid_mask"].load()
-    da = da.where(valid_mask, np.nan)
+    if source_kind != "vector":
+        valid_mask = land["valid_mask"].load()
+        da = da.where(valid_mask, np.nan)
 
-    chunk_y = unifier.chunk_policy.get("y", 1024)
-    chunk_x = unifier.chunk_policy.get("x", 1024)
-    da = da.chunk({"y": chunk_y, "x": chunk_x})
+        chunk_y = unifier.chunk_policy.get("y", 1024)
+        chunk_x = unifier.chunk_policy.get("x", 1024)
+        da = da.chunk({"y": chunk_y, "x": chunk_x})
     return da
 
 
@@ -588,18 +899,11 @@ def materialize_landscape_variable(
         raise RuntimeError("landscape.zarr missing valid_mask")
 
     # 3) Ensure source is registered (do this BEFORE if_exists check for noop validation)
-    source_id = f"land:raster:{variable_name}"
     manifest = _read_manifest(store_path)
-    sources = manifest.get("sources", [])
-    source_by_id = {s["source_id"]: s for s in sources}
-
-    if source_id not in source_by_id:
-        raise KeyError(
-            f"Source {source_id!r} not registered. "
-            f"Call register_landscape_source first."
-        )
-
-    source_entry = source_by_id[source_id]
+    source_id, source_entry = _resolve_landscape_source_for_variable(
+        manifest=manifest,
+        variable_name=variable_name,
+    )
     source_path = Path(source_entry.get("path", ""))
     params_json = source_entry.get("params_json", "")
     stored_fingerprint = source_entry.get("fingerprint", "")
@@ -607,7 +911,12 @@ def materialize_landscape_variable(
     params = json.loads(params_json) if params_json else {}
 
     # Compute current fingerprint for noop validation
-    current_fingerprint = fingerprint_path_mtime_size(source_path)
+    current_fingerprint = _current_landscape_source_fingerprint(
+        atlas=atlas,
+        kind=stored_kind,
+        source_path=source_path,
+        params=params,
+    )
 
     # 2b) Check if variable already exists - apply if_exists semantics
     if variable_name in land.data_vars:
@@ -620,7 +929,7 @@ def materialize_landscape_variable(
             if variable_name not in var_by_name:
                 raise ValueError(
                     f"Variable {variable_name!r} exists in store but not in manifest.\n"
-                    f"  Use atlas.landscape.add(..., if_exists='replace') to fix."
+                    "  Use if_exists='replace' to fix."
                 )
 
             stored_source_id = var_by_name[variable_name].get("source_id", "")
@@ -630,7 +939,7 @@ def materialize_landscape_variable(
                     f"Variable {variable_name!r} exists with different source_id.\n"
                     f"  Existing: source_id={stored_source_id!r}\n"
                     f"  Expected: source_id={source_id!r}\n"
-                    f"  Use atlas.landscape.add(..., if_exists='replace') to overwrite."
+                    "  Use if_exists='replace' to overwrite."
                 )
 
             # Verify fingerprint matches (source file unchanged since registration)
@@ -639,7 +948,7 @@ def materialize_landscape_variable(
                     f"Variable {variable_name!r} exists but source file has changed.\n"
                     f"  Stored fingerprint: {stored_fingerprint!r}\n"
                     f"  Current fingerprint: {current_fingerprint!r}\n"
-                    f"  Use atlas.landscape.add(..., if_exists='replace') to re-materialize."
+                    "  Use if_exists='replace' to re-materialize."
                 )
 
             # All checks passed - exact match, skip without changes

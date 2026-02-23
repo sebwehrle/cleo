@@ -365,6 +365,32 @@ class DomainResult:
         self._data = data
         self._params = params
 
+    def __repr__(self) -> str:
+        """Human-friendly REPL representation with next-step guidance."""
+        overlays = getattr(self._domain, "_computed_overlays", None)
+        is_staged = isinstance(overlays, dict) and self._metric in overlays
+        state = "staged" if is_staged else "computed"
+
+        mode = None
+        if self._metric == "capacity_factors":
+            mode = self._data.attrs.get("cleo:cf_mode")
+
+        target = f'atlas.wind.data["{self._metric}"]'
+        header = (
+            f"DomainResult(metric={self._metric!r}, state={state!r}, "
+            f"target={target!r}"
+        )
+        if mode is not None:
+            header += f", mode={mode!r}"
+        header += ")"
+
+        return (
+            f"{header}\n"
+            "  - Lazy data: .data\n"
+            "  - Write to active wind store: .materialize(overwrite=True, allow_mode_change=False)\n"
+            "  - Persist as run artifact: .persist(run_id=None, metric_name=None)"
+        )
+
     @property
     def data(self) -> xr.DataArray:
         """Access the computed DataArray (lazy)."""

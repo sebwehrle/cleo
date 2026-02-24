@@ -1,10 +1,45 @@
 # %% imports
+import json
 import numpy as np
 import xarray as xr
 from pathlib import Path
 from cleo.results import DomainResult, normalize_metric_for_active_wind_store
+from cleo.spatial import distance_to_positive_mask
 from cleo.wind_metrics import _WIND_METRICS
-from cleo.unification.store_io import open_zarr_dataset, turbine_ids_from_json
+from cleo.unification.store_io import (
+    open_zarr_dataset,
+    resolve_active_landscape_store_path,
+    turbine_ids_from_json,
+)
+
+
+_DISTANCE_SPEC_ALGO = "edt"
+_DISTANCE_SPEC_ALGO_VERSION = "1"
+_DISTANCE_SPEC_RULE = "isfinite_and_gt_zero"
+
+
+def _distance_spec_json(source_var: str) -> str:
+    """Build canonical distance spec JSON for attrs/noop checks."""
+    payload = {
+        "algo": _DISTANCE_SPEC_ALGO,
+        "algo_version": _DISTANCE_SPEC_ALGO_VERSION,
+        "rule": _DISTANCE_SPEC_RULE,
+        "source_var": source_var,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _distance_spec_matches(da: xr.DataArray, expected_spec_json: str) -> bool:
+    """Return True when DataArray carries the exact expected distance spec payload."""
+    raw = da.attrs.get("cleo:distance_spec_json")
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    normalized = json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return normalized == expected_spec_json
 
 
 class WindDomain:
@@ -505,6 +540,38 @@ class LandscapeAddResult:
         )
 
 
+class LandscapeComputeBatchResult:
+    """Result wrapper for staged landscape compute batches."""
+
+    def __init__(
+        self,
+        domain: "LandscapeDomain",
+        *,
+        metric: str,
+        names: tuple[str, ...],
+        data: xr.Dataset,
+        if_exists: str,
+    ):
+        self._domain = domain
+        self._metric = metric
+        self._names = names
+        self._data = data
+        self._if_exists = if_exists
+
+    @property
+    def data(self) -> xr.Dataset:
+        """Staged compute dataset for this batch."""
+        return self._data
+
+    def materialize(self, *, if_exists: str | None = None) -> xr.Dataset:
+        """Materialize staged computed variables into the active landscape store."""
+        effective = self._if_exists if if_exists is None else if_exists
+        return self._domain._materialize_staged_batch(
+            names=self._names,
+            if_exists=effective,
+        )
+
+
 class LandscapeDomain:
     """
     Domain object for landscape data access.
@@ -541,13 +608,7 @@ class LandscapeDomain:
         if self._data is not None:
             return self._data
 
-        active_store_path = getattr(self._atlas, "_active_landscape_store_path", None)
-        if callable(active_store_path):
-            store_path = active_store_path()
-        elif hasattr(self._atlas, "landscape_store_path"):
-            store_path = Path(getattr(self._atlas, "landscape_store_path"))
-        else:
-            store_path = Path(self._atlas.path) / "landscape.zarr"
+        store_path = resolve_active_landscape_store_path(self._atlas)
         if not store_path.exists():
             if getattr(self._atlas, "_region_name", None) is not None:
                 raise FileNotFoundError(
@@ -594,6 +655,68 @@ class LandscapeDomain:
         self._staged_overlays.clear()
         return None
 
+    @staticmethod
+    def _normalize_distance_sources_and_names(
+        *,
+        source,
+        name,
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        if isinstance(source, str):
+            sources = (source,)
+        elif isinstance(source, (list, tuple)) and source:
+            sources = tuple(source)
+        else:
+            raise ValueError("source must be a non-empty string or non-empty list/tuple of strings.")
+
+        cleaned_sources: list[str] = []
+        seen_sources: set[str] = set()
+        for raw in sources:
+            if not isinstance(raw, str):
+                raise ValueError(f"Each source must be a string, got {type(raw).__name__}")
+            src = raw.strip()
+            if not src:
+                raise ValueError("source entries cannot be empty or whitespace-only.")
+            if src in seen_sources:
+                raise ValueError(f"Duplicate source variable: {src!r}")
+            seen_sources.add(src)
+            cleaned_sources.append(src)
+
+        if name is None:
+            names = tuple(f"distance_{src}" for src in cleaned_sources)
+        elif isinstance(name, str):
+            if len(cleaned_sources) != 1:
+                raise ValueError("name as a string is only allowed when source contains exactly one variable.")
+            if not name.strip():
+                raise ValueError("name cannot be empty or whitespace-only.")
+            names = (name.strip(),)
+        elif isinstance(name, (list, tuple)) and name:
+            if len(name) != len(cleaned_sources):
+                raise ValueError("name list/tuple length must match source length exactly.")
+            cleaned_names: list[str] = []
+            for raw in name:
+                if not isinstance(raw, str):
+                    raise ValueError(f"Each name must be a string, got {type(raw).__name__}")
+                nm = raw.strip()
+                if not nm:
+                    raise ValueError("name entries cannot be empty or whitespace-only.")
+                cleaned_names.append(nm)
+            names = tuple(cleaned_names)
+        else:
+            raise ValueError("name must be None, a string, or a non-empty list/tuple of strings.")
+
+        if len(set(names)) != len(names):
+            raise ValueError(f"Duplicate output variable names are not allowed: {list(names)!r}")
+
+        return tuple(cleaned_sources), tuple(names)
+
+    @staticmethod
+    def _distance_spec_json(source_var: str) -> str:
+        return _distance_spec_json(source_var)
+
+    @staticmethod
+    def _distance_spec_matches(da: xr.DataArray, expected_spec_json: str) -> bool:
+        return _distance_spec_matches(da, expected_spec_json)
+
     def _materialize_staged(
         self,
         *,
@@ -621,6 +744,150 @@ class LandscapeDomain:
         self._staged_overlays.pop(name, None)
         self._data = None
         return self.data[name]
+
+    def _materialize_staged_batch(
+        self,
+        *,
+        names: tuple[str, ...],
+        if_exists: str,
+    ) -> xr.Dataset:
+        self._validate_if_exists(if_exists)
+        if not names:
+            return xr.Dataset()
+
+        atlas = self._atlas
+        if not getattr(atlas, "_canonical_ready", False):
+            atlas.build_canonical()
+
+        staged_to_write = {
+            name: self._staged_overlays[name]
+            for name in names
+            if name in self._staged_overlays
+        }
+
+        if staged_to_write:
+            u = self._build_unifier()
+            try:
+                summary = u.materialize_landscape_computed_variables(
+                    atlas,
+                    variables=staged_to_write,
+                    if_exists=if_exists,
+                )
+            except RuntimeError as exc:
+                for name in tuple(getattr(exc, "written", ())):
+                    self._staged_overlays.pop(name, None)
+                self._data = None
+                raise
+
+            for name in summary.get("written", []):
+                self._staged_overlays.pop(name, None)
+            for name in summary.get("skipped", []):
+                self._staged_overlays.pop(name, None)
+
+        self._data = None
+        return self.data[list(names)]
+
+    def compute(self, metric: str, **kwargs) -> LandscapeComputeBatchResult:
+        """Compute supported landscape metrics and stage results in ``atlas.landscape.data``.
+
+        Supported metrics:
+        - ``distance``: Euclidean distance in meters to nearest finite positive
+          cell in one or more source variables.
+        """
+        if metric != "distance":
+            raise ValueError(
+                f"Unknown metric {metric!r}. Supported: {['distance']}"
+            )
+
+        if "inplace" in kwargs:
+            raise ValueError(
+                "compute(...) does not accept inplace. "
+                "Use atlas.landscape.compute(...).materialize(...) to write into the active landscape store."
+            )
+
+        allowed = {"source", "name", "if_exists"}
+        unknown = sorted(set(kwargs.keys()) - allowed)
+        if unknown:
+            raise ValueError(
+                f"Unknown parameter(s) for landscape metric 'distance': {unknown!r}. "
+                f"Supported keys: {sorted(allowed)!r}"
+            )
+        if "source" not in kwargs:
+            raise ValueError("Missing required parameters for distance: ['source']")
+
+        source = kwargs["source"]
+        name = kwargs.get("name")
+        if_exists = kwargs.get("if_exists", "error")
+        self._validate_if_exists(if_exists)
+
+        sources, names = self._normalize_distance_sources_and_names(
+            source=source,
+            name=name,
+        )
+
+        store_ds = self._store_data()
+        for src in sources:
+            if src not in store_ds.data_vars:
+                raise ValueError(
+                    f"Unknown distance source variable {src!r}. "
+                    f"Distance sources must exist in active landscape store data vars: {sorted(store_ds.data_vars)!r}"
+                )
+
+        if if_exists == "error":
+            conflicts = [
+                nm for nm in names
+                if nm in self._staged_overlays or nm in store_ds.data_vars
+            ]
+            if conflicts:
+                raise ValueError(
+                    f"distance compute would overwrite existing variable(s): {conflicts!r}. "
+                    "Use if_exists='replace' to overwrite or if_exists='noop' to skip."
+                )
+
+        result_vars: dict[str, xr.DataArray] = {}
+        valid_mask = store_ds["valid_mask"]
+
+        for src, nm in zip(sources, names, strict=True):
+            expected_spec = self._distance_spec_json(src)
+            staged_exists = nm in self._staged_overlays
+            store_exists = nm in store_ds.data_vars
+
+            if if_exists == "noop":
+                if staged_exists:
+                    staged_da = self._staged_overlays[nm]
+                    if not self._distance_spec_matches(staged_da, expected_spec):
+                        raise ValueError(
+                            f"Variable {nm!r} already staged with different distance spec. "
+                            "Use if_exists='replace' to overwrite."
+                        )
+                    result_vars[nm] = staged_da
+                    continue
+                if store_exists:
+                    existing_da = store_ds[nm]
+                    if not self._distance_spec_matches(existing_da, expected_spec):
+                        raise ValueError(
+                            f"Variable {nm!r} already exists in active landscape store with different distance spec. "
+                            "Use if_exists='replace' to overwrite."
+                        )
+                    result_vars[nm] = existing_da
+                    continue
+
+            dist = distance_to_positive_mask(store_ds[src], valid_mask).rename(nm)
+            dist = dist.reset_coords(drop=True)
+            dist.attrs["cleo:metric"] = "distance"
+            dist.attrs["cleo:distance_source"] = src
+            dist.attrs["cleo:distance_spec_json"] = expected_spec
+            self._staged_overlays[nm] = dist
+            result_vars[nm] = dist
+
+        out_ds = xr.Dataset({nm: result_vars[nm] for nm in names})
+        return LandscapeComputeBatchResult(
+            self,
+            metric=metric,
+            names=names,
+            data=out_ds,
+            if_exists=if_exists,
+        )
 
     def _stage_registered_variable(
         self,

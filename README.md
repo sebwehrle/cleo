@@ -174,6 +174,17 @@ Atlas(
 
 - `atlas.landscape.data`
   - active landscape dataset.
+- `atlas.landscape.compute(metric, **kwargs)`
+  - compute entrypoint for landscape metrics.
+  - currently supported metric:
+    - `metric="distance"` with:
+      - `source`: one source variable name or a list/tuple of source variable names.
+      - `name`: optional output name or list/tuple of output names; default is `distance_<source>`.
+      - `if_exists`: `"error"|"replace"|"noop"`.
+  - distance sources must be store-backed landscape variables (not staged-only overlays).
+  - returns a batch result object with:
+    - `.data`: staged `xr.Dataset` containing computed distance variables.
+    - `.materialize(if_exists=None)`: writes staged distance variables into the active landscape store and returns materialized `xr.Dataset`.
 - `atlas.landscape.add(name, source_path, *, kind="raster", params=None, if_exists="error")`
   - stages a raster landscape candidate and returns `LandscapeAddResult`.
   - `add(...)` is raster-only (`kind` must be `"raster"`); use `rasterize(...)` for vector sources.
@@ -202,6 +213,24 @@ Atlas(
 - `.materialize(if_exists=None)`
   - commits the staged variable to the active landscape store.
   - staged landscape overlays are cleared by `atlas.select(...)`, `atlas.build()`, `atlas.build_canonical()`, and `atlas.build_clc()`.
+
+Distance compute example:
+
+```python
+run = atlas.landscape.compute(
+    "distance",
+    source=["roads_mask", "water_mask"],
+    name=["distance_roads", "distance_water"],
+    if_exists="replace",
+)
+ds_stage = run.data
+ds_mat = run.materialize()
+```
+
+Notes:
+- Distance outputs are in meters (`units="m"`), based on projected metric CRS and exact atlas grid spacing.
+- `if_exists="noop"` skips existing distance variables only when their stored distance spec matches the requested source/algorithm; otherwise it raises and requires `if_exists="replace"`.
+- Distance variables materialized in region stores are region-local artifacts and may disappear when region stores are rebuilt from base stores.
 
 Vector rasterization example:
 

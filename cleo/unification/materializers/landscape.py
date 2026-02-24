@@ -35,6 +35,7 @@ from cleo.unification.raster_io import (
     _build_copdem_elevation,
     _open_local_elevation,
 )
+from cleo.unification.store_io import resolve_active_landscape_store_path
 from cleo.unification.materializers.shared import _aoi_geom_or_none, _now_iso, _stable_json
 from cleo.unification.vertical_policy import HASH_ALGORITHM, HASH_SCHEMA_VERSION
 
@@ -834,6 +835,98 @@ def prepare_landscape_variable_data(
         chunk_x = unifier.chunk_policy.get("x", 1024)
         da = da.chunk({"y": chunk_y, "x": chunk_x})
     return da
+
+
+def materialize_landscape_computed_variables(
+    unifier,
+    atlas,
+    *,
+    variables: dict[str, xr.DataArray],
+    if_exists: str = "error",
+) -> dict[str, list[str]]:
+    """Materialize precomputed landscape variables into active landscape store."""
+    valid_if_exists = {"error", "replace", "noop"}
+    if if_exists not in valid_if_exists:
+        raise ValueError(
+            f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
+        )
+    if not variables:
+        return {"written": [], "skipped": []}
+
+    store_path = resolve_active_landscape_store_path(atlas)
+    if not store_path.exists():
+        raise FileNotFoundError(
+            f"Active landscape store does not exist at {store_path}; call atlas.build()."
+        )
+
+    root = zarr.open_group(store_path, mode="r")
+    if root.attrs.get("store_state") != "complete":
+        raise RuntimeError(
+            f"Landscape store incomplete (store_state={root.attrs.get('store_state')!r}); "
+            "call atlas.build()."
+        )
+
+    land = xr.open_zarr(store_path, consolidated=False, chunks=unifier.chunk_policy)
+    if "valid_mask" not in land:
+        raise RuntimeError("Active landscape store missing valid_mask.")
+
+    existing_vars = set(land.data_vars)
+    names = list(variables.keys())
+
+    if if_exists == "error":
+        conflicts = [name for name in names if name in existing_vars]
+        if conflicts:
+            raise ValueError(
+                f"Variable(s) already exist in active landscape store: {conflicts!r}. "
+                "Use if_exists='replace' to overwrite or if_exists='noop' to skip."
+            )
+
+    preserve_attrs = dict(root.attrs)
+    y_ref = land.coords["y"].values
+    x_ref = land.coords["x"].values
+
+    written: list[str] = []
+    skipped: list[str] = []
+
+    for name in names:
+        da = variables[name]
+        exists = name in existing_vars
+        try:
+            if exists and if_exists == "noop":
+                skipped.append(name)
+                continue
+
+            if "x" in da.dims and "y" in da.dims:
+                if not np.array_equal(da.coords["y"].values, y_ref):
+                    raise ValueError(f"Computed variable {name!r} has y coords not matching active landscape grid.")
+                if not np.array_equal(da.coords["x"].values, x_ref):
+                    raise ValueError(f"Computed variable {name!r} has x coords not matching active landscape grid.")
+
+            if exists and if_exists == "replace":
+                _atomic_replace_variable_dir(store_path, name)
+                existing_vars.discard(name)
+
+            da.rename(name).to_dataset().to_zarr(store_path, mode="a", consolidated=False)
+
+            root_w = zarr.open_group(store_path, mode="a")
+            for key, value in preserve_attrs.items():
+                root_w.attrs[key] = value
+
+            written.append(name)
+            existing_vars.add(name)
+
+        except Exception as exc:
+            remaining = [n for n in names if n not in written and n not in skipped and n != name]
+            err = RuntimeError(
+                "Failed to materialize computed landscape variables. "
+                f"written={written!r}, skipped={skipped!r}, failed={[name] + remaining!r}"
+            )
+            setattr(err, "written", tuple(written))
+            setattr(err, "skipped", tuple(skipped))
+            setattr(err, "failed", tuple([name] + remaining))
+            raise err from exc
+
+    return {"written": written, "skipped": skipped}
 
 
 def materialize_landscape_variable(

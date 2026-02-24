@@ -37,6 +37,16 @@ def open_zarr_dataset(
     return xr.open_zarr(Path(store_path), consolidated=False, chunks=chunk_policy)
 
 
+def resolve_active_landscape_store_path(atlas) -> Path:
+    """Resolve active landscape store path (base or region) for an atlas-like object."""
+    active_store_path = getattr(atlas, "_active_landscape_store_path", None)
+    if callable(active_store_path):
+        return Path(active_store_path())
+    if hasattr(atlas, "landscape_store_path"):
+        return Path(getattr(atlas, "landscape_store_path"))
+    return Path(atlas.path) / "landscape.zarr"
+
+
 @lru_cache(maxsize=256)
 def turbine_ids_from_json(payload: str) -> tuple[str, ...]:
     """Decode ``cleo_turbines_json`` payload into ordered turbine IDs.

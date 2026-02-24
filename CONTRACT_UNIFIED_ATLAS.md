@@ -257,6 +257,19 @@ da_stage = op.data
 da_mat = op.materialize()
 ```
 
+Distance-to-feature compute (region-scoped derived data):
+
+```python
+run = atlas.landscape.compute(
+    metric="distance",
+    source=["roads_mask", "water_mask"],
+    name=["distance_roads", "distance_water"],  # optional; default distance_<source>
+    if_exists="error",
+)
+ds_stage = run.data
+ds_mat = run.materialize()
+```
+
 Normative:
 - `add(...)` stages a lazy raster candidate and returns an operation object with `.data` and `.materialize(...)`.
 - `add(...)` is raster-only (`kind="raster"`); vector sources must use `rasterize(...)`.
@@ -268,6 +281,24 @@ Normative:
 - `clear_staged()` must remove staged landscape overlays from `atlas.landscape.data`.
 - Staged landscape overlays are transient: `select(...)`, `build()`, `build_canonical()`, and `build_clc()` clear them.
 - Successful landscape `.materialize()` clears the staged overlay for that variable.
+- `LandscapeDomain.compute(metric="distance", ...)` must support one or many source variables in one call:
+  - `source: str | list[str] | tuple[str, ...]`
+  - `name: None | str | list[str] | tuple[str, ...]` (defaults to `distance_<source>`)
+  - `if_exists: "error" | "replace" | "noop"`
+- Distance compute returns a batch result object with:
+  - `.data -> xr.Dataset` (staged distance variables),
+  - `.materialize(...) -> xr.Dataset` (writes staged distance variables to active landscape store).
+- Distance sources are store-backed landscape variables on the active store grid (not staged-only overlays).
+- Distance semantics:
+  - nearest finite positive cell (`isfinite(source) & source > 0`),
+  - units in meters,
+  - outside `valid_mask` is `NaN`,
+  - no target cells in valid area -> all `NaN` in valid area,
+  - all valid cells are targets -> all zeros in valid area.
+- Distance computation is eager by design for correctness (global Euclidean distance transform).
+- `if_exists="error"` is atomic preflight for batch conflicts (no writes if any conflict).
+- `if_exists="noop"` for distance requires exact spec match via `cleo:distance_spec_json`; missing/invalid/different spec must raise and require `if_exists="replace"`.
+- Distance variables materialized into region stores are region-local artifacts and are not guaranteed to persist when region stores are rebuilt from base stores.
 
 ---
 
@@ -387,7 +418,8 @@ Landscape materialization must source elevation deterministically using:
 
 ## B6. Dask / laziness invariants
 
-- `compute(...).data` must be lazy if Dask is configured (unless the user explicitly requests eager execution).
+- Wind-domain `compute(...).data` is lazy if Dask is configured (unless explicitly configured otherwise by the caller flow).
+- Landscape `compute(metric="distance", ...)` is an explicit eager exception for correctness (global Euclidean distance transform).
 - `.materialize()` is the canonical user-triggered materialization step that may compute.
 
 ---

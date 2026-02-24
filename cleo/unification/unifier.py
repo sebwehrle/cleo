@@ -137,6 +137,21 @@ class Unifier:
             if_exists=if_exists,
         )
 
+    def materialize_landscape_computed_variables(
+        self,
+        atlas,
+        *,
+        variables: dict[str, xr.DataArray],
+        if_exists: str = "error",
+    ) -> dict[str, list[str]]:
+        """Materialize precomputed landscape variables into active store."""
+        return landscape_materializer.materialize_landscape_computed_variables(
+            self,
+            atlas,
+            variables=variables,
+            if_exists=if_exists,
+        )
+
     def prepare_landscape_variable_data(
         self,
         atlas,

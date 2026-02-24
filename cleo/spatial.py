@@ -5,6 +5,7 @@ import geopandas as gpd
 import pyproj
 import rasterio.crs
 import xarray as xr
+from scipy.ndimage import distance_transform_edt
 
 from typing import Union, Literal
 from pathlib import Path
@@ -384,6 +385,154 @@ def enforce_exact_grid(da: xr.DataArray, template: xr.DataArray, *, var_name: st
         )
 
     return da
+
+
+def _axis_spacing_meters(coords: xr.DataArray, *, dim: str) -> float:
+    """Return absolute regular spacing for one spatial axis in meters."""
+    vals = np.asarray(coords.values, dtype=np.float64)
+    if vals.size <= 1:
+        return 1.0
+
+    diffs = np.diff(vals)
+    if not np.all(np.isfinite(diffs)):
+        raise ValueError(f"{dim} coordinates contain non-finite spacing values.")
+    if np.any(diffs == 0):
+        raise ValueError(f"{dim} coordinates contain repeated values; regular grid required.")
+    if not (np.all(diffs > 0) or np.all(diffs < 0)):
+        raise ValueError(f"{dim} coordinates are not monotonic; regular grid required.")
+
+    ref = float(diffs[0])
+    tol = max(abs(ref) * 1e-6, 1e-9)
+    if not np.allclose(diffs, ref, rtol=0.0, atol=tol):
+        raise ValueError(f"{dim} coordinates are not regularly spaced; distance requires regular grid.")
+    return abs(ref)
+
+
+def _distance_2d_positive_mask(
+    source_2d: np.ndarray,
+    valid_mask_2d: np.ndarray,
+    *,
+    y_spacing_m: float,
+    x_spacing_m: float,
+) -> np.ndarray:
+    """Compute 2D Euclidean distance to nearest finite positive cell."""
+    finite = np.isfinite(source_2d)
+    valid = valid_mask_2d.astype(bool, copy=False)
+    inside = valid & finite
+    targets = inside & (source_2d > 0)
+
+    out = np.full(source_2d.shape, np.nan, dtype=np.float64)
+    if not np.any(valid):
+        return out
+    if not np.any(targets):
+        return out
+
+    dist = distance_transform_edt(~targets, sampling=(float(y_spacing_m), float(x_spacing_m)))
+    out[valid] = dist[valid]
+    return out
+
+
+def distance_to_positive_mask(
+    source: xr.DataArray,
+    valid_mask: xr.DataArray,
+) -> xr.DataArray:
+    """Distance (meters) to nearest finite positive cell in ``source``.
+
+    Contract:
+    - ``source`` must have spatial dims ``("y", "x")`` with optional one extra non-spatial dim.
+    - ``valid_mask`` must be on the exact same y/x grid and marks cells included in output.
+    - CRS must be projected metric (meters).
+    - Outside ``valid_mask`` output is NaN.
+    """
+    if "x" not in source.dims or "y" not in source.dims:
+        raise ValueError("distance source must include spatial dims 'y' and 'x'.")
+    extra_dims = [d for d in source.dims if d not in ("y", "x")]
+    if len(extra_dims) > 1:
+        raise ValueError("distance source supports at most one non-spatial dimension.")
+
+    if "x" not in valid_mask.dims or "y" not in valid_mask.dims:
+        raise ValueError("valid_mask must include spatial dims 'y' and 'x'.")
+    if valid_mask.ndim != 2:
+        raise ValueError("valid_mask must be two-dimensional with dims ('y', 'x').")
+
+    if not np.array_equal(source.coords["x"].values, valid_mask.coords["x"].values):
+        raise ValueError("distance source x coordinates must match valid_mask exactly.")
+    if not np.array_equal(source.coords["y"].values, valid_mask.coords["y"].values):
+        raise ValueError("distance source y coordinates must match valid_mask exactly.")
+
+    src_crs = getattr(source.rio, "crs", None)
+    mask_crs = getattr(valid_mask.rio, "crs", None)
+    crs_input = src_crs if src_crs is not None else mask_crs
+    if crs_input is None:
+        raise ValueError("distance source/valid_mask CRS is missing.")
+
+    try:
+        crs_obj = pyproj.CRS.from_user_input(crs_input)
+    except (pyproj.exceptions.CRSError, TypeError, ValueError) as exc:
+        raise ValueError(f"Cannot parse CRS for distance computation: {crs_input!r}") from exc
+
+    if not crs_obj.is_projected:
+        raise ValueError("distance requires projected CRS with metric units.")
+
+    axis_info = list(crs_obj.axis_info)
+    if not axis_info:
+        raise ValueError("distance requires projected CRS with metric units.")
+    unit_factor = axis_info[0].unit_conversion_factor
+    if unit_factor is None or not np.isfinite(unit_factor) or not np.isclose(unit_factor, 1.0):
+        raise ValueError("distance requires projected CRS with metric units (meters).")
+
+    y_spacing = _axis_spacing_meters(source.coords["y"], dim="y")
+    x_spacing = _axis_spacing_meters(source.coords["x"], dim="x")
+
+    valid_np = np.asarray(valid_mask.values, dtype=bool)
+
+    if not extra_dims:
+        dist_np = _distance_2d_positive_mask(
+            np.asarray(source.values),
+            valid_np,
+            y_spacing_m=y_spacing,
+            x_spacing_m=x_spacing,
+        )
+        out = xr.DataArray(
+            dist_np,
+            dims=("y", "x"),
+            coords={"y": source.coords["y"].values, "x": source.coords["x"].values},
+            name=source.name,
+        )
+    else:
+        dim = extra_dims[0]
+        values = []
+        for i in range(source.sizes[dim]):
+            src_slice = source.isel({dim: i})
+            dist_np = _distance_2d_positive_mask(
+                np.asarray(src_slice.values),
+                valid_np,
+                y_spacing_m=y_spacing,
+                x_spacing_m=x_spacing,
+            )
+            values.append(
+                xr.DataArray(
+                    dist_np,
+                    dims=("y", "x"),
+                    coords={"y": source.coords["y"].values, "x": source.coords["x"].values},
+                )
+            )
+        if dim in source.coords:
+            dim_coord = source.coords[dim]
+            out = xr.concat(values, dim=dim_coord)
+        else:
+            out = xr.concat(values, dim=dim)
+        out = out.transpose(*source.dims)
+        out.name = source.name
+
+    if src_crs is not None:
+        out = out.rio.write_crs(src_crs)
+
+    out.attrs["units"] = "m"
+    out.attrs["cleo:algo"] = "edt"
+    out.attrs["cleo:algo_version"] = "1"
+    out.attrs["cleo:distance_rule"] = "isfinite_and_gt_zero"
+    return out
 
 
 def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False):

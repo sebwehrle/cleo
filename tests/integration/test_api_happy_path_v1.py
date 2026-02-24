@@ -266,7 +266,6 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     materialized_cf = atlas.wind.compute(
         metric="capacity_factors",
         air_density=False,
-        height=100,
         loss_factor=1.0,
     ).materialize()
 

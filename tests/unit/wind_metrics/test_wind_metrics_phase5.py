@@ -66,6 +66,7 @@ def _lcoe_params() -> dict:
         "om_variable_eur_per_kwh": 0.01,
         "discount_rate": 0.05,
         "lifetime_a": 20,
+        "hours_per_year": 8766.0,
     }
 
 

@@ -178,10 +178,10 @@ def test_capacity_factors_air_density_requires_rho() -> None:
 def test_lcoe_missing_required_params_raises() -> None:
     wind, land = _make_wind_land()
     with pytest.raises(ValueError, match="LCOE requires parameters"):
-        _wind_metric_lcoe(wind, land, turbines=("T1",))
+        _wind_metric_lcoe(wind, land, turbines=("T1",), hours_per_year=8766.0)
 
 
 def test_optimal_energy_missing_required_params_raises() -> None:
     wind, land = _make_wind_land()
     with pytest.raises(ValueError, match="optimal_energy requires LCOE parameters"):
-        _wind_metric_optimal_energy(wind, land, turbines=("T1",))
+        _wind_metric_optimal_energy(wind, land, turbines=("T1",), hours_per_year=8766.0)

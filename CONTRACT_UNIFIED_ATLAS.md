@@ -66,6 +66,22 @@ Normative:
 
 ---
 
+### A3.1. Timebase configuration (optional)
+
+```python
+atlas.configure_timebase(hours_per_year=8760.0)
+```
+
+Normative:
+- Default `hours_per_year` is **8766.0** when not configured (accounts for leap years).
+- Configured timebase is preserved across `select(..., inplace=False)` clones.
+- `compute("lcoe", hours_per_year=...)` must raise `ValueError` directing user to `configure_timebase()`.
+- **Physics metrics** (`capacity_factors`, `mean_wind_speed`, `rews_mps`) must NOT carry `cleo:hours_per_year` attr.
+- **Economics metrics** (`lcoe`, `min_lcoe_turbine`, `optimal_power`, `optimal_energy`) must carry `cleo:hours_per_year` attr.
+- Timebase affects LCOE-family metrics only; changing timebase does NOT invalidate cached `capacity_factors`.
+
+---
+
 ### A4. Region selection (optional, may change over time)
 
 Typical usage:
@@ -153,6 +169,28 @@ run = atlas.wind.compute(
 da = run.data    # xr.DataArray (dask-backed if dask is configured)
 ```
 
+Composed metric example (grouped dependency specs):
+
+```python
+run = atlas.wind.compute(
+    metric="lcoe",
+    cf={
+        "mode": "direct_cf_quadrature",
+        "air_density": False,
+        "rews_n": 12,
+        "loss_factor": 1.0,
+    },
+    economics={
+        "discount_rate": 0.06,
+        "lifetime_a": 25,
+        "om_fixed_eur_per_kw_a": 25.0,
+        "om_variable_eur_per_kwh": 0.009,
+        "location_independent_capex_share": 0.72,
+    },
+)
+da = run.data
+```
+
 ### Materialize (write result into `.data`)
 
 ```python
@@ -170,7 +208,15 @@ Normative:
   - `.data -> xr.DataArray` (lazy by default),
   - `.materialize(overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray`,
   - `.persist(run_id: str | None = None, params: dict | None = None, metric_name: str | None = None) -> Path`.
+- `atlas.wind.compute(...)` is the primary public entrypoint for wind metrics.
 - `compute(...)` also stages a lazy normalized overlay immediately in `atlas.wind.data[metric_name]` without writing to the wind store.
+- `compute(...)` must reject unknown metric-specific parameters; silent unknown-kwarg drops are prohibited.
+- Parameter-shape convention for wind metrics:
+  - Leaf metrics (`mean_wind_speed`, `capacity_factors`, `rews_mps`) use flat kwargs.
+  - Composed metrics (`lcoe`, `min_lcoe_turbine`, `optimal_power`, `optimal_energy`) use grouped dependency specs:
+    - `cf={...}` for capacity-factor dependency knobs.
+    - `economics={...}` for economic assumptions.
+  - For composed metrics, top-level flat dependency knobs are not part of the public contract.
 - `.materialize()` must:
   1) write the result into the active wind store (region store when a region is selected, base store otherwise), and
   2) surface it immediately as `atlas.wind.data[metric_name]`, and
@@ -178,9 +224,6 @@ Normative:
 - When replacing materialized `capacity_factors`, a mode change requires `allow_mode_change=True`.
 - Staged wind overlays are transient: `select(...)`, `build()`, `build_canonical()`, and `build_clc()` clear them.
 - Successful `.materialize()` clears the staged overlay for that metric.
-
-Convenience wrappers:
-- `atlas.wind.capacity_factors(...)` is a convenience wrapper equivalent to `compute(metric="capacity_factors", ...)` and returns the same kind of object supporting `.materialize()`.
 
 ---
 
@@ -219,11 +262,13 @@ Normative:
   - Requires turbines via selection or `turbines=[...]`.
   - Optional: `air_density: bool = False`, `rews_n: int = 12`.
 - `metric="lcoe"`
-  - Requires turbines and cost/economic params:
-    - `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`.
-  - Optional: `turbine_cost_share`, `hours_per_year`, plus capacity-factor options (`mode`, `rews_n`, `air_density`, `loss_factor`).
+  - Requires turbines and grouped dependency specs:
+    - `cf` (optional): `mode`, `rews_n`, `air_density`, `loss_factor`.
+    - `economics` (required by effective resolution): `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`.
+  - Optional in `economics`: `location_independent_capex_share`.
+  - `hours_per_year` must not be passed to `compute("lcoe", ...)`; it belongs to Atlas-level timebase assumptions.
 - `metric="min_lcoe_turbine"`, `metric="optimal_power"`, `metric="optimal_energy"`
-  - Same turbine/economic parameter contract as `lcoe`.
+  - Same grouped `cf` / `economics` contract as `lcoe`.
 
 ---
 

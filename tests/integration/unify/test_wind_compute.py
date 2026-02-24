@@ -291,7 +291,7 @@ class TestCapacityFactorsEnforcement:
 
         # Try without turbines - should fail
         with pytest.raises(ValueError) as exc_info:
-            atlas.wind.compute("capacity_factors", height=100)
+            atlas.wind.compute("capacity_factors")
 
         error_msg = str(exc_info.value)
         assert "turbines" in error_msg.lower()
@@ -380,7 +380,7 @@ class TestCapacityFactorsEnforcement:
         tids = atlas.wind.turbines[:1]
 
         # Compute capacity factors (compute() returns DomainResult, use .data for DataArray)
-        da = atlas.wind.compute("capacity_factors", turbines=tids, height=100).data
+        da = atlas.wind.compute("capacity_factors", turbines=tids).data
 
         # Assert not all NaN
         assert bool(da.notnull().any().compute()) is True, (
@@ -404,7 +404,7 @@ class TestCapacityFactorsEnforcement:
         tids = atlas.wind.turbines[:1]
 
         # Compute capacity factors with air density correction
-        da = atlas.wind.compute("capacity_factors", turbines=tids, height=100, air_density=True).data
+        da = atlas.wind.compute("capacity_factors", turbines=tids, air_density=True).data
 
         # Assert not all NaN
         assert bool(da.notnull().any().compute()) is True, (
@@ -428,7 +428,7 @@ class TestCapacityFactorsEnforcement:
         atlas.wind.select(turbines=[turbine_names[0]])
 
         # Compute without passing turbines - should use selected (use .data for DataArray)
-        da = atlas.wind.compute("capacity_factors", height=100).data
+        da = atlas.wind.compute("capacity_factors").data
 
         # Should have only one turbine in result
         assert "turbine" in da.dims
@@ -456,7 +456,7 @@ class TestDomainResultMaterializeOverwrite:
         atlas.wind.select(turbines=turbine_names)
 
         # Cache capacity_factors first time (air_density=False -> cleo:air_density=0)
-        atlas.wind.compute("capacity_factors", height=100, air_density=False).materialize()
+        atlas.wind.compute("capacity_factors", air_density=False).materialize()
 
         # Check first materialization
         assert "capacity_factors" in atlas.wind.data
@@ -465,7 +465,7 @@ class TestDomainResultMaterializeOverwrite:
 
         # Cache again with air_density=True - should overwrite
         atlas.wind.compute(
-            "capacity_factors", height=100, air_density=True
+            "capacity_factors", air_density=True
         ).materialize(overwrite=True)
 
         # Verify overwrite - attrs should be updated
@@ -490,18 +490,18 @@ class TestDomainResultMaterializeOverwrite:
         atlas.wind.select(turbines=turbine_names)
 
         # Cache capacity_factors with mode="hub"
-        atlas.wind.compute("capacity_factors", height=100, mode="hub").materialize()
+        atlas.wind.compute("capacity_factors", mode="hub").materialize()
 
         # Verify first mode
         assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_mode") == "hub"
 
         # Cache with mode="rews" should fail without allow_mode_change
         with pytest.raises(ValueError, match="allow_mode_change"):
-            atlas.wind.compute("capacity_factors", height=100, mode="rews").materialize()
+            atlas.wind.compute("capacity_factors", mode="rews").materialize()
 
         # Cache with mode="rews" and allow_mode_change=True should succeed
         atlas.wind.compute(
-            "capacity_factors", height=100, mode="rews"
+            "capacity_factors", mode="rews"
         ).materialize(overwrite=True, allow_mode_change=True)
 
         # Verify mode changed
@@ -524,11 +524,11 @@ class TestDomainResultMaterializeOverwrite:
         atlas.wind.select(turbines=turbine_names)
 
         # Cache first time
-        atlas.wind.compute("capacity_factors", height=100).materialize()
+        atlas.wind.compute("capacity_factors").materialize()
 
         # Second materialize with overwrite=False should raise
         with pytest.raises(ValueError, match="already exists"):
-            atlas.wind.compute("capacity_factors", height=100).materialize(overwrite=False)
+            atlas.wind.compute("capacity_factors").materialize(overwrite=False)
 
     def test_materialize_returns_store_backed_metric_after_subset_alignment(
         self, tmp_path: Path
@@ -546,7 +546,7 @@ class TestDomainResultMaterializeOverwrite:
 
         # Compute only first turbine; materialize() expands to full turbine axis in store.
         atlas.wind.select(turbines=[turbine_names[0]])
-        materialized = atlas.wind.compute("capacity_factors", height=100, mode="hub").materialize()
+        materialized = atlas.wind.compute("capacity_factors", mode="hub").materialize()
         surfaced = atlas.wind.data["capacity_factors"]
 
         assert materialized.identical(surfaced)
@@ -569,7 +569,7 @@ class TestTransientOverlay:
         unifier.materialize_landscape(atlas)
 
         atlas.wind.select(turbines=[turbine_names[0]])
-        result = atlas.wind.compute("capacity_factors", height=100, mode="hub")
+        result = atlas.wind.compute("capacity_factors", mode="hub")
 
         assert "capacity_factors" in atlas.wind.data
         staged = atlas.wind.data["capacity_factors"]
@@ -630,7 +630,7 @@ class TestComputeBackendParity:
         unifier.materialize_landscape(atlas)
 
         atlas.wind.select(turbines=turbine_names)
-        da = atlas.wind.compute("capacity_factors", height=100, mode="hub").data
+        da = atlas.wind.compute("capacity_factors", mode="hub").data
 
         serial = dask_compute(da, backend="serial").values
         threads = dask_compute(da, backend="threads").values

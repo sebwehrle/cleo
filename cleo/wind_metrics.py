@@ -16,9 +16,18 @@ from cleo.economics import (
 )
 
 
-def _extract_turbine_power_kw(turbines_meta: list[dict], turbine_ids: tuple[str, ...]) -> np.ndarray:
-    """Extract rated power in kW from turbine metadata."""
+def _extract_turbine_power_kw(
+    turbines_meta: list[dict],
+    turbine_ids: tuple[str, ...],
+    wind: xr.Dataset | None = None,
+) -> np.ndarray:
+    """Extract rated power in kW from turbine metadata or wind dataset.
+
+    Checks turbines_meta first for capacity/capacity_kw/capacity_mw keys.
+    Falls back to wind["turbine_capacity"] data variable if metadata lacks capacity.
+    """
     id_to_meta = {t["id"]: t for t in turbines_meta}
+    id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
     power_list = []
     for tid in turbine_ids:
         meta = id_to_meta[tid]
@@ -28,6 +37,11 @@ def _extract_turbine_power_kw(turbines_meta: list[dict], turbine_ids: tuple[str,
             power_list.append(float(meta["capacity_kw"]))
         elif "capacity_mw" in meta:
             power_list.append(float(meta["capacity_mw"]) * 1000.0)
+        elif wind is not None and "turbine_capacity" in wind:
+            # Fall back to turbine_capacity data variable
+            tidx = id_to_idx[tid]
+            cap_val = wind["turbine_capacity"].isel(turbine=tidx).values
+            power_list.append(float(cap_val))
         else:
             raise ValueError(
                 f"Turbine {tid!r} missing capacity info; need 'capacity', 'capacity_kw', or 'capacity_mw'"
@@ -35,9 +49,20 @@ def _extract_turbine_power_kw(turbines_meta: list[dict], turbine_ids: tuple[str,
     return np.array(power_list, dtype=np.float64)
 
 
-def _extract_overnight_cost_eur_per_kw(turbines_meta: list[dict], turbine_ids: tuple[str, ...]) -> np.ndarray:
-    """Extract overnight cost in EUR/kW from turbine metadata."""
+def _extract_overnight_cost_eur_per_kw(
+    turbines_meta: list[dict],
+    turbine_ids: tuple[str, ...],
+    wind: xr.Dataset | None = None,
+) -> np.ndarray:
+    """Extract overnight cost in EUR/kW from turbine metadata or compute via Rinne model.
+
+    Checks turbines_meta first for overnight_cost_eur_per_kw or overnight_cost keys.
+    Falls back to Rinne cost model using wind store data variables if metadata lacks cost.
+    """
+    from cleo.economics import turbine_overnight_cost
+
     id_to_meta = {t["id"]: t for t in turbines_meta}
+    id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
     cost_list = []
     for tid in turbine_ids:
         meta = id_to_meta[tid]
@@ -45,6 +70,18 @@ def _extract_overnight_cost_eur_per_kw(turbines_meta: list[dict], turbine_ids: t
             cost_list.append(float(meta["overnight_cost_eur_per_kw"]))
         elif "overnight_cost" in meta:
             cost_list.append(float(meta["overnight_cost"]))
+        elif wind is not None and all(
+            v in wind for v in ("turbine_capacity", "turbine_hub_height", "turbine_rotor_diameter", "turbine_commissioning_year")
+        ):
+            # Fall back to Rinne cost model using wind store data
+            tidx = id_to_idx[tid]
+            power = float(wind["turbine_capacity"].isel(turbine=tidx).values)
+            hub_height = float(wind["turbine_hub_height"].isel(turbine=tidx).values)
+            rotor_diameter = float(wind["turbine_rotor_diameter"].isel(turbine=tidx).values)
+            year = int(wind["turbine_commissioning_year"].isel(turbine=tidx).values)
+            # Rinne model returns EUR/kW
+            cost_eur_per_kw = turbine_overnight_cost(power / 1000.0, hub_height, rotor_diameter, year)
+            cost_list.append(float(cost_eur_per_kw))
         else:
             raise ValueError(
                 f"Turbine {tid!r} missing overnight cost; need 'overnight_cost_eur_per_kw' or 'overnight_cost'"
@@ -56,7 +93,6 @@ def _wind_metric_mean_wind_speed(
     land: xr.Dataset | None,
     *,
     height: int,
-    **_,
 ) -> xr.DataArray:
     """
     Compute mean wind speed from canonical wind store at specified height.
@@ -104,7 +140,6 @@ def _wind_metric_capacity_factors(
     loss_factor: float = 1.0,
     mode: str = "direct_cf_quadrature",
     rews_n: int = 12,
-    **_,
 ) -> xr.DataArray:
     """
     Orchestration for capacity_factors metric (calls assess.capacity_factors_v1).
@@ -232,7 +267,6 @@ def _wind_metric_rews_mps(
     turbines: tuple[str, ...],
     air_density: bool = False,
     rews_n: int = 12,
-    **_,
 ) -> xr.DataArray:
     """Compute first-class REWS output (m/s), dims ``(turbine, y, x)``."""
     if land is None or "valid_mask" not in land:
@@ -313,8 +347,7 @@ def _wind_metric_lcoe(
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
     lifetime_a: int | None = None,
-    hours_per_year: float = 8766.0,
-    **_,
+    hours_per_year: float,
 ) -> xr.DataArray:
     """
     Orchestration for LCOE metric.
@@ -349,8 +382,8 @@ def _wind_metric_lcoe(
 
     # Extract turbine metadata
     turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
-    power_kw = _extract_turbine_power_kw(turbines_meta, turbines)
-    overnight_cost = _extract_overnight_cost_eur_per_kw(turbines_meta, turbines)
+    power_kw = _extract_turbine_power_kw(turbines_meta, turbines, wind)
+    overnight_cost = _extract_overnight_cost_eur_per_kw(turbines_meta, turbines, wind)
 
     # Compute LCOE
     lcoe = lcoe_v1_from_capacity_factors(
@@ -384,8 +417,7 @@ def _wind_metric_min_lcoe_turbine(
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
     lifetime_a: int | None = None,
-    hours_per_year: float = 8766.0,
-    **_,
+    hours_per_year: float,
 ) -> xr.DataArray:
     """
     Orchestration for min_lcoe_turbine metric.
@@ -428,8 +460,7 @@ def _wind_metric_optimal_power(
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
     lifetime_a: int | None = None,
-    hours_per_year: float = 8766.0,
-    **_,
+    hours_per_year: float,
 ) -> xr.DataArray:
     """
     Orchestration for optimal_power metric.
@@ -452,7 +483,7 @@ def _wind_metric_optimal_power(
     )
 
     turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
-    power_kw = _extract_turbine_power_kw(turbines_meta, turbines)
+    power_kw = _extract_turbine_power_kw(turbines_meta, turbines, wind)
 
     p = optimal_power_kw(lcoe=lcoe, power_kw=power_kw)
 
@@ -474,8 +505,7 @@ def _wind_metric_optimal_energy(
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
     lifetime_a: int | None = None,
-    hours_per_year: float = 8766.0,
-    **_,
+    hours_per_year: float,
 ) -> xr.DataArray:
     """
     Orchestration for optimal_energy metric.
@@ -511,8 +541,8 @@ def _wind_metric_optimal_energy(
 
     # Extract turbine metadata
     turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
-    power_kw = _extract_turbine_power_kw(turbines_meta, turbines)
-    overnight_cost = _extract_overnight_cost_eur_per_kw(turbines_meta, turbines)
+    power_kw = _extract_turbine_power_kw(turbines_meta, turbines, wind)
+    overnight_cost = _extract_overnight_cost_eur_per_kw(turbines_meta, turbines, wind)
 
     # Compute LCOE directly from CF (avoids redundant CF computation)
     lcoe = lcoe_v1_from_capacity_factors(
@@ -544,35 +574,62 @@ _WIND_METRICS = {
         "fn": _wind_metric_mean_wind_speed,
         "requires_turbines": False,
         "required": {"height"},
+        "allowed": {"height"},
     },
     "capacity_factors": {
         "fn": _wind_metric_capacity_factors,
         "requires_turbines": True,
         "required": set(),
+        "allowed": {"turbines", "air_density", "loss_factor", "mode", "rews_n"},
     },
     "rews_mps": {
         "fn": _wind_metric_rews_mps,
         "requires_turbines": True,
         "required": set(),
+        "allowed": {"turbines", "air_density", "rews_n"},
     },
     "lcoe": {
         "fn": _wind_metric_lcoe,
         "requires_turbines": True,
         "required": set(),  # fn raises if missing cost params
+        "allowed": {
+            "turbines", "mode", "rews_n", "air_density", "loss_factor",
+            "turbine_cost_share", "om_fixed_eur_per_kw_a", "om_variable_eur_per_kwh",
+            "discount_rate", "lifetime_a",
+            "hours_per_year",  # injected internally by domain
+        },
     },
     "min_lcoe_turbine": {
         "fn": _wind_metric_min_lcoe_turbine,
         "requires_turbines": True,
         "required": set(),
+        "allowed": {
+            "turbines", "mode", "rews_n", "air_density", "loss_factor",
+            "turbine_cost_share", "om_fixed_eur_per_kw_a", "om_variable_eur_per_kwh",
+            "discount_rate", "lifetime_a",
+            "hours_per_year",  # injected internally by domain
+        },
     },
     "optimal_power": {
         "fn": _wind_metric_optimal_power,
         "requires_turbines": True,
         "required": set(),
+        "allowed": {
+            "turbines", "mode", "rews_n", "air_density", "loss_factor",
+            "turbine_cost_share", "om_fixed_eur_per_kw_a", "om_variable_eur_per_kwh",
+            "discount_rate", "lifetime_a",
+            "hours_per_year",  # injected internally by domain
+        },
     },
     "optimal_energy": {
         "fn": _wind_metric_optimal_energy,
         "requires_turbines": True,
         "required": set(),
+        "allowed": {
+            "turbines", "mode", "rews_n", "air_density", "loss_factor",
+            "turbine_cost_share", "om_fixed_eur_per_kw_a", "om_variable_eur_per_kwh",
+            "discount_rate", "lifetime_a",
+            "hours_per_year",  # injected internally by domain
+        },
     },
 }

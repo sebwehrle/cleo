@@ -373,6 +373,17 @@ class WindDomain:
                 "atlas.wind.compute(...).materialize(overwrite=True, allow_mode_change=True)."
             )
 
+        # Reject timebase kwargs - must use atlas.configure_timebase()
+        timebase_kwargs = tuple(
+            key for key in ("hours_per_year",) if key in kwargs
+        )
+        if timebase_kwargs:
+            keys_text = ", ".join(repr(key) for key in timebase_kwargs)
+            raise ValueError(
+                f"Timebase parameter(s) {keys_text} cannot be passed to compute(...). "
+                f"Use atlas.configure_timebase(hours_per_year=...) to set timebase assumptions."
+            )
+
         if metric not in _WIND_METRICS:
             supported = sorted(_WIND_METRICS.keys())
             raise ValueError(
@@ -383,6 +394,7 @@ class WindDomain:
         fn = spec["fn"]
         required = spec["required"]
         requires_turbines = spec["requires_turbines"]
+        allowed = spec.get("allowed")
 
         # Check required kwargs
         missing = required - kwargs.keys()
@@ -390,6 +402,18 @@ class WindDomain:
             raise ValueError(
                 f"Missing required parameters for {metric}: {sorted(missing)}"
             )
+
+        # Check for unknown kwargs (strict enforcement)
+        if allowed is not None:
+            unknown = set(kwargs.keys()) - allowed
+            if unknown:
+                # Filter out internal params for user-facing error message
+                internal_params = {"hours_per_year"}
+                user_allowed = sorted(allowed - internal_params)
+                raise ValueError(
+                    f"Unknown parameter(s) for metric {metric!r}: {sorted(unknown)}. "
+                    f"Allowed: {user_allowed}"
+                )
 
         # Turbine enforcement: inject from persistent selection if not provided
         if requires_turbines:
@@ -410,6 +434,11 @@ class WindDomain:
                     )
                 turbines = self._validate_turbines(list(turbines))
             kwargs["turbines"] = turbines
+
+        # Inject resolved timebase for economics metrics
+        _ECONOMICS_METRICS = {"lcoe", "min_lcoe_turbine", "optimal_power", "optimal_energy"}
+        if metric in _ECONOMICS_METRICS:
+            kwargs["hours_per_year"] = self._atlas._effective_hours_per_year()
 
         # Prepare canonical inputs
         wind = self._atlas.wind_data

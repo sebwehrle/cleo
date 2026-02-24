@@ -110,6 +110,11 @@ Atlas(
   - configure turbines used for wind materialization.
 - `atlas.turbines_configured`
   - configured materialization turbine set or `None`.
+- `atlas.configure_timebase(hours_per_year)`
+  - configure timebase assumptions for annualized metrics (LCOE-family).
+  - default is 8766.0 hours/year when not configured.
+- `atlas.timebase_configured`
+  - configured timebase dict (`{"hours_per_year": float}`) or `None`.
 - `atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True, cast_binary_to_int=False, include_only=None)`
   - flattens domain data into a tabular frame.
 - `Atlas.validate_flatten_schema(df, required_columns)`
@@ -162,7 +167,8 @@ Atlas(
   - Options: `rews_n`, `air_density`
 - `lcoe`
   - Requires turbines and: `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`
-  - Optional: `turbine_cost_share`, `hours_per_year`, plus `capacity_factors` options (`mode`, `rews_n`, `air_density`, `loss_factor`)
+  - Optional: `turbine_cost_share`, plus `capacity_factors` options (`mode`, `rews_n`, `air_density`, `loss_factor`)
+  - Timebase (`hours_per_year`) is configured at Atlas level via `atlas.configure_timebase(...)`, not per-metric.
 - `min_lcoe_turbine`
   - Same parameter requirements/options as `lcoe`
 - `optimal_power`

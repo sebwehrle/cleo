@@ -1,4 +1,5 @@
 # %% imports
+import math
 import re
 import pyproj
 import logging
@@ -70,6 +71,7 @@ class NutsRegionName(str):
 class Atlas:
     DEFAULT_NUTS_LEVEL = 2
     _VALID_NUTS_LEVELS = (1, 2, 3)
+    DEFAULT_HOURS_PER_YEAR = 8766.0
 
     def __init__(
         self,
@@ -96,6 +98,7 @@ class Atlas:
         self.crs = crs
         self._turbines_configured: tuple[str, ...] | None = None
         self._wind_selected_turbines: tuple[str, ...] | None = None
+        self._timebase_configured: dict[str, float] | None = None
         self._setup_directories()
         self._setup_logging()
         self._deploy_resources()
@@ -434,6 +437,11 @@ class Atlas:
         clone._canonical_ready = bool(getattr(self, "_canonical_ready", False))
         clone._turbines_configured = getattr(self, "_turbines_configured", None)
         clone._wind_selected_turbines = getattr(self, "_wind_selected_turbines", None)
+        clone._timebase_configured = (
+            dict(self._timebase_configured)
+            if self._timebase_configured is not None
+            else None
+        )
 
         return clone
 
@@ -1017,6 +1025,43 @@ class Atlas:
             is used during materialization.
         """
         return self._turbines_configured
+
+    def configure_timebase(self, *, hours_per_year: float) -> None:
+        """Configure timebase assumptions for annualized metrics.
+
+        Affects LCOE-family metrics (lcoe, min_lcoe_turbine, optimal_power,
+        optimal_energy). Physics metrics (capacity_factors, mean_wind_speed,
+        rews_mps) are timebase-independent.
+
+        :param hours_per_year: Hours per year for energy calculations.
+            Must be finite and > 0. Default (if not configured) is 8766.0.
+        :raises TypeError: If hours_per_year is not numeric.
+        :raises ValueError: If hours_per_year is not finite or <= 0.
+        """
+        if not isinstance(hours_per_year, (int, float)):
+            raise TypeError(
+                f"hours_per_year must be numeric, got {type(hours_per_year).__name__}"
+            )
+        hours_per_year = float(hours_per_year)
+        if not (hours_per_year > 0 and math.isfinite(hours_per_year)):
+            raise ValueError(
+                f"hours_per_year must be finite and > 0, got {hours_per_year}"
+            )
+        self._timebase_configured = {"hours_per_year": hours_per_year}
+
+    @property
+    def timebase_configured(self) -> dict[str, float] | None:
+        """Configured timebase assumptions, or None for defaults.
+
+        :returns: Dict with 'hours_per_year' if configured, else None.
+        """
+        return self._timebase_configured
+
+    def _effective_hours_per_year(self) -> float:
+        """Resolve effective hours_per_year for economics computations."""
+        if self._timebase_configured is not None:
+            return float(self._timebase_configured["hours_per_year"])
+        return float(self.DEFAULT_HOURS_PER_YEAR)
 
     def _deploy_resources(self) -> None:
         """Ensure packaged YAML resources exist in ``<atlas.path>/resources``."""

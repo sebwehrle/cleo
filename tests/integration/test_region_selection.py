@@ -451,7 +451,6 @@ class TestRegionMaterialization:
         # Cache capacity factors
         atlas.wind.compute(
             metric="capacity_factors",
-            height=100,
             air_density=False,
             loss_factor=1.0,
         ).materialize()
@@ -492,7 +491,6 @@ class TestRegionMaterialization:
         # Cache
         atlas.wind.compute(
             metric="capacity_factors",
-            height=100,
             air_density=False,
         ).materialize()
 

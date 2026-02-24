@@ -231,6 +231,8 @@ def optimal_power_kw(
     p_sel.attrs["cleo:selection_basis"] = "min_lcoe_turbine_idx"
     if "cleo:economics_json" in lcoe.attrs:
         p_sel.attrs["cleo:economics_json"] = lcoe.attrs["cleo:economics_json"]
+    if "cleo:hours_per_year" in lcoe.attrs:
+        p_sel.attrs["cleo:hours_per_year"] = lcoe.attrs["cleo:hours_per_year"]
     p_sel.attrs["cleo:algo"] = "optimal_power_kw"
     p_sel.attrs["cleo:algo_version"] = "3"
     return p_sel

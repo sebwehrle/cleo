@@ -9,9 +9,10 @@ import pandas as pd
 import rioxarray as rxr
 import logging
 from pathlib import Path
-from cleo.costs import turbine_overnight_cost
+from cleo.economics import turbine_overnight_cost
 from cleo.net import download_to_path, RequestException
 from cleo.spatial import reproject_raster_if_needed, to_crs_if_needed
+from cleo.unification.gwa_io import ensure_crs_from_gwa, fetch_gwa_crs
 
 logger = logging.getLogger(__name__)
 
@@ -72,48 +73,6 @@ def _safe_extractall(zip_ref: zipfile.ZipFile, dest_dir: Path) -> None:
     zip_ref.extractall(dest_dir)
 
 
-
-# %% CRS inference from GWA
-def fetch_gwa_crs(iso3):
-    """
-    Fetch CRS from Global Wind Atlas GeoJSON API for a given country.
-
-    Network contract:
-    - Must not hang indefinitely: uses a bounded timeout.
-    - Must raise with actionable context (ISO3 + URL) on request failures.
-
-    :param iso3: ISO 3166-1 alpha-3 country code
-    :type iso3: str
-    :return: CRS string from the GeoJSON response
-    :rtype: str
-    :raises ValueError: If CRS is missing from the GeoJSON response
-    :raises RuntimeError: If the HTTP request fails (timeout, DNS, etc.)
-    """
-    from cleo.unification.gwa_io import fetch_gwa_crs as fetch_gwa_crs_unification
-
-    return fetch_gwa_crs_unification(iso3)
-
-
-def ensure_crs_from_gwa(ds, iso3):
-    """
-    Ensure a raster DataArray has a CRS set, fetching from GWA if needed.
-
-    If ds.rio.crs is already set, returns ds unchanged.
-    If ds.rio.crs is None, fetches CRS from GWA GeoJSON API and writes it.
-
-    :param ds: Raster DataArray or Dataset
-    :type ds: xarray.DataArray or xarray.Dataset
-    :param iso3: ISO 3166-1 alpha-3 country code
-    :type iso3: str
-    :return: DataArray/Dataset with CRS set
-    :rtype: xarray.DataArray or xarray.Dataset
-    :raises ValueError: If CRS is missing from the GeoJSON response
-    """
-    from cleo.unification.gwa_io import ensure_crs_from_gwa as ensure_crs_from_gwa_unification
-
-    return ensure_crs_from_gwa_unification(ds, iso3)
-
-
 def load_elevation(base_dir, iso3, reference_da):
     """
     Load elevation data with local GeoTIFF preference.
@@ -137,7 +96,7 @@ def load_elevation(base_dir, iso3, reference_da):
     from rasterio.crs import CRS
     from rasterio.warp import transform_bounds
 
-    from cleo.copdem import download_copdem_tiles_for_bbox, build_copdem_elevation_like
+    from cleo.unification.raster_io import build_copdem_elevation_like, download_copdem_tiles_for_bbox
 
     path_raw_country = Path(base_dir) / "data" / "raw" / iso3
     local_path = path_raw_country / f"{iso3}_elevation_w_bathymetry.tif"
@@ -240,7 +199,7 @@ def get_overnight_cost(self, turbine_id):
     """Compute turbine overnight cost in EUR/kW-equivalent terms.
 
     Reads turbine attributes from atlas metadata and delegates the calculation
-    to :func:`cleo.assess.turbine_overnight_cost`.
+    to :func:`cleo.economics.turbine_overnight_cost`.
 
     :param turbine_id: Turbine identifier.
     :type turbine_id: str

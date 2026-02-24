@@ -7,7 +7,7 @@ Contracts:
 
 from __future__ import annotations
 from pathlib import Path
-from cleo.class_helpers import deploy_resources
+from cleo.atlas import Atlas
 
 EXPECTED_YMLS = {
     "clc_codes.yml",
@@ -41,7 +41,7 @@ def _list_yml_names(resdir: Path) -> set[str]:
 def test_deploy_resources_copies_defaults(tmp_path: Path) -> None:
     d = _Dummy(tmp_path)
 
-    deploy_resources(d)
+    Atlas._deploy_resources(d)
 
     resdir = _resources_dir(tmp_path)
     assert resdir.is_dir()
@@ -61,6 +61,6 @@ def test_deploy_resources_is_idempotent_and_preserves_overrides(tmp_path: Path) 
     sentinel = "SENTINEL_DO_NOT_OVERWRITE\n"
     target.write_text(sentinel, encoding="utf-8")
 
-    deploy_resources(d)
+    Atlas._deploy_resources(d)
 
     assert target.read_text(encoding="utf-8") == sentinel

@@ -40,7 +40,6 @@ from cleo.unification.store_io import (
     write_netcdf_atomic,
 )
 from cleo.spatial import to_crs_if_needed
-from cleo.class_helpers import deploy_resources, setup_logging
 from cleo.dask_utils import normalize_compute_backend, normalize_compute_workers
 
 logger = logging.getLogger(__name__)
@@ -1019,8 +1018,72 @@ class Atlas:
         """
         return self._turbines_configured
 
-    _setup_logging = setup_logging
-    _deploy_resources = deploy_resources
+    def _deploy_resources(self) -> None:
+        """Ensure packaged YAML resources exist in ``<atlas.path>/resources``."""
+        import shutil
+        from importlib import resources as importlib_resources
+
+        dest_dir = Path(self.path) / "resources"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        pkg_root = importlib_resources.files("cleo").joinpath("resources")
+        if not pkg_root.is_dir():
+            raise FileNotFoundError(
+                "Cleo packaged resources are missing (expected package dir `cleo/resources`). "
+                "This indicates a broken installation/build. "
+                "Reinstall from a proper wheel/sdist, or use the conda environment.yaml install."
+            )
+
+        packaged = [
+            p for p in pkg_root.iterdir()
+            if p.is_file() and p.name.lower().endswith(".yml")
+        ]
+        if not packaged:
+            raise FileNotFoundError(
+                "Cleo packaged resources directory exists but contains no *.yml files. "
+                "This indicates a broken installation/build."
+            )
+
+        copied = 0
+        skipped = 0
+        for p in packaged:
+            dest = dest_dir / p.name
+            if dest.exists():
+                skipped += 1
+                continue
+            with importlib_resources.as_file(p) as src_path:
+                shutil.copy(src_path, dest)
+            copied += 1
+
+        logger.info(
+            f"Resource files ensured in {dest_dir} (copied={copied}, skipped_existing={skipped})."
+        )
+
+    def _setup_logging(self, console_level: str = "INFO", file_level: str = "DEBUG") -> None:
+        """Configure the ``cleo`` logger namespace without mutating root logger."""
+        log_dir = Path(self.path) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"cleo_{self.country}.log"
+
+        cleo_logger = logging.getLogger("cleo")
+        cleo_logger.setLevel(logging.DEBUG)
+        cleo_logger.propagate = False
+
+        for handler in list(cleo_logger.handlers):
+            cleo_logger.removeHandler(handler)
+
+        fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+        ch = logging.StreamHandler()
+        ch.setLevel(getattr(logging, str(console_level).upper(), logging.INFO))
+        ch.setFormatter(fmt)
+
+        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh.setLevel(getattr(logging, str(file_level).upper(), logging.DEBUG))
+        fh.setFormatter(fmt)
+
+        cleo_logger.addHandler(ch)
+        cleo_logger.addHandler(fh)
 
     def _setup_directories(self) -> None:
         """

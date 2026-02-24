@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-from cleo.assess import min_lcoe_turbine_idx, optimal_power_kw
+from cleo.economics import min_lcoe_turbine_idx, optimal_power_kw
 
 
 def _sample_lcoe() -> xr.DataArray:

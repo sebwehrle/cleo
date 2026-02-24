@@ -71,7 +71,7 @@ def test_materialize_clc_raises_when_no_valid_cells(
         name="clc",
     ).rio.write_crs("EPSG:3035")
 
-    monkeypatch.setattr("cleo.clc._wind_reference_template", lambda _atlas: ref)
+    monkeypatch.setattr("cleo.clc.wind_reference_template", lambda _atlas: ref)
 
     class _FakeRaster:
         def squeeze(self, drop=True):  # noqa: ANN001, ARG002

@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from cleo.class_helpers import setup_logging
+from cleo.atlas import Atlas
 
 
 def test_setup_logging_does_not_override_root(tmp_path: Path) -> None:
@@ -27,7 +27,7 @@ def test_setup_logging_does_not_override_root(tmp_path: Path) -> None:
         old_handlers = list(root.handlers)
 
         parent = SimpleNamespace(path=Path(tmp_path), country="AUT")
-        setup_logging(parent)
+        Atlas._setup_logging(parent)
 
         # Root must be untouched
         assert root.level == old_level
@@ -50,7 +50,7 @@ def test_setup_logging_does_not_crash(tmp_path: Path) -> None:
     # setup_logging expects logs dir to exist
     (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
 
-    setup_logging(mock_self)
+    Atlas._setup_logging(mock_self)
 
 
 def test_logging_config_is_importable() -> None:

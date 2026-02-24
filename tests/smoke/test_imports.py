@@ -12,19 +12,16 @@ def test_import_cleo() -> None:
     import cleo  # noqa: F401
 
 
-def test_import_key_modules() -> None:
+def test_import_public_entrypoint() -> None:
+    from cleo import Atlas
+
+    assert Atlas.__name__ == "Atlas"
+
+
+def test_import_atlas_surface_modules() -> None:
     for mod in [
-        "cleo.assess",
         "cleo.atlas",
-        "cleo.class_helpers",
-        "cleo.copdem",
         "cleo.domains",
-        "cleo.loaders",
-        "cleo.net",
         "cleo.results",
-        "cleo.spatial",
-        "cleo.store",
-        "cleo.utils",
-        "cleo.wind_metrics",
     ]:
         importlib.import_module(mod)

@@ -24,6 +24,10 @@ Scope: This document defines **both** (A) the stable *user-facing API* and (B) t
 from cleo import Atlas
 ```
 
+Normative:
+- Public API stability is defined by the `Atlas`/domain/result contracts in section A.
+- Internal modules are not part of the public compatibility surface (for example `cleo.assess`, `cleo.loaders`, `cleo.unification.*`, `cleo.clc`).
+
 ---
 
 ### A2. `Atlas` construction

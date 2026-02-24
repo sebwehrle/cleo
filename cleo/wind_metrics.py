@@ -7,6 +7,8 @@ from cleo.assess import (
     mean_wind_speed_from_weibull,
     capacity_factors_v1,
     rews_mps_v1,
+)
+from cleo.economics import (
     lcoe_v1_from_capacity_factors,
     min_lcoe_turbine_idx,
     optimal_power_kw,
@@ -408,7 +410,7 @@ def _wind_metric_min_lcoe_turbine(
     idx = min_lcoe_turbine_idx(lcoe=lcoe, turbine_ids=turbines)
 
     # valid_mask already applied via CF -> LCOE.
-    # All-NaN pixels are encoded as nodata index (-1) in assess.min_lcoe_turbine_idx.
+    # All-NaN pixels are encoded as nodata index (-1) in economics.min_lcoe_turbine_idx.
     return idx
 
 

@@ -7,9 +7,9 @@ from pathlib import Path
 
 from cleo.net import download_to_path
 from cleo.unification.clc_io import (
-    load_clc_codes as _load_clc_codes_io,
-    prepare_clc_to_wind_grid as _prepare_clc_to_wind_grid_io,
-    wind_reference_template as _wind_reference_template_io,
+    load_clc_codes,
+    prepare_clc_to_wind_grid,
+    wind_reference_template,
 )
 
 
@@ -45,24 +45,14 @@ def prepared_country_path(atlas_path: Path, country: str, source: str) -> Path:
     )
 
 
-def _load_clc_codes(path: Path) -> dict[int, str]:
-    """Compatibility wrapper delegating CLC code I/O to unification layer."""
-    return _load_clc_codes_io(path)
-
-
 def default_category_name(atlas_path: Path, code: int) -> str | None:
     """Return default variable name for a CLC code, or ``None`` if unknown."""
-    labels = _load_clc_codes(Path(atlas_path))
+    labels = load_clc_codes(Path(atlas_path))
     if int(code) not in labels:
         return None
     label = labels[int(code)].strip().casefold()
     name = re.sub(r"[^a-z0-9]+", "_", label).strip("_")
     return name or None
-
-
-def _wind_reference_template(atlas):
-    """Compatibility wrapper delegating wind-template I/O to unification layer."""
-    return _wind_reference_template_io(atlas)
 
 
 def materialize_clc(
@@ -103,8 +93,8 @@ def materialize_clc(
     if not getattr(atlas, "_canonical_ready", False):
         atlas.build_canonical()
 
-    ref = _wind_reference_template(atlas)
-    return _prepare_clc_to_wind_grid_io(
+    ref = wind_reference_template(atlas)
+    return prepare_clc_to_wind_grid(
         source_path=source_path,
         prepared_path=prepared,
         ref=ref,

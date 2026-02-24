@@ -14,9 +14,7 @@ import rioxarray  # noqa: F401
 import geopandas as gpd
 from types import SimpleNamespace
 from shapely.geometry import box
-from cleo.spatial import bbox
-from cleo.class_helpers import set_attributes
-from cleo.spatial import clip_to_geometry
+from cleo.spatial import bbox, clip_to_geometry, crs_equal
 
 
 def test_bbox_returns_floats():
@@ -88,7 +86,7 @@ def test_bbox_with_data_attribute():
 
 
 
-def test_set_attributes_accepts_case_mismatched_crs():
+def test_crs_equal_accepts_case_mismatched_crs():
     """
     set_attributes should accept case-mismatched but equivalent CRS.
     E.g., "EPSG:4326" (data) vs "epsg:4326" (parent) are semantically equal.
@@ -98,16 +96,7 @@ def test_set_attributes_accepts_case_mismatched_crs():
         "a": xr.DataArray(np.zeros((2, 2)), dims=("y", "x"), coords={"y": [0, 1], "x": [0, 1]})
     }).rio.write_crs("EPSG:4326")
 
-    # Dummy object with lowercase CRS
-    dummy = types.SimpleNamespace()
-    dummy.data = ds
-    dummy.parent = types.SimpleNamespace(country="AUT", region=None, crs="epsg:4326")
-
-    # Should NOT raise - CRS are semantically equivalent
-    set_attributes(dummy)
-
-    # Verify attributes were set
-    assert dummy.data.attrs["country"] == "AUT"
+    assert crs_equal(ds.rio.crs, "epsg:4326") is True
 
 
 def test_clip_to_geometry_accepts_case_mismatched_crs():

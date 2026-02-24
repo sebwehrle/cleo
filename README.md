@@ -51,6 +51,12 @@ After materialization, CLEO uses:
 
 ## Public API
 
+Public API boundary:
+
+- Supported entry point: `from cleo import Atlas`.
+- Public behavior is defined by the `Atlas`, `WindDomain`, `LandscapeDomain`, and `DomainResult` contracts below.
+- Internal modules (for example `cleo.assess`, `cleo.loaders`, `cleo.unification.*`, `cleo.clc`) are implementation details and not part of the stability contract.
+
 ### Atlas Construction
 
 ```python

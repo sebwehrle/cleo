@@ -11,7 +11,7 @@ import xarray as xr
 import rioxarray  # noqa: F401
 from pathlib import Path
 from affine import Affine
-from cleo.copdem import tiles_for_bbox
+from cleo.unification.raster_io import tiles_for_bbox
 
 
 def _create_reference_da_with_crs(crs, x_range, y_range):
@@ -65,8 +65,8 @@ def test_projected_crs_bounds_transformed_to_lonlat(tmp_path, monkeypatch):
             coords=reference_da.coords,
         ).rio.write_crs(reference_da.rio.crs)
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tiles_for_bbox", mock_download_tiles)
-    monkeypatch.setattr("cleo.copdem.build_copdem_elevation_like", mock_build_elevation)
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download_tiles)
+    monkeypatch.setattr("cleo.unification.raster_io.build_copdem_elevation_like", mock_build_elevation)
 
     # Create minimal directory structure
     (tmp_path / "data" / "raw" / "AUT").mkdir(parents=True, exist_ok=True)
@@ -125,8 +125,8 @@ def test_epsg4326_bounds_passed_unchanged(tmp_path, monkeypatch):
             coords=reference_da.coords,
         ).rio.write_crs(reference_da.rio.crs)
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tiles_for_bbox", mock_download_tiles)
-    monkeypatch.setattr("cleo.copdem.build_copdem_elevation_like", mock_build_elevation)
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download_tiles)
+    monkeypatch.setattr("cleo.unification.raster_io.build_copdem_elevation_like", mock_build_elevation)
 
     (tmp_path / "data" / "raw" / "AUT").mkdir(parents=True, exist_ok=True)
 
@@ -161,7 +161,7 @@ def test_tiles_for_bbox_austria():
     min_lat = 46.35125
     max_lat = 49.04125
 
-    # Oracle: inline formatting function (do not import from cleo.copdem)
+    # Oracle: inline formatting function (do not import tile-id helper here)
     def oracle_tile_id(lat_deg, lon_deg):
         ns = "N" if lat_deg >= 0 else "S"
         ew = "E" if lon_deg >= 0 else "W"

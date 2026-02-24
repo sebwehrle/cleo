@@ -14,7 +14,7 @@ import rioxarray as rxr
 import rasterio
 from pathlib import Path
 from rasterio.transform import from_bounds, from_origin
-from cleo.copdem import build_copdem_elevation_like
+from cleo.unification.raster_io import build_copdem_elevation_like
 from cleo.loaders import load_elevation
 
 
@@ -213,8 +213,8 @@ def test_load_elevation_uses_air_density_when_reference_lacks_crs(monkeypatch, t
         build_calls.append({"ref_crs": str(ref_da.rio.crs)})
         return sentinel_elevation
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tiles_for_bbox", mock_download)
-    monkeypatch.setattr("cleo.copdem.build_copdem_elevation_like", mock_build)
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download)
+    monkeypatch.setattr("cleo.unification.raster_io.build_copdem_elevation_like", mock_build)
 
     # Call load_elevation with a reference that has no CRS
     result = load_elevation(tmp_path, iso3, reference_da_no_crs)
@@ -318,8 +318,8 @@ def test_load_elevation_uses_legacy_when_present(monkeypatch, tmp_path):
         copdem_called["build"] = True
         raise AssertionError("build_copdem_elevation_like should not be called")
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tiles_for_bbox", mock_download)
-    monkeypatch.setattr("cleo.copdem.build_copdem_elevation_like", mock_build)
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download)
+    monkeypatch.setattr("cleo.unification.raster_io.build_copdem_elevation_like", mock_build)
 
     # Also mock ensure_crs_from_gwa to avoid network call
     def mock_ensure_crs(ds, iso3):
@@ -399,8 +399,8 @@ def test_load_elevation_uses_copdem_when_legacy_absent(monkeypatch, tmp_path):
         result = result.rio.write_crs("EPSG:4326")
         return result
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tiles_for_bbox", mock_download)
-    monkeypatch.setattr("cleo.copdem.build_copdem_elevation_like", mock_build)
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tiles_for_bbox", mock_download)
+    monkeypatch.setattr("cleo.unification.raster_io.build_copdem_elevation_like", mock_build)
 
     # Call load_elevation
     elevation = load_elevation(tmp_path, iso3, reference_da)
@@ -458,7 +458,7 @@ def test_load_elevation_legacy_matches_reference_grid(tmp_path, monkeypatch):
     def boom(*args, **kwargs):
         raise AssertionError("CopDEM download should not be called when legacy exists")
 
-    monkeypatch.setattr("cleo.copdem.download_copdem_tiles_for_bbox", boom)
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tiles_for_bbox", boom)
 
     out = load_elevation(tmp_path, iso3, ref)
 

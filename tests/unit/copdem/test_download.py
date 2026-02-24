@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cleo.copdem import (
+from cleo.unification.raster_io import (
     copdem_tile_cache_path,
     copdem_tile_url,
     download_copdem_tile,

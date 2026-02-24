@@ -1,6 +1,6 @@
-"""assess: test_lcoe.
+"""economics: test_lcoe.
 
-Tests for cleo.assess.levelized_cost, with analytic oracles.
+Tests for cleo.economics.levelized_cost, with analytic oracles.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-from cleo.assess import levelized_cost
+from cleo.economics import levelized_cost
 
 
 def _npv_factor(*, r: float, n: int) -> float:

@@ -172,7 +172,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     # === Public API boundary checks (Atlas/domain contract) ===
     for method in ("build", "build_canonical", "select", "new_run_id", "open_result", "export_result_netcdf"):
         assert hasattr(atlas, method), f"Atlas missing public method: {method}"
-    for method in ("compute", "capacity_factors", "mean_wind_speed", "clear_selection"):
+    for method in ("compute", "select", "clear_selection", "clear_computed"):
         assert hasattr(atlas.wind, method), f"WindDomain missing public method: {method}"
     for method in ("add", "rasterize", "clear_staged"):
         assert hasattr(atlas.landscape, method), f"LandscapeDomain missing public method: {method}"
@@ -245,7 +245,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
 
     # === Compute capacity factors (result wrapper API) ===
     # compute() returns DomainResult with .data and .materialize()
-    metric_result = atlas.wind.capacity_factors(air_density=False)
+    metric_result = atlas.wind.compute("capacity_factors", air_density=False)
     cf = metric_result.data  # Access the DataArray
 
     # Ensure stable name before persist

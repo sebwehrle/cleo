@@ -85,7 +85,7 @@ def test_lcoe_and_optimal_metrics_emit_metadata_lineage_contract() -> None:
     assert economics["lifetime_a"] == 20
     assert economics["om_fixed_eur_per_kw_a"] == 25.0
     assert economics["om_variable_eur_per_kwh"] == 0.01
-    assert economics["turbine_cost_share"] == 1.0
+    assert economics["bos_cost_share"] == 0.0
 
     assert idx.attrs["cleo:nodata_index"] == -1
     assert idx.attrs["cleo:turbine_ids_json"] == lcoe.attrs["cleo:turbine_ids_json"]

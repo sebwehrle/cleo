@@ -42,7 +42,7 @@ def _make_minimal_cf():
 
 def _lcoe_params():
     return {
-        "turbine_cost_share": 1.0,
+        "bos_cost_share": 0.0,
         "om_fixed_eur_per_kw_a": 25.0,
         "om_variable_eur_per_kwh": 0.01,
         "discount_rate": 0.05,

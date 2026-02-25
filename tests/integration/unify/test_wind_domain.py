@@ -242,9 +242,9 @@ class TestWindDomainTurbineSelection:
         with pytest.raises(ValueError, match="must be an integer"):
             w0.select(turbine_indices=[0, "1"])  # type: ignore[list-item]
 
-        # capacity_factors wrapper must reject free height (avoid silent no-op)
-        with pytest.raises(ValueError, match="does not accept a free 'height'"):
-            w0.capacity_factors(height=100)
+        # compute() rejects unknown kwargs like height for capacity_factors
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            w0.compute("capacity_factors", height=100)
 
 
 class TestMeanWindSpeedComputation:

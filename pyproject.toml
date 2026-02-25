@@ -40,6 +40,16 @@ dependencies = [
 
 [project.optional-dependencies]
 bench = ["psutil"]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "ruff",
+]
+
+[tool.pytest.ini_options]
+markers = [
+  "slow: slower integration tests",
+]
 
 [tool.setuptools]
 include-package-data = true

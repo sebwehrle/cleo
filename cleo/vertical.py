@@ -154,7 +154,6 @@ def interp_log_linear_ln_z(
     lnz = np.log(z)
     lnq = np.log(q_stack).assign_coords(ln_height=("height", lnz)).swap_dims({"height": "ln_height"}).sortby("ln_height")
 
-    q_coord = xr.DataArray(qh, dims=("query_height",), coords={"query_height": qh})
     ln_target = xr.DataArray(np.log(qh), dims=("query_height",), coords={"query_height": qh})
     lnq_out = lnq.interp(ln_height=ln_target, method="linear")
     # interp introduces ln_height coordinate; normalize to query_height only.

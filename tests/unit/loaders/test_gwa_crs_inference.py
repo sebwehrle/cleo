@@ -13,7 +13,8 @@ import pytest
 import rasterio
 import rioxarray as rxr
 
-from cleo.loaders import fetch_gwa_crs, ensure_crs_from_gwa
+from cleo.loaders import ensure_crs_from_gwa
+from cleo.unification.gwa_io import fetch_gwa_crs
 
 
 class MockResponse:

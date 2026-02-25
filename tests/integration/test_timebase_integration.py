@@ -122,22 +122,22 @@ class TestTimebaseIntegration:
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]
 
-        # Compute LCOE with default timebase
-        lcoe_params = {
+        # Compute LCOE with default timebase (using grouped economics spec)
+        economics = {
             "om_fixed_eur_per_kw_a": 20.0,
             "om_variable_eur_per_kwh": 0.008,
             "discount_rate": 0.05,
             "lifetime_a": 25,
         }
 
-        lcoe1 = atlas.wind.compute("lcoe", turbines=[tid], **lcoe_params).data.compute()
+        lcoe1 = atlas.wind.compute("lcoe", turbines=[tid], economics=economics).data.compute()
 
         # Configure different timebase
         atlas.configure_timebase(hours_per_year=8760.0)
 
         # Compute LCOE again
         atlas.wind.clear_computed()
-        lcoe2 = atlas.wind.compute("lcoe", turbines=[tid], **lcoe_params).data.compute()
+        lcoe2 = atlas.wind.compute("lcoe", turbines=[tid], economics=economics).data.compute()
 
         # Values should differ
         valid1 = lcoe1.values[np.isfinite(lcoe1.values)]
@@ -174,14 +174,14 @@ class TestTimebaseIntegration:
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]
 
-        lcoe_params = {
+        economics = {
             "om_fixed_eur_per_kw_a": 20.0,
             "om_variable_eur_per_kwh": 0.008,
             "discount_rate": 0.05,
             "lifetime_a": 25,
         }
 
-        lcoe = atlas.wind.compute("lcoe", turbines=[tid], **lcoe_params).data
+        lcoe = atlas.wind.compute("lcoe", turbines=[tid], economics=economics).data
 
         assert "cleo:hours_per_year" in lcoe.attrs
         assert lcoe.attrs["cleo:hours_per_year"] == Atlas.DEFAULT_HOURS_PER_YEAR
@@ -221,13 +221,13 @@ class TestTimebaseIntegration:
         # Configure custom timebase
         atlas.configure_timebase(hours_per_year=8750.0)
 
-        lcoe_params = {
+        economics = {
             "om_fixed_eur_per_kw_a": 20.0,
             "om_variable_eur_per_kwh": 0.008,
             "discount_rate": 0.05,
             "lifetime_a": 25,
         }
 
-        lcoe = atlas.wind.compute("lcoe", turbines=[tid], **lcoe_params).data
+        lcoe = atlas.wind.compute("lcoe", turbines=[tid], economics=economics).data
 
         assert lcoe.attrs["cleo:hours_per_year"] == 8750.0

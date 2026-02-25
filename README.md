@@ -30,10 +30,10 @@ atlas.build()
 atlas.wind.select(turbines=["Enercon.E40.500"])
 
 # Compute + materialize into active wind store
-atlas.wind.capacity_factors(mode="direct_cf_quadrature", air_density=True).materialize()
+atlas.wind.compute("capacity_factors", mode="direct_cf_quadrature", air_density=True).materialize()
 
 # Compute another metric (lazy result)
-mean_ws = atlas.wind.mean_wind_speed(height=100).data
+mean_ws = atlas.wind.compute("mean_wind_speed", height=100).data
 ```
 
 ## Workspace Layout
@@ -115,6 +115,12 @@ Atlas(
   - default is 8766.0 hours/year when not configured.
 - `atlas.timebase_configured`
   - configured timebase dict (`{"hours_per_year": float}`) or `None`.
+- `atlas.configure_economics(discount_rate, lifetime_a, om_fixed_eur_per_kw_a, om_variable_eur_per_kwh, bos_cost_share)`
+  - configure baseline economics assumptions for LCOE-family metrics.
+  - all parameters are optional; multiple calls merge values.
+  - per-call overrides via `economics={...}` take precedence over baseline.
+- `atlas.economics_configured`
+  - configured economics dict or `None`.
 - `atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True, cast_binary_to_int=False, include_only=None)`
   - flattens domain data into a tabular frame.
 - `Atlas.validate_flatten_schema(df, required_columns)`
@@ -136,14 +142,10 @@ Atlas(
 - `atlas.wind.clear_computed()`
   - clear transient computed overlays from `atlas.wind.data`; returns `None`.
 - `atlas.wind.compute(metric, **kwargs)`
-  - generic metric entrypoint.
+  - metric entrypoint for all wind metrics.
   - rejects materialize-only kwargs `overwrite` and `allow_mode_change`; pass those to `.materialize(...)`.
   - stages a lazy normalized overlay into `atlas.wind.data[metric]` before store writes.
   - staged wind overlays are cleared by `atlas.select(...)`, `atlas.build()`, `atlas.build_canonical()`, and `atlas.build_clc()`.
-- `atlas.wind.mean_wind_speed(height, **kwargs)`
-- `atlas.wind.capacity_factors(turbines=None, air_density=False, loss_factor=1.0, mode="direct_cf_quadrature", rews_n=12, **kwargs)`
-  - does not accept `height`; hub height is derived from each turbine definition.
-- `atlas.wind.rews_mps(turbines=None, air_density=False, rews_n=12, **kwargs)`
 
 `compute(...)` returns `DomainResult`:
 
@@ -166,15 +168,29 @@ Atlas(
   - Requires turbines via selection or `turbines=[...]`
   - Options: `rews_n`, `air_density`
 - `lcoe`
-  - Requires turbines and: `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`
-  - Optional: `turbine_cost_share`, plus `capacity_factors` options (`mode`, `rews_n`, `air_density`, `loss_factor`)
-  - Timebase (`hours_per_year`) is configured at Atlas level via `atlas.configure_timebase(...)`, not per-metric.
+  - Requires turbines via selection or `turbines=[...]`
+  - Uses grouped spec API:
+    - `cf={...}`: CF parameters. Keys: `mode`, `air_density`, `rews_n`, `loss_factor`.
+      Defaults: `mode="direct_cf_quadrature"`, `air_density=False`, `rews_n=12`, `loss_factor=1.0`.
+    - `economics={...}`: Economics parameters. Required: `discount_rate`, `lifetime_a`,
+      `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`. Optional: `bos_cost_share` (default 0.0).
+    - Economics can be pre-configured at Atlas level via `atlas.configure_economics(...)`.
+  - Timebase (`hours_per_year`) is configured at Atlas level via `atlas.configure_timebase(...)`.
+  - Example:
+    ```python
+    atlas.configure_economics(discount_rate=0.05, lifetime_a=25)
+    atlas.wind.compute(
+        "lcoe",
+        cf={"mode": "hub"},
+        economics={"om_fixed_eur_per_kw_a": 20, "om_variable_eur_per_kwh": 0.008},
+    )
+    ```
 - `min_lcoe_turbine`
-  - Same parameter requirements/options as `lcoe`
+  - Same grouped spec API as `lcoe`
 - `optimal_power`
-  - Same parameter requirements/options as `lcoe`
+  - Same grouped spec API as `lcoe`
 - `optimal_energy`
-  - Same parameter requirements/options as `lcoe`
+  - Same grouped spec API as `lcoe`
 
 ### LandscapeDomain
 

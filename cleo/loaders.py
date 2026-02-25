@@ -12,7 +12,7 @@ from pathlib import Path
 from cleo.economics import turbine_overnight_cost
 from cleo.net import download_to_path, RequestException
 from cleo.spatial import reproject_raster_if_needed, to_crs_if_needed
-from cleo.unification.gwa_io import ensure_crs_from_gwa, fetch_gwa_crs
+from cleo.unification.gwa_io import ensure_crs_from_gwa
 
 logger = logging.getLogger(__name__)
 
@@ -258,8 +258,6 @@ def get_turbine_attribute(self, turbine_id, attribute_name):
     :return: Value of the specific turbine attribute
     :raises ValueError: If turbine_id not found or attribute missing from dataset
     """
-    import json
-
     # Check turbine dimension exists
     if "turbine" not in self.data.dims:
         raise ValueError(
@@ -269,7 +267,7 @@ def get_turbine_attribute(self, turbine_id, attribute_name):
     # Read turbine metadata from cleo_turbines_json attr
     if "cleo_turbines_json" not in self.data.attrs:
         raise ValueError(
-            f"Dataset missing cleo_turbines_json attr; re-run build_canonical()."
+            "Dataset missing cleo_turbines_json attr; re-run build_canonical()."
         )
     turbines_meta = json.loads(self.data.attrs["cleo_turbines_json"])
     turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
@@ -296,8 +294,8 @@ def get_turbine_attribute(self, turbine_id, attribute_name):
     if var_name not in self.data.data_vars:
         raise ValueError(
             f"Turbine attribute '{attribute_name}' not found in dataset for turbine_id={turbine_id!r}. "
-            f"Dataset may have been created before turbine metadata storage was implemented. "
-            f"Re-add turbines to store metadata."
+            "Dataset may have been created before turbine metadata storage was implemented. "
+            "Re-add turbines to store metadata."
         )
 
     value = self.data[var_name].isel(turbine=turbine_idx).values

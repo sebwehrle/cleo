@@ -121,7 +121,7 @@ def lcoe_v1_from_capacity_factors(
     turbine_ids: tuple[str, ...],
     power_kw: np.ndarray,
     overnight_cost_eur_per_kw: np.ndarray,
-    turbine_cost_share: float,
+    bos_cost_share: float,
     om_fixed_eur_per_kw_a: float,
     om_variable_eur_per_kwh: float,
     discount_rate: float,
@@ -132,13 +132,22 @@ def lcoe_v1_from_capacity_factors(
     Compute LCOE from capacity factors (pure numerics, turbine-loop).
 
     Contract: no I/O, stays lazy/dask-friendly.
+
+    Args:
+        bos_cost_share: Balance-of-system cost share (0.0 to 1.0).
+            Represents location-dependent CAPEX fraction.
+            0.0 = all CAPEX is turbine (location-independent).
+            0.3 = 30% of CAPEX is BOS (location-dependent).
     """
+    # bos_cost_share is the location-dependent share; turbine/location-independent is the remainder
+    location_independent_share = 1.0 - float(bos_cost_share)
+
     economics_payload = {
         "discount_rate": float(discount_rate),
         "lifetime_a": int(lifetime_a),
         "om_fixed_eur_per_kw_a": float(om_fixed_eur_per_kw_a),
         "om_variable_eur_per_kwh": float(om_variable_eur_per_kwh),
-        "turbine_cost_share": float(turbine_cost_share),
+        "bos_cost_share": float(bos_cost_share),
     }
 
     lcoe_list = []
@@ -146,14 +155,14 @@ def lcoe_v1_from_capacity_factors(
         p_kw = float(power_kw[i])
         oc_eur_per_kw = float(overnight_cost_eur_per_kw[i])
 
-        # Absolute overnight cost for this turbine.
-        oc_abs = oc_eur_per_kw * p_kw * float(turbine_cost_share)
+        # Absolute overnight cost for this turbine (location-independent portion).
+        oc_abs = oc_eur_per_kw * p_kw * location_independent_share
 
         # Grid connection cost (EUR, scalar).
         gc_abs = float(grid_connect_cost(p_kw))
 
         cf_turb = cf.sel(turbine=turbine_id)
-        l = levelized_cost(
+        lc = levelized_cost(
             power=p_kw,
             capacity_factors=cf_turb,
             overnight_cost=oc_abs,
@@ -165,8 +174,8 @@ def lcoe_v1_from_capacity_factors(
             hours_per_year=float(hours_per_year),
             per_mwh=True,
         )
-        l = l.expand_dims(turbine=[turbine_id])
-        lcoe_list.append(l)
+        lc = lc.expand_dims(turbine=[turbine_id])
+        lcoe_list.append(lc)
 
     out = xr.concat(lcoe_list, dim="turbine").rename("lcoe")
     out.attrs["units"] = "EUR/MWh"
@@ -174,8 +183,16 @@ def lcoe_v1_from_capacity_factors(
     out.attrs["cleo:hours_per_year"] = float(hours_per_year)
     out.attrs["cleo:turbine_ids_json"] = _turbine_ids_json(turbine_ids)
     out.attrs["cleo:economics_json"] = _stable_json(economics_payload)
+    # Build cf_spec_json from CF attrs for provenance
+    cf_spec_payload = {
+        "mode": cf.attrs.get("cleo:cf_mode"),
+        "air_density": bool(cf.attrs.get("cleo:air_density", 0)),
+        "rews_n": int(cf.attrs.get("cleo:rews_n", 12)),
+        "loss_factor": float(cf.attrs.get("cleo:loss_factor", 1.0)),
+    }
+    out.attrs["cleo:cf_spec_json"] = _stable_json(cf_spec_payload)
     out.attrs["cleo:algo"] = "lcoe_v1"
-    out.attrs["cleo:algo_version"] = "2"
+    out.attrs["cleo:algo_version"] = "3"  # v3: added cf_spec_json
     return out
 
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import cleo.loaders as L
+from cleo.unification.gwa_io import fetch_gwa_crs
 from cleo.net import RequestException
 
 
@@ -28,7 +29,7 @@ def test_fetch_gwa_crs_wraps_request_exception(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr("cleo.net.http_get", _raise)
     with pytest.raises(RuntimeError, match="Failed to fetch GWA CRS for AUT"):
-        L.fetch_gwa_crs("AUT")
+        fetch_gwa_crs("AUT")
 
 
 def test_fetch_gwa_crs_raises_on_invalid_double_encoded_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,7 +38,7 @@ def test_fetch_gwa_crs_raises_on_invalid_double_encoded_json(monkeypatch: pytest
 
     monkeypatch.setattr("cleo.net.http_get", _mock_get)
     with pytest.raises(ValueError, match="Failed to parse GWA GeoJSON response"):
-        L.fetch_gwa_crs("AUT")
+        fetch_gwa_crs("AUT")
 
 
 @pytest.mark.parametrize(

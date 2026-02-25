@@ -342,17 +342,23 @@ def _wind_metric_lcoe(
     rews_n: int = 9,
     air_density: bool = False,
     loss_factor: float = 1.0,
-    turbine_cost_share: float = 1.0,
+    bos_cost_share: float = 0.0,
     om_fixed_eur_per_kw_a: float | None = None,
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
     lifetime_a: int | None = None,
     hours_per_year: float,
+    _precomputed_cf: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """
     Orchestration for LCOE metric.
 
-    Computes capacity factors internally, then derives LCOE.
+    Computes capacity factors internally (unless _precomputed_cf is provided),
+    then derives LCOE.
+
+    Args:
+        _precomputed_cf: Optional pre-computed CF DataArray for reuse.
+            If provided, skips internal CF computation.
     """
     # Validate required params
     missing = []
@@ -370,15 +376,18 @@ def _wind_metric_lcoe(
             f"Pass them to compute(), e.g., compute('lcoe', om_fixed_eur_per_kw_a=25, ...)"
         )
 
-    # Compute capacity factors with requested mode
-    cf = _wind_metric_capacity_factors(
-        wind, land,
-        turbines=turbines,
-        mode=mode,
-        rews_n=rews_n,
-        air_density=air_density,
-        loss_factor=loss_factor,
-    )
+    # Use precomputed CF if provided, otherwise compute
+    if _precomputed_cf is not None:
+        cf = _precomputed_cf
+    else:
+        cf = _wind_metric_capacity_factors(
+            wind, land,
+            turbines=turbines,
+            mode=mode,
+            rews_n=rews_n,
+            air_density=air_density,
+            loss_factor=loss_factor,
+        )
 
     # Extract turbine metadata
     turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
@@ -391,7 +400,7 @@ def _wind_metric_lcoe(
         turbine_ids=turbines,
         power_kw=power_kw,
         overnight_cost_eur_per_kw=overnight_cost,
-        turbine_cost_share=turbine_cost_share,
+        bos_cost_share=bos_cost_share,
         om_fixed_eur_per_kw_a=om_fixed_eur_per_kw_a,
         om_variable_eur_per_kwh=om_variable_eur_per_kwh,
         discount_rate=discount_rate,
@@ -412,12 +421,13 @@ def _wind_metric_min_lcoe_turbine(
     rews_n: int = 9,
     air_density: bool = False,
     loss_factor: float = 1.0,
-    turbine_cost_share: float = 1.0,
+    bos_cost_share: float = 0.0,
     om_fixed_eur_per_kw_a: float | None = None,
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
     lifetime_a: int | None = None,
     hours_per_year: float,
+    _precomputed_cf: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """
     Orchestration for min_lcoe_turbine metric.
@@ -431,12 +441,13 @@ def _wind_metric_min_lcoe_turbine(
         rews_n=rews_n,
         air_density=air_density,
         loss_factor=loss_factor,
-        turbine_cost_share=turbine_cost_share,
+        bos_cost_share=bos_cost_share,
         om_fixed_eur_per_kw_a=om_fixed_eur_per_kw_a,
         om_variable_eur_per_kwh=om_variable_eur_per_kwh,
         discount_rate=discount_rate,
         lifetime_a=lifetime_a,
         hours_per_year=hours_per_year,
+        _precomputed_cf=_precomputed_cf,
     )
 
     idx = min_lcoe_turbine_idx(lcoe=lcoe, turbine_ids=turbines)
@@ -455,12 +466,13 @@ def _wind_metric_optimal_power(
     rews_n: int = 9,
     air_density: bool = False,
     loss_factor: float = 1.0,
-    turbine_cost_share: float = 1.0,
+    bos_cost_share: float = 0.0,
     om_fixed_eur_per_kw_a: float | None = None,
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
     lifetime_a: int | None = None,
     hours_per_year: float,
+    _precomputed_cf: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """
     Orchestration for optimal_power metric.
@@ -474,12 +486,13 @@ def _wind_metric_optimal_power(
         rews_n=rews_n,
         air_density=air_density,
         loss_factor=loss_factor,
-        turbine_cost_share=turbine_cost_share,
+        bos_cost_share=bos_cost_share,
         om_fixed_eur_per_kw_a=om_fixed_eur_per_kw_a,
         om_variable_eur_per_kwh=om_variable_eur_per_kwh,
         discount_rate=discount_rate,
         lifetime_a=lifetime_a,
         hours_per_year=hours_per_year,
+        _precomputed_cf=_precomputed_cf,
     )
 
     turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
@@ -500,18 +513,19 @@ def _wind_metric_optimal_energy(
     rews_n: int = 9,
     air_density: bool = False,
     loss_factor: float = 1.0,
-    turbine_cost_share: float = 1.0,
+    bos_cost_share: float = 0.0,
     om_fixed_eur_per_kw_a: float | None = None,
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
     lifetime_a: int | None = None,
     hours_per_year: float,
+    _precomputed_cf: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """
     Orchestration for optimal_energy metric.
 
     Returns annual energy (GWh/a) of minimum-LCOE turbine at each pixel.
-    Computes CF once, then derives LCOE directly (avoids redundant CF computation).
+    Computes CF once (unless _precomputed_cf is provided), then derives LCOE directly.
     """
     # Validate LCOE params
     missing = []
@@ -529,15 +543,18 @@ def _wind_metric_optimal_energy(
             f"Pass them to compute(), e.g., compute('optimal_energy', om_fixed_eur_per_kw_a=25, ...)"
         )
 
-    # Compute CF once (valid_mask applied here)
-    cf = _wind_metric_capacity_factors(
-        wind, land,
-        turbines=turbines,
-        mode=mode,
-        rews_n=rews_n,
-        air_density=air_density,
-        loss_factor=loss_factor,
-    )
+    # Use precomputed CF if provided, otherwise compute
+    if _precomputed_cf is not None:
+        cf = _precomputed_cf
+    else:
+        cf = _wind_metric_capacity_factors(
+            wind, land,
+            turbines=turbines,
+            mode=mode,
+            rews_n=rews_n,
+            air_density=air_density,
+            loss_factor=loss_factor,
+        )
 
     # Extract turbine metadata
     turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
@@ -550,7 +567,7 @@ def _wind_metric_optimal_energy(
         turbine_ids=turbines,
         power_kw=power_kw,
         overnight_cost_eur_per_kw=overnight_cost,
-        turbine_cost_share=turbine_cost_share,
+        bos_cost_share=bos_cost_share,
         om_fixed_eur_per_kw_a=om_fixed_eur_per_kw_a,
         om_variable_eur_per_kwh=om_variable_eur_per_kwh,
         discount_rate=discount_rate,
@@ -591,11 +608,10 @@ _WIND_METRICS = {
     "lcoe": {
         "fn": _wind_metric_lcoe,
         "requires_turbines": True,
-        "required": set(),  # fn raises if missing cost params
+        "required": set(),
+        "composed": True,  # accepts grouped cf={} and economics={} specs
         "allowed": {
-            "turbines", "mode", "rews_n", "air_density", "loss_factor",
-            "turbine_cost_share", "om_fixed_eur_per_kw_a", "om_variable_eur_per_kwh",
-            "discount_rate", "lifetime_a",
+            "turbines", "cf", "economics",
             "hours_per_year",  # injected internally by domain
         },
     },
@@ -603,10 +619,9 @@ _WIND_METRICS = {
         "fn": _wind_metric_min_lcoe_turbine,
         "requires_turbines": True,
         "required": set(),
+        "composed": True,
         "allowed": {
-            "turbines", "mode", "rews_n", "air_density", "loss_factor",
-            "turbine_cost_share", "om_fixed_eur_per_kw_a", "om_variable_eur_per_kwh",
-            "discount_rate", "lifetime_a",
+            "turbines", "cf", "economics",
             "hours_per_year",  # injected internally by domain
         },
     },
@@ -614,10 +629,9 @@ _WIND_METRICS = {
         "fn": _wind_metric_optimal_power,
         "requires_turbines": True,
         "required": set(),
+        "composed": True,
         "allowed": {
-            "turbines", "mode", "rews_n", "air_density", "loss_factor",
-            "turbine_cost_share", "om_fixed_eur_per_kw_a", "om_variable_eur_per_kwh",
-            "discount_rate", "lifetime_a",
+            "turbines", "cf", "economics",
             "hours_per_year",  # injected internally by domain
         },
     },
@@ -625,11 +639,37 @@ _WIND_METRICS = {
         "fn": _wind_metric_optimal_energy,
         "requires_turbines": True,
         "required": set(),
+        "composed": True,
         "allowed": {
-            "turbines", "mode", "rews_n", "air_density", "loss_factor",
-            "turbine_cost_share", "om_fixed_eur_per_kw_a", "om_variable_eur_per_kwh",
-            "discount_rate", "lifetime_a",
+            "turbines", "cf", "economics",
             "hours_per_year",  # injected internally by domain
         },
     },
+}
+
+
+# CF spec defaults for composed metrics
+_CF_SPEC_DEFAULTS = {
+    "mode": "direct_cf_quadrature",
+    "air_density": False,
+    "rews_n": 12,
+    "loss_factor": 1.0,
+}
+
+# Economics fields that are required for LCOE computation
+_REQUIRED_ECONOMICS_FIELDS = {
+    "discount_rate",
+    "lifetime_a",
+    "om_fixed_eur_per_kw_a",
+    "om_variable_eur_per_kwh",
+}
+
+# Flat kwargs that are rejected for composed metrics (must use grouped specs)
+_FLAT_CF_KWARGS = {"mode", "air_density", "loss_factor", "rews_n"}
+_FLAT_ECONOMICS_KWARGS = {
+    "discount_rate",
+    "lifetime_a",
+    "om_fixed_eur_per_kw_a",
+    "om_variable_eur_per_kwh",
+    "bos_cost_share",
 }

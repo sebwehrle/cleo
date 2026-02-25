@@ -1,6 +1,7 @@
 # Pure numeric assessment functions for wind resource analysis.
 # Contract: No I/O, no network, no store access, no mutation of self.data.
 # All spatial arrays stay lazy (dask-compatible).
+import json
 import numpy as np
 import xarray as xr
 import logging
@@ -401,10 +402,12 @@ def capacity_factors_v1(
     # Set attrs (no compute)
     out.attrs["cleo:cf_mode"] = mode
     out.attrs["cleo:algo"] = "capacity_factors_v1"
-    out.attrs["cleo:algo_version"] = "2"
+    out.attrs["cleo:algo_version"] = "3"  # v3: added loss_factor and turbines_json
     if mode in ("rews", "direct_cf_quadrature", "momentmatch_weibull"):
         out.attrs["cleo:rews_n"] = int(rews_n)
     out.attrs["cleo:air_density"] = int(air_density)  # int for netCDF4 compat
+    out.attrs["cleo:loss_factor"] = float(loss_factor)
+    out.attrs["cleo:turbines_json"] = json.dumps(list(turbine_ids), ensure_ascii=True)
 
     return out
 

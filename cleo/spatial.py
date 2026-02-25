@@ -3,11 +3,10 @@ import logging
 import numpy as np
 import geopandas as gpd
 import pyproj
-import rasterio.crs
 import xarray as xr
 from scipy.ndimage import distance_transform_edt
 
-from typing import Union, Literal
+from typing import Literal
 from pathlib import Path
 
 logger = logging.getLogger(__name__)

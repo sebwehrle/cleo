@@ -88,7 +88,6 @@ def _ingest_turbines_and_costs(
     turbines = atlas.turbines_configured
     if turbines is not None:
         turbine_names = list(turbines)
-        turbines_mode = "configured"
         missing_configured = [
             str(resources_dir / f"{turbine_id}.yml")
             for turbine_id in turbine_names
@@ -100,7 +99,6 @@ def _ingest_turbines_and_costs(
             )
     else:
         turbine_names = _default_turbines_from_resources(resources_dir)
-        turbines_mode = "default"
         if not turbine_names:
             raise RuntimeError(
                 "No turbines configured and none found in <atlas>/resources. "

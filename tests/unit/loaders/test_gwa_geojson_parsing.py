@@ -6,7 +6,7 @@ Split from merged test_gwa.py
 import json
 import pytest
 
-from cleo.loaders import fetch_gwa_crs
+from cleo.unification.gwa_io import fetch_gwa_crs
 
 
 class MockResponse:

@@ -82,6 +82,28 @@ Normative:
 
 ---
 
+### A3.2. Economics configuration (optional)
+
+```python
+atlas.configure_economics(
+    discount_rate=0.05,
+    lifetime_a=25,
+    om_fixed_eur_per_kw_a=20.0,
+    om_variable_eur_per_kwh=0.008,
+    bos_cost_share=0.0,
+)
+```
+
+Normative:
+- All parameters are optional; multiple calls merge values (later calls override earlier ones).
+- `atlas.economics_configured` returns configured dict or `None` if not configured.
+- Configured economics is preserved across `select(..., inplace=False)` clones.
+- LCOE-family metrics resolve economics via: baseline config + per-call `economics={...}` overrides.
+- Required economics fields (`discount_rate`, `lifetime_a`, `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`) must be present in effective resolution; missing fields raise explicit error.
+- `bos_cost_share` defaults to `0.0` when not specified (all CAPEX is turbine/location-independent).
+
+---
+
 ### A4. Region selection (optional, may change over time)
 
 Typical usage:
@@ -185,7 +207,7 @@ run = atlas.wind.compute(
         "lifetime_a": 25,
         "om_fixed_eur_per_kw_a": 25.0,
         "om_variable_eur_per_kwh": 0.009,
-        "location_independent_capex_share": 0.72,
+        "bos_cost_share": 0.28,  # 28% of CAPEX is BOS (location-dependent)
     },
 )
 da = run.data
@@ -265,7 +287,7 @@ Normative:
   - Requires turbines and grouped dependency specs:
     - `cf` (optional): `mode`, `rews_n`, `air_density`, `loss_factor`.
     - `economics` (required by effective resolution): `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`.
-  - Optional in `economics`: `location_independent_capex_share`.
+  - Optional in `economics`: `bos_cost_share` (default 0.0, meaning all CAPEX is turbine/location-independent).
   - `hours_per_year` must not be passed to `compute("lcoe", ...)`; it belongs to Atlas-level timebase assumptions.
 - `metric="min_lcoe_turbine"`, `metric="optimal_power"`, `metric="optimal_energy"`
   - Same grouped `cf` / `economics` contract as `lcoe`.

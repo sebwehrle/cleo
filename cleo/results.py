@@ -1,4 +1,5 @@
 # %% imports
+from __future__ import annotations
 import json
 import datetime
 import logging
@@ -8,6 +9,10 @@ from pathlib import Path
 import zarr
 import numpy as np
 import xarray as xr
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from cleo.domains import WindDomain
 
 from cleo.dask_utils import compute as dask_compute
 from cleo.unification.store_io import turbine_ids_from_json
@@ -23,7 +28,7 @@ def _is_unsafe_zarr_v3_dtype(var: xr.DataArray) -> bool:
     dtype = var.dtype
     if hasattr(dtype, "kind") and dtype.kind in {"U", "S"}:
         return True
-    return dtype == object
+    return np.dtype(dtype).kind == "O"
 
 
 def _normalize_text_value(value) -> str:
@@ -285,9 +290,9 @@ def persist_result(
         try:
             if getattr(atlas, "_canonical_ready", False):
                 w = atlas.wind_zarr
-                l = atlas.landscape_zarr
+                land = atlas.landscape_zarr
                 g.attrs["wind_grid_id"] = w.attrs.get("grid_id", "")
-                g.attrs["landscape_grid_id"] = l.attrs.get("grid_id", "")
+                g.attrs["landscape_grid_id"] = land.attrs.get("grid_id", "")
         except (AttributeError, OSError, ValueError, TypeError, KeyError):
             logger.debug(
                 "Failed to attach canonical provenance attrs to persisted result store.",
@@ -359,7 +364,7 @@ class DomainResult:
     - ``atlas.wind.compute(...).persist(run_id=...)``
     """
 
-    def __init__(self, domain: "WindDomain", metric: str, data: xr.DataArray, params: dict):
+    def __init__(self, domain: WindDomain, metric: str, data: xr.DataArray, params: dict):
         self._domain = domain
         self._metric = metric
         self._data = data

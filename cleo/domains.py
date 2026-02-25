@@ -5,7 +5,13 @@ import xarray as xr
 from pathlib import Path
 from cleo.results import DomainResult, normalize_metric_for_active_wind_store
 from cleo.spatial import distance_to_positive_mask
-from cleo.wind_metrics import _WIND_METRICS
+from cleo.wind_metrics import (
+    _WIND_METRICS,
+    _CF_SPEC_DEFAULTS,
+    _REQUIRED_ECONOMICS_FIELDS,
+    _FLAT_CF_KWARGS,
+    _FLAT_ECONOMICS_KWARGS,
+)
 from cleo.unification.store_io import (
     open_zarr_dataset,
     resolve_active_landscape_store_path,
@@ -27,6 +33,76 @@ def _distance_spec_json(source_var: str) -> str:
         "source_var": source_var,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _resolve_cf_spec(cf: dict | None) -> dict:
+    """Resolve CF spec dict with defaults for composed metrics.
+
+    Args:
+        cf: User-provided CF spec dict, or None for defaults.
+
+    Returns:
+        Complete CF spec dict with all required keys.
+    """
+    result = _CF_SPEC_DEFAULTS.copy()
+    if cf is not None:
+        result.update(cf)
+    return result
+
+
+def _cf_spec_matches(
+    existing_cf: xr.DataArray,
+    requested_spec: dict,
+    turbines: tuple[str, ...],
+) -> bool:
+    """Check if existing CF matches requested spec exactly.
+
+    Used for CF reuse in LCOE-family metrics. Only materialized store CF
+    is checked; exact spec match is required.
+
+    Args:
+        existing_cf: Existing capacity factors DataArray from store.
+        requested_spec: Resolved CF spec dict (mode, air_density, rews_n, loss_factor).
+        turbines: Requested turbine IDs tuple.
+
+    Returns:
+        True if existing CF can be reused, False otherwise.
+    """
+    # Required metadata keys
+    required_keys = [
+        "cleo:cf_mode",
+        "cleo:air_density",
+        "cleo:rews_n",
+        "cleo:loss_factor",
+        "cleo:turbines_json",
+    ]
+
+    # Check all metadata present
+    for key in required_keys:
+        if key not in existing_cf.attrs:
+            return False
+
+    # Check exact match of CF parameters
+    if existing_cf.attrs["cleo:cf_mode"] != requested_spec["mode"]:
+        return False
+
+    # air_density is stored as int (0/1) for netCDF compat
+    stored_air_density = bool(existing_cf.attrs["cleo:air_density"])
+    if stored_air_density != requested_spec["air_density"]:
+        return False
+
+    if existing_cf.attrs["cleo:rews_n"] != requested_spec["rews_n"]:
+        return False
+
+    if existing_cf.attrs["cleo:loss_factor"] != requested_spec["loss_factor"]:
+        return False
+
+    # Check turbines match exactly (order matters)
+    stored_turbines = tuple(json.loads(existing_cf.attrs["cleo:turbines_json"]))
+    if stored_turbines != turbines:
+        return False
+
+    return True
 
 
 def _distance_spec_matches(da: xr.DataArray, expected_spec_json: str) -> bool:
@@ -338,15 +414,29 @@ class WindDomain:
               loss_factor (float).
             - "rews_mps": requires turbines (from select() or kwarg).
               Optional: rews_n (int, default 12), air_density (bool).
-            - "lcoe": requires turbines + cost params (om_fixed_eur_per_kw_a,
-              om_variable_eur_per_kwh, discount_rate, lifetime_a).
-              Optional: turbine_cost_share, hours_per_year (default 8766).
+            - "lcoe": requires turbines. Uses grouped spec API:
+              - ``cf={...}``: CF parameters (mode, air_density, loss_factor, rews_n).
+                Defaults: mode="direct_cf_quadrature", air_density=False, rews_n=12, loss_factor=1.0.
+              - ``economics={...}``: Economics parameters (discount_rate, lifetime_a,
+                om_fixed_eur_per_kw_a, om_variable_eur_per_kwh, bos_cost_share).
+                Required: discount_rate, lifetime_a, om_fixed_eur_per_kw_a, om_variable_eur_per_kwh.
+                Optional: bos_cost_share (default 0.0 from _effective_economics()).
+                Can be configured at Atlas level via atlas.configure_economics(...).
             - "min_lcoe_turbine": same params as lcoe. Returns int32 turbine
               index at each pixel. Turbine ID mapping in attrs["cleo:turbine_ids_json"].
             - "optimal_power": same params as lcoe. Returns rated power (kW)
               of the minimum-LCOE turbine at each pixel.
             - "optimal_energy": same params as lcoe. Returns annual energy (GWh/a)
               of the minimum-LCOE turbine at each pixel.
+
+        Example (LCOE-family metrics)::
+
+            atlas.configure_economics(discount_rate=0.05, lifetime_a=25)
+            atlas.wind.compute(
+                "lcoe",
+                cf={"mode": "hub", "air_density": True},
+                economics={"om_fixed_eur_per_kw_a": 20, "om_variable_eur_per_kwh": 0.008},
+            )
 
         :returns: :class:`cleo.results.DomainResult` with ``.data``/``.materialize()``/``.persist()``.
         :raises ValueError: If metric is unknown, params are missing, or turbine
@@ -355,6 +445,8 @@ class WindDomain:
             are passed to ``compute(...)`` instead of ``.materialize(...)``.
         :raises ValueError: If ``inplace`` is passed; ``compute(...)`` does not
             mutate stores directly.
+        :raises ValueError: For LCOE-family metrics, if flat CF/economics kwargs
+            are passed instead of grouped specs.
         """
         if "inplace" in kwargs:
             raise ValueError(
@@ -415,6 +507,48 @@ class WindDomain:
                     f"Allowed: {user_allowed}"
                 )
 
+        # Handle composed metrics (LCOE-family): grouped cf={} and economics={} specs
+        is_composed = spec.get("composed", False)
+        if is_composed:
+            # Reject flat CF/economics kwargs - must use grouped specs
+            flat_cf_present = set(kwargs.keys()) & _FLAT_CF_KWARGS
+            if flat_cf_present:
+                raise ValueError(
+                    f"For {metric!r}, CF parameters must be passed via cf={{...}}, "
+                    f"not as flat kwargs. Found: {sorted(flat_cf_present)}. "
+                    f"Use: compute({metric!r}, cf={{\"mode\": ..., \"air_density\": ...}}, ...)"
+                )
+
+            flat_econ_present = set(kwargs.keys()) & _FLAT_ECONOMICS_KWARGS
+            if flat_econ_present:
+                raise ValueError(
+                    f"For {metric!r}, economics parameters must be passed via economics={{...}}, "
+                    f"not as flat kwargs. Found: {sorted(flat_econ_present)}. "
+                    f"Use: compute({metric!r}, economics={{\"discount_rate\": ..., ...}}, ...)"
+                )
+
+            # Extract grouped specs
+            cf_spec = kwargs.pop("cf", None)
+            economics_override = kwargs.pop("economics", None)
+
+            # Resolve CF spec with defaults
+            resolved_cf = _resolve_cf_spec(cf_spec)
+
+            # Resolve economics via atlas baseline + per-call overrides
+            effective_economics = self._atlas._effective_economics(economics_override)
+
+            # Validate required economics fields
+            missing_econ = _REQUIRED_ECONOMICS_FIELDS - set(effective_economics.keys())
+            if missing_econ:
+                raise ValueError(
+                    f"Missing required economics parameters for {metric!r}: {sorted(missing_econ)}. "
+                    f"Configure via atlas.configure_economics(...) or pass economics={{...}}."
+                )
+
+            # Unpack grouped specs into flat kwargs for underlying metric function
+            kwargs.update(resolved_cf)
+            kwargs.update(effective_economics)
+
         # Turbine enforcement: inject from persistent selection if not provided
         if requires_turbines:
             turbines = kwargs.get("turbines", None)
@@ -440,6 +574,15 @@ class WindDomain:
         if metric in _ECONOMICS_METRICS:
             kwargs["hours_per_year"] = self._atlas._effective_hours_per_year()
 
+        # CF reuse: check if materialized store has matching CF for LCOE-family metrics
+        if is_composed and metric in _ECONOMICS_METRICS:
+            turbines = kwargs["turbines"]
+            store_ds = self._store_data()
+            if "capacity_factors" in store_ds.data_vars:
+                candidate_cf = store_ds["capacity_factors"]
+                if _cf_spec_matches(candidate_cf, resolved_cf, turbines):
+                    kwargs["_precomputed_cf"] = candidate_cf
+
         # Prepare canonical inputs
         wind = self._atlas.wind_data
         try:
@@ -460,80 +603,6 @@ class WindDomain:
         params = {k: v for k, v in kwargs.items()}
 
         return DomainResult(self, metric, da, params)
-
-    def mean_wind_speed(self, height: int, **kwargs) -> DomainResult:
-        """
-        Compute mean wind speed at specified height.
-
-        Thin wrapper around compute("mean_wind_speed", ...).
-        Returns DomainResult supporting .data/.materialize()/.persist() pattern.
-
-        :param height: Height level that must exist in the wind store.
-        :param kwargs: Additional parameters forwarded to :meth:`compute`.
-        :returns: :class:`cleo.results.DomainResult`.
-        """
-        return self.compute("mean_wind_speed", height=height, **kwargs)
-
-    def capacity_factors(
-        self,
-        *,
-        turbines: list[str] | tuple[str, ...] | None = None,
-        air_density: bool = False,
-        loss_factor: float = 1.0,
-        mode: str = "direct_cf_quadrature",
-        rews_n: int = 12,
-        **kwargs,
-    ) -> DomainResult:
-        """
-        Compute capacity factors for selected turbines.
-
-        Thin wrapper around compute("capacity_factors", ...).
-        Returns DomainResult supporting .data/.materialize()/.persist() pattern.
-
-        :param turbines: Turbine IDs; if ``None``, uses persistent selection.
-        :param air_density: If ``True``, apply air-density correction.
-        :param loss_factor: Multiplicative loss factor.
-        :param mode: CF mode (default ``"direct_cf_quadrature"``).
-        :param rews_n: Rotor quadrature nodes for rotor-aware modes.
-        :param kwargs: Additional parameters forwarded to :meth:`compute`.
-        :returns: :class:`cleo.results.DomainResult`.
-        """
-        if "height" in kwargs:
-            raise ValueError(
-                "capacity_factors() does not accept a free 'height' argument. "
-                "Hub height is derived from each turbine definition."
-            )
-
-        # Only pass turbines if explicitly provided (let compute() inject from selection)
-        compute_kwargs = {
-            "air_density": air_density,
-            "loss_factor": loss_factor,
-            "mode": mode,
-            "rews_n": rews_n,
-            **kwargs,
-        }
-        if turbines is not None:
-            compute_kwargs["turbines"] = turbines
-
-        return self.compute("capacity_factors", **compute_kwargs)
-
-    def rews_mps(
-        self,
-        *,
-        turbines: list[str] | tuple[str, ...] | None = None,
-        air_density: bool = False,
-        rews_n: int = 12,
-        **kwargs,
-    ) -> DomainResult:
-        """Compute rotor-equivalent wind speed (m/s) as first-class metric."""
-        compute_kwargs = {
-            "air_density": air_density,
-            "rews_n": rews_n,
-            **kwargs,
-        }
-        if turbines is not None:
-            compute_kwargs["turbines"] = turbines
-        return self.compute("rews_mps", **compute_kwargs)
 
 
 class LandscapeAddResult:

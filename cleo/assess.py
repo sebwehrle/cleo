@@ -400,6 +400,7 @@ def capacity_factors_v1(
     out = out.rename("capacity_factors")
 
     # Set attrs (no compute)
+    out.attrs["units"] = "1"  # dimensionless fraction
     out.attrs["cleo:cf_mode"] = mode
     out.attrs["cleo:algo"] = "capacity_factors_v1"
     out.attrs["cleo:algo_version"] = "3"  # v3: added loss_factor and turbines_json

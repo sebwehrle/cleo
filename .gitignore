@@ -1,7 +1,37 @@
+# IDE
 .idea/
-logs/
-*.log
+.vscode/
+*.swp
+*.swo
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Testing
 .pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Logs
+logs/
+*.log
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.zip
+*.tar.gz
+*.bak
+*.tmp
+
+# Local config (not tracked)
 AGENTS.md

@@ -141,6 +141,13 @@ Atlas(
   - clear persistent selection; returns `None`.
 - `atlas.wind.clear_computed()`
   - clear transient computed overlays from `atlas.wind.data`; returns `None`.
+- `atlas.wind.convert_units(variable, to_unit, *, from_unit=None, inplace=False)`
+  - convert a wind variable to a different unit.
+  - `variable`: variable name in `atlas.wind.data`.
+  - `to_unit`: target unit string (e.g., `"km/h"`, `"MW"`).
+  - `from_unit`: source unit override; if `None`, reads from variable's `units` attr.
+  - `inplace=True` stages the converted DataArray; `inplace=False` returns it.
+  - conversion is dask-friendly (lazy arrays stay lazy).
 - `atlas.wind.compute(metric, **kwargs)`
   - metric entrypoint for all wind metrics.
   - rejects materialize-only kwargs `overwrite` and `allow_mode_change`; pass those to `.materialize(...)`.
@@ -220,6 +227,13 @@ Atlas(
   - `if_exists`: `"error"|"replace"|"noop"`.
 - `atlas.landscape.clear_staged()`
   - clears staged (not yet materialized) landscape overlays.
+- `atlas.landscape.convert_units(variable, to_unit, *, from_unit=None, inplace=False)`
+  - convert a landscape variable to a different unit.
+  - `variable`: variable name in `atlas.landscape.data`.
+  - `to_unit`: target unit string (e.g., `"km"`, `"ft"`).
+  - `from_unit`: source unit override; if `None`, reads from variable's `units` attr.
+  - `inplace=True` stages the converted DataArray; `inplace=False` returns it.
+  - conversion is dask-friendly (lazy arrays stay lazy).
 - `atlas.build_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
   - prepares CLC cache aligned to wind/GWA grid.
 - `atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error")`
@@ -266,6 +280,29 @@ op = atlas.landscape.rasterize(
 )
 da = op.materialize()
 ```
+
+### Unit Conversion
+
+Wind and landscape domains support unit conversion via `convert_units()`:
+
+```python
+# Convert wind speed from m/s to km/h (in-place, visible in atlas.wind.data)
+atlas.wind.convert_units("mean_wind_speed", "km/h", inplace=True)
+
+# Get converted DataArray without modifying store
+power_mw = atlas.wind.convert_units("optimal_power", "MW")
+
+# Convert distance from m to km
+atlas.landscape.convert_units("distance_roads", "km", inplace=True)
+
+# Override source unit (useful for data with missing/wrong unit attr)
+dist_ft = atlas.landscape.convert_units("elevation", "ft", from_unit="m")
+```
+
+Unit metadata is stored in the `units` attr. Conversion is dask-friendly (lazy arrays stay lazy).
+
+**Note:** Currency units (e.g., `EUR/MWh`) are stored as string labels but cannot be converted by pint.
+For LCOE unit changes, export and post-process manually.
 
 ### Results and Cleanup
 

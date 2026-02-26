@@ -2,9 +2,14 @@
 import numpy as np
 import pandas as pd
 import xarray as xr
-from pint import UnitRegistry
 
-_UREG = UnitRegistry()
+from cleo.units import (
+    LEGACY_UNIT_ATTR_KEY,
+    UNIT_ATTR_KEY,
+    conversion_factor,
+    get_unit_attr,
+    set_unit_attr,
+)
 
 
 def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
@@ -12,7 +17,8 @@ def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
     Convert one or more data variables to a new unit.
 
     Contract:
-    - Preserves existing attrs; updates only 'unit'.
+    - Preserves existing attrs; updates 'units' (canonical key).
+    - Reads from 'units' first, falls back to legacy 'unit'.
     - Dask-friendly: computes a scalar factor once and multiplies the DataArray by that factor.
     """
     if isinstance(data_variable, str):
@@ -25,23 +31,15 @@ def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
     for var in data_variable:
         data_var = self.data[var]
 
-        unit = from_unit if from_unit is not None else data_var.attrs.get("unit")
+        unit = from_unit if from_unit is not None else get_unit_attr(data_var)
         if unit is None:
-            raise ValueError(f"No from-unit given and no 'unit' attr present for variable '{var}'.")
+            raise ValueError(
+                f"No from-unit given and no 'units'/'unit' attr present for variable '{var}'."
+            )
 
-        # scalar conversion factor (1 * unit -> to_unit)
-        factor = (1.0 * _UREG(unit)).to(to_unit).magnitude
-
-        attrs = dict(data_var.attrs) if data_var.attrs is not None else {}
-        attrs["unit"] = to_unit
-
-        converted_arrays[var] = xr.DataArray(
-            data_var * factor,
-            coords=data_var.coords,
-            dims=data_var.dims,
-            attrs=attrs,
-            name=data_var.name,
-        )
+        factor = conversion_factor(unit, to_unit)
+        result = data_var * factor
+        converted_arrays[var] = set_unit_attr(result, to_unit)
 
     if inplace:
         self.data.update(converted_arrays)

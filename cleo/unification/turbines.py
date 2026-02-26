@@ -220,6 +220,13 @@ def _ingest_turbines_and_costs(
         })
         ds = ds.assign_coords(turbine=turbine_indices)
 
+        # Stamp canonical units on turbine metadata variables
+        ds["power_curve"].attrs["units"] = "1"  # dimensionless capacity factor
+        ds["turbine_capacity"].attrs["units"] = "kW"
+        ds["turbine_hub_height"].attrs["units"] = "m"
+        ds["turbine_rotor_diameter"].attrs["units"] = "m"
+        # turbine_commissioning_year has no unit (it's a year number, not a duration)
+
         # Store turbine metadata as JSON in attrs (avoids string arrays)
         ds.attrs["cleo_turbines_json"] = json.dumps(
             turbines_meta, separators=(",", ":"), ensure_ascii=False

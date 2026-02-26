@@ -393,6 +393,60 @@ class WindDomain:
         self._computed_overlays.clear()
         return None
 
+    def convert_units(
+        self,
+        variable: str,
+        to_unit: str,
+        *,
+        from_unit: str | None = None,
+        inplace: bool = False,
+    ) -> xr.DataArray | None:
+        """
+        Convert a wind variable to a different unit.
+
+        Uses the canonical unit utilities from :mod:`cleo.units`. Conversion is
+        dask-friendly (lazy arrays stay lazy). The result has the canonical
+        ``units`` attr set to the target unit.
+
+        :param variable: Variable name in ``atlas.wind.data``.
+        :param to_unit: Target unit string (e.g., ``"EUR/kWh"``, ``"km"``).
+        :param from_unit: Source unit. If ``None``, reads from the variable's
+            ``units`` attr (with legacy ``unit`` fallback).
+        :param inplace: If ``True``, stages the converted DataArray as a computed
+            overlay so it appears in ``atlas.wind.data``. If ``False``, returns
+            the converted DataArray without modifying state.
+
+        :returns: Converted DataArray if ``inplace=False``, else ``None``.
+
+        :raises ValueError: If variable not found in wind data.
+        :raises ValueError: If no unit source available and ``from_unit`` not specified.
+        :raises ValueError: If units are not dimensionally compatible.
+
+        Example::
+
+            # Convert LCOE from EUR/MWh to EUR/kWh (in-place)
+            atlas.wind.convert_units("lcoe", "EUR/kWh", inplace=True)
+
+            # Get converted DataArray without modifying store
+            lcoe_kwh = atlas.wind.convert_units("lcoe", "EUR/kWh")
+        """
+        from cleo.units import convert_dataarray
+
+        ds = self.data
+        if variable not in ds.data_vars:
+            raise ValueError(
+                f"Variable {variable!r} not found in wind data. "
+                f"Available: {sorted(ds.data_vars)}"
+            )
+
+        da = ds[variable]
+        converted = convert_dataarray(da, to_unit, from_unit=from_unit)
+
+        if inplace:
+            self._computed_overlays[variable] = converted
+            return None
+        return converted
+
     def compute(self, metric: str, **kwargs) -> DomainResult:
         """
         Compute a wind metric from canonical data.
@@ -752,6 +806,60 @@ class LandscapeDomain:
         """
         self._staged_overlays.clear()
         return None
+
+    def convert_units(
+        self,
+        variable: str,
+        to_unit: str,
+        *,
+        from_unit: str | None = None,
+        inplace: bool = False,
+    ) -> xr.DataArray | None:
+        """
+        Convert a landscape variable to a different unit.
+
+        Uses the canonical unit utilities from :mod:`cleo.units`. Conversion is
+        dask-friendly (lazy arrays stay lazy). The result has the canonical
+        ``units`` attr set to the target unit.
+
+        :param variable: Variable name in ``atlas.landscape.data``.
+        :param to_unit: Target unit string (e.g., ``"km"``, ``"ft"``).
+        :param from_unit: Source unit. If ``None``, reads from the variable's
+            ``units`` attr (with legacy ``unit`` fallback).
+        :param inplace: If ``True``, stages the converted DataArray as an
+            overlay so it appears in ``atlas.landscape.data``. If ``False``,
+            returns the converted DataArray without modifying state.
+
+        :returns: Converted DataArray if ``inplace=False``, else ``None``.
+
+        :raises ValueError: If variable not found in landscape data.
+        :raises ValueError: If no unit source available and ``from_unit`` not specified.
+        :raises ValueError: If units are not dimensionally compatible.
+
+        Example::
+
+            # Convert distance from m to km (in-place)
+            atlas.landscape.convert_units("distance_roads", "km", inplace=True)
+
+            # Get converted DataArray without modifying store
+            dist_km = atlas.landscape.convert_units("distance_roads", "km")
+        """
+        from cleo.units import convert_dataarray
+
+        ds = self.data
+        if variable not in ds.data_vars:
+            raise ValueError(
+                f"Variable {variable!r} not found in landscape data. "
+                f"Available: {sorted(ds.data_vars)}"
+            )
+
+        da = ds[variable]
+        converted = convert_dataarray(da, to_unit, from_unit=from_unit)
+
+        if inplace:
+            self._staged_overlays[variable] = converted
+            return None
+        return converted
 
     @staticmethod
     def _normalize_distance_sources_and_names(

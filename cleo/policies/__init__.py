@@ -1,8 +1,8 @@
-"""Compatibility shim for vertical_policy.
+"""Core policy modules for CLEO.
 
-The canonical location for vertical policy is now ``cleo.policies.vertical_policy``.
-This shim re-exports all public symbols for backward compatibility with existing
-imports from ``cleo.unification.vertical_policy``.
+This package provides neutral policy definitions and helpers that can be
+imported by both compute-layer and unification-layer modules without
+creating undesirable dependencies.
 """
 
 from cleo.policies.vertical_policy import (

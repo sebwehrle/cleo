@@ -20,7 +20,7 @@ from cleo.unification.gwa_io import _assert_all_required_gwa_present, _open_gwa_
 from cleo.unification.manifest import init_manifest, write_manifest_sources, write_manifest_variables
 from cleo.unification.materializers.shared import _get_clip_geometry, _stable_json
 from cleo.unification.turbines import _default_turbines_from_resources, _ingest_turbines_and_costs
-from cleo.unification.vertical_policy import (
+from cleo.policies.vertical_policy import (
     HASH_ALGORITHM,
     HASH_SCHEMA_VERSION,
     checksum_float64_le,

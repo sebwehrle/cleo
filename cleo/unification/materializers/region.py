@@ -14,6 +14,7 @@ from rasterio.transform import Affine
 from shapely.geometry import mapping
 
 from cleo.store import single_writer_lock
+from cleo.unification.store_io import open_zarr_dataset
 from cleo.unification.fingerprint import hash_inputs_id
 from cleo.unification.materializers.shared import _stable_json
 
@@ -109,8 +110,8 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
         wind_region = None
         land_region = None
         try:
-            wind_region = xr.open_zarr(wind_region_path, consolidated=False)
-            land_region = xr.open_zarr(land_region_path, consolidated=False)
+            wind_region = open_zarr_dataset(wind_region_path)
+            land_region = open_zarr_dataset(land_region_path)
             stores_complete = (
                 wind_region.attrs.get("store_state") == "complete"
                 and land_region.attrs.get("store_state") == "complete"
@@ -156,8 +157,8 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
                 land_region.close()
 
     # 1) Open base stores (must be complete)
-    wind_base = xr.open_zarr(wind_base_path, consolidated=False, chunks=unifier.chunk_policy)
-    land_base = xr.open_zarr(land_base_path, consolidated=False, chunks=unifier.chunk_policy)
+    wind_base = open_zarr_dataset(wind_base_path, chunk_policy=unifier.chunk_policy)
+    land_base = open_zarr_dataset(land_base_path, chunk_policy=unifier.chunk_policy)
 
     if wind_base.attrs.get("store_state") != "complete":
         raise RuntimeError("wind.zarr is not complete; run atlas.build() first.")

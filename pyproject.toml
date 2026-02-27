@@ -54,6 +54,10 @@ dependencies = [
 
 [project.optional-dependencies]
 bench = ["psutil>=5.9"]
+docs = [
+  "mkdocs>=1.6",
+  "mkdocstrings[python]>=0.26",
+]
 dev = [
   "pytest>=7.0",           # 7.0 for pythonpath config support
   "pytest-cov>=4.0",       # 4.0 for coverage 7.x compatibility

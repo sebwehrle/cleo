@@ -32,6 +32,7 @@ Thumbs.db
 *.tar.gz
 *.bak
 *.tmp
+site/
 
 # Local config (not tracked)
 AGENTS.md

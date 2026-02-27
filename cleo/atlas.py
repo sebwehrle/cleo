@@ -58,13 +58,24 @@ class NutsRegionName(str):
     """String-like NUTS region name carrying its NUTS level metadata."""
 
     def __new__(cls, value: str, level: int):
+        """
+        Create region-name wrapper with attached NUTS level metadata.
+
+        :param value: Region display name.
+        :param level: NUTS level.
+        :returns: New ``NutsRegionName`` instance.
+        """
         obj = str.__new__(cls, value)
         obj._nuts_level = int(level)
         return obj
 
     @property
     def level(self) -> int:
-        """Return NUTS level metadata attached to this region name."""
+        """
+        Return NUTS level metadata attached to this region name.
+
+        :returns: NUTS level.
+        """
         return int(self._nuts_level)
 
 
@@ -86,6 +97,19 @@ class Atlas:
         results_root: Path | None = None,
         fingerprint_method: str = "path_mtime_size",
     ):
+        """
+        Initialize Atlas workspace and runtime configuration.
+
+        :param path: Atlas workspace root directory.
+        :param country: ISO3 country code.
+        :param crs: Canonical projected CRS.
+        :param chunk_policy: Optional dataset chunk policy.
+        :param compute_backend: Compute backend for eager I/O materialization.
+        :param compute_workers: Optional local worker cap.
+        :param region: Optional initial region selection (applied after build).
+        :param results_root: Optional override for results artifact root.
+        :param fingerprint_method: Unification fingerprint strategy.
+        """
         self.path = path
         self.country = country
         # Region selection state (use select() to set after build())
@@ -169,10 +193,10 @@ class Atlas:
 
     @property
     def wind(self) -> WindDomain:
-        """Access WindDomain
+        """
+        Access wind domain facade.
 
-        Returns a domain object with lazy, cached .data property.
-        Use atlas.wind_data for direct dataset access.
+        :returns: Wind domain object with lazy cached data access.
         """
         if self._wind_domain is None:
             self._wind_domain = WindDomain(self)
@@ -180,10 +204,10 @@ class Atlas:
 
     @property
     def landscape(self) -> LandscapeDomain:
-        """Access LandscapeDomain
+        """
+        Access landscape domain facade.
 
-        Returns a domain object with lazy, cached .data property.
-        Use atlas.landscape_data for direct dataset access.
+        :returns: Landscape domain object with lazy cached data access.
         """
         if self._landscape_domain is None:
             self._landscape_domain = LandscapeDomain(self)
@@ -331,10 +355,13 @@ class Atlas:
 
     @property
     def region(self) -> str | None:
-        """Current region selection (public name or None for full-country).
+        """
+        Current region selection (public name or ``None`` for full-country).
 
         Returns pending region if passed to constructor but not yet applied
         (before build()), otherwise returns the resolved region name.
+
+        :returns: Active or pending region name, or ``None``.
         """
         if self._region_name is not None:
             return self._region_name
@@ -418,6 +445,8 @@ class Atlas:
 
         This is intentionally a fresh instance (no domain caches), so the returned
         object behaves like a normal Atlas created from scratch.
+
+        :returns: Cloned Atlas instance with copied runtime configuration.
         """
 
         clone = Atlas(
@@ -489,6 +518,8 @@ class Atlas:
         Effective region ID for store paths (contract B1).
 
         Returns "__all__" when no region selected, otherwise the internal region_id.
+
+        :returns: Effective region ID used in path routing.
         """
         return self._region_id
 
@@ -545,16 +576,14 @@ class Atlas:
             return
 
         from cleo.unification import Unifier
-        from cleo.unification.materializers.region import _ensure_region_stores_ready
 
         u = Unifier(
             chunk_policy=self.chunk_policy,
             fingerprint_method=self.fingerprint_method,
         )
-        _ensure_region_stores_ready(
-            atlas=self,
-            unifier=u,
-            region_id=self._region_id,
+        u.ensure_region_stores(
+            self,
+            self._region_id,
             logger=logger,
         )
 

@@ -10,6 +10,8 @@ import xarray as xr
 import yaml
 from rasterio.enums import Resampling
 
+from cleo.unification.store_io import open_zarr_dataset
+
 
 def load_clc_codes(path: Path) -> dict[int, str]:
     """Load CLC code-to-label mapping from resources."""
@@ -30,7 +32,7 @@ def load_clc_codes(path: Path) -> dict[int, str]:
 def wind_reference_template(atlas) -> xr.DataArray:
     """Get base wind template (2D y/x) for grid alignment."""
     wind_store = Path(atlas.path) / "wind.zarr"
-    ds = xr.open_zarr(wind_store, consolidated=False, chunks=atlas.chunk_policy)
+    ds = open_zarr_dataset(wind_store, chunk_policy=atlas.chunk_policy)
     if "weibull_A" not in ds.data_vars:
         raise RuntimeError("wind.zarr missing weibull_A; run atlas.build() first.")
     ref = ds["weibull_A"]

@@ -19,16 +19,16 @@ from cleo.wind_metrics import (
     _REQUIRED_ECONOMICS_FIELDS,
     _FLAT_CF_KWARGS,
     _FLAT_ECONOMICS_KWARGS,
+    resolve_cf_spec,
 )
-from cleo.domains import _resolve_cf_spec
 
 
 class TestResolveCfSpec:
-    """Tests for _resolve_cf_spec helper function."""
+    """Tests for resolve_cf_spec helper function."""
 
-    def test_resolve_cf_spec_returns_defaults_when_none(self):
+    def testresolve_cf_spec_returns_defaults_when_none(self):
         """When cf is None, returns all defaults."""
-        result = _resolve_cf_spec(None)
+        result = resolve_cf_spec(None)
 
         assert result == _CF_SPEC_DEFAULTS
         assert result["mode"] == "direct_cf_quadrature"
@@ -36,17 +36,17 @@ class TestResolveCfSpec:
         assert result["rews_n"] == 12
         assert result["loss_factor"] == 1.0
 
-    def test_resolve_cf_spec_merges_partial_override(self):
+    def testresolve_cf_spec_merges_partial_override(self):
         """Partial cf dict merges with defaults."""
         cf = {"mode": "hub"}
-        result = _resolve_cf_spec(cf)
+        result = resolve_cf_spec(cf)
 
         assert result["mode"] == "hub"
         assert result["air_density"] is False  # default
         assert result["rews_n"] == 12  # default
         assert result["loss_factor"] == 1.0  # default
 
-    def test_resolve_cf_spec_full_override(self):
+    def testresolve_cf_spec_full_override(self):
         """Full cf dict overrides all defaults."""
         cf = {
             "mode": "rews",
@@ -54,13 +54,13 @@ class TestResolveCfSpec:
             "rews_n": 7,
             "loss_factor": 0.9,
         }
-        result = _resolve_cf_spec(cf)
+        result = resolve_cf_spec(cf)
 
         assert result == cf
 
-    def test_resolve_cf_spec_returns_copy(self):
+    def testresolve_cf_spec_returns_copy(self):
         """Returned dict is independent of defaults."""
-        result = _resolve_cf_spec(None)
+        result = resolve_cf_spec(None)
         result["mode"] = "hub"
 
         # Defaults should be unchanged

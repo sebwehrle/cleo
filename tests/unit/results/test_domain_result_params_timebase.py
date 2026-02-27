@@ -76,24 +76,24 @@ class TestTimebaseInjectionInCompute:
 
     def test_economics_metric_gets_hours_per_year_injected(self) -> None:
         """Economics metrics receive hours_per_year in kwargs."""
-        from cleo.domains import _WIND_METRICS
+        from cleo.wind_metrics import get_wind_metric_spec
 
         # Verify the injection point exists in compute()
         # by checking that economics metrics have hours_per_year in allowed set
         economics_metrics = {"lcoe", "min_lcoe_turbine", "optimal_power", "optimal_energy"}
 
         for metric in economics_metrics:
-            spec = _WIND_METRICS[metric]
+            spec = get_wind_metric_spec(metric)
             assert "hours_per_year" in spec["allowed"], f"{metric} must allow hours_per_year (for internal injection)"
 
     def test_physics_metric_does_not_allow_hours_per_year(self) -> None:
         """Physics metrics should not allow hours_per_year."""
-        from cleo.domains import _WIND_METRICS
+        from cleo.wind_metrics import get_wind_metric_spec
 
         physics_metrics = {"mean_wind_speed", "capacity_factors", "rews_mps"}
 
         for metric in physics_metrics:
-            spec = _WIND_METRICS[metric]
+            spec = get_wind_metric_spec(metric)
             assert "hours_per_year" not in spec["allowed"], f"{metric} must NOT allow hours_per_year"
 
 

@@ -27,6 +27,13 @@ class StoreLockError(OSError):
     """Raised when a store write lock cannot be acquired."""
 
     def __init__(self, message: str, lock_path: Path, lock_metadata: dict | None = None):
+        """
+        Initialize store lock acquisition error.
+
+        :param message: Error message.
+        :param lock_path: Lock file path that caused failure.
+        :param lock_metadata: Parsed lock metadata when available.
+        """
         super().__init__(message)
         self.lock_path = lock_path
         self.lock_metadata = lock_metadata

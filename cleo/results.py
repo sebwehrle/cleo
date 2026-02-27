@@ -352,6 +352,14 @@ class DomainResult:
     """
 
     def __init__(self, domain: WindDomain, metric: str, data: xr.DataArray, params: dict):
+        """
+        Initialize domain result wrapper.
+
+        :param domain: Owning domain instance.
+        :param metric: Metric name.
+        :param data: Computed data array.
+        :param params: Compute parameter payload used for this result.
+        """
         self._domain = domain
         self._metric = metric
         self._data = data

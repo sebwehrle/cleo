@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
-from cleo.unification.vertical_policy import canonical_json_dumps, sha256_hex_from_json
+from cleo.policies.vertical_policy import canonical_json_dumps, sha256_hex_from_json
 
 try:
     import psutil  # type: ignore

@@ -12,7 +12,7 @@ import xarray as xr
 import yaml
 
 from cleo.unification.fingerprint import fingerprint_file
-from cleo.unification.vertical_policy import resolve_vertical_policy
+from cleo.policies.vertical_policy import resolve_vertical_policy
 
 logger = logging.getLogger(__name__)
 

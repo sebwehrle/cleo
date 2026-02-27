@@ -93,9 +93,25 @@ def test_ensure_region_stores_requires_region_id_store_layout(tmp_path: Path, mo
 
         def materialize_region(self, atlas_obj, region):  # noqa: ANN001
             assert region == "AT12"
+            # Create stores at WRONG path (legacy name instead of region_id)
             legacy = atlas_obj.path / "regions" / "Niederösterreich"
             (legacy / "wind.zarr").mkdir(parents=True, exist_ok=True)
             (legacy / "landscape.zarr").mkdir(parents=True, exist_ok=True)
+
+        def ensure_region_stores(self, atlas_obj, region_id, *, logger):  # noqa: ANN001
+            # Call materialize_region (which creates stores at wrong path)
+            self.materialize_region(atlas_obj, region_id)
+            # Check expected paths (which won't exist because stores are at wrong path)
+            expected_root = atlas_obj.path / "regions" / region_id
+            expected_wind = expected_root / "wind.zarr"
+            expected_land = expected_root / "landscape.zarr"
+            if not (expected_wind.exists() and expected_land.exists()):
+                raise RuntimeError(
+                    f"Region stores are still missing after materialize_region({region_id!r}). "
+                    f"Details: {{'expected_root': '{expected_root}', "
+                    f"'expected_wind_exists': {expected_wind.exists()}, "
+                    f"'expected_landscape_exists': {expected_land.exists()}}}"
+                )
 
     monkeypatch.setattr("cleo.unification.Unifier", FakeUnifier)
     with pytest.raises(RuntimeError, match="Region stores are still missing after materialize_region\\('AT12'\\)"):

@@ -6,11 +6,12 @@ from pathlib import Path
 from cleo.results import DomainResult, normalize_metric_for_active_wind_store
 from cleo.spatial import distance_to_positive_mask
 from cleo.wind_metrics import (
-    _WIND_METRICS,
-    _CF_SPEC_DEFAULTS,
-    _REQUIRED_ECONOMICS_FIELDS,
-    _FLAT_CF_KWARGS,
-    _FLAT_ECONOMICS_KWARGS,
+    list_wind_metrics,
+    get_wind_metric_spec,
+    resolve_cf_spec,
+    required_economics_fields,
+    flat_cf_kwargs,
+    flat_economics_kwargs,
 )
 from cleo.unification.store_io import (
     open_zarr_dataset,
@@ -34,21 +35,6 @@ def _distance_spec_json(source_var: str) -> str:
         "source_var": source_var,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def _resolve_cf_spec(cf: dict | None) -> dict:
-    """Resolve CF spec dict with defaults for composed metrics.
-
-    Args:
-        cf: User-provided CF spec dict, or None for defaults.
-
-    Returns:
-        Complete CF spec dict with all required keys.
-    """
-    result = _CF_SPEC_DEFAULTS.copy()
-    if cf is not None:
-        result.update(cf)
-    return result
 
 
 def _cf_spec_matches(
@@ -130,6 +116,11 @@ class WindDomain:
     """
 
     def __init__(self, atlas):
+        """
+        Initialize wind domain view for an Atlas instance.
+
+        :param atlas: Owning Atlas instance.
+        """
         self._atlas = atlas
         self._data = None
         self._computed_overlays: dict[str, xr.DataArray] = {}
@@ -203,16 +194,12 @@ class WindDomain:
         return self._atlas._wind_selected_turbines
 
     def _validate_turbines(self, turbines: list[str]) -> tuple[str, ...]:
-        """Validate turbine IDs against available turbines.
+        """
+        Validate turbine IDs against available turbines.
 
-        Args:
-            turbines: List of turbine IDs to validate.
-
-        Returns:
-            Validated tuple of turbine IDs.
-
-        Raises:
-            ValueError: If any turbine ID is unknown.
+        :param turbines: Turbine IDs to validate.
+        :returns: Validated turbine IDs.
+        :raises ValueError: If any requested turbine ID is unknown.
         """
         available = set(self.turbines)
         requested = set(turbines)
@@ -496,15 +483,15 @@ class WindDomain:
                 f"Use atlas.configure_timebase(hours_per_year=...) to set timebase assumptions."
             )
 
-        if metric not in _WIND_METRICS:
-            supported = sorted(_WIND_METRICS.keys())
-            raise ValueError(f"Unknown metric {metric!r}. Supported: {supported}")
+        available_metrics = list_wind_metrics()
+        if metric not in available_metrics:
+            raise ValueError(f"Unknown metric {metric!r}. Supported: {list(available_metrics)}")
 
-        spec = _WIND_METRICS[metric]
+        spec = get_wind_metric_spec(metric)
         fn = spec["fn"]
         required = spec["required"]
         requires_turbines = spec["requires_turbines"]
-        allowed = spec.get("allowed")
+        allowed = spec["allowed"]
 
         # Check required kwargs
         missing = required - kwargs.keys()
@@ -523,10 +510,10 @@ class WindDomain:
                 )
 
         # Handle composed metrics (LCOE-family): grouped cf={} and economics={} specs
-        is_composed = spec.get("composed", False)
+        is_composed = spec["composed"]
         if is_composed:
             # Reject flat CF/economics kwargs - must use grouped specs
-            flat_cf_present = set(kwargs.keys()) & _FLAT_CF_KWARGS
+            flat_cf_present = set(kwargs.keys()) & flat_cf_kwargs()
             if flat_cf_present:
                 raise ValueError(
                     f"For {metric!r}, CF parameters must be passed via cf={{...}}, "
@@ -534,7 +521,7 @@ class WindDomain:
                     f'Use: compute({metric!r}, cf={{"mode": ..., "air_density": ...}}, ...)'
                 )
 
-            flat_econ_present = set(kwargs.keys()) & _FLAT_ECONOMICS_KWARGS
+            flat_econ_present = set(kwargs.keys()) & flat_economics_kwargs()
             if flat_econ_present:
                 raise ValueError(
                     f"For {metric!r}, economics parameters must be passed via economics={{...}}, "
@@ -547,13 +534,13 @@ class WindDomain:
             economics_override = kwargs.pop("economics", None)
 
             # Resolve CF spec with defaults
-            resolved_cf = _resolve_cf_spec(cf_spec)
+            resolved_cf = resolve_cf_spec(cf_spec)
 
             # Resolve economics via atlas baseline + per-call overrides
             effective_economics = self._atlas._effective_economics(economics_override)
 
             # Validate required economics fields
-            missing_econ = _REQUIRED_ECONOMICS_FIELDS - set(effective_economics.keys())
+            missing_econ = required_economics_fields() - set(effective_economics.keys())
             if missing_econ:
                 raise ValueError(
                     f"Missing required economics parameters for {metric!r}: {sorted(missing_econ)}. "
@@ -628,6 +615,15 @@ class LandscapeAddResult:
         *,
         noop_existing: bool = False,
     ):
+        """
+        Initialize staged landscape add result wrapper.
+
+        :param domain: Owning landscape domain.
+        :param name: Variable name being staged.
+        :param data: Staged data candidate.
+        :param if_exists: Conflict policy used for this operation.
+        :param noop_existing: True when operation is a no-op over existing data.
+        """
         self._domain = domain
         self._name = name
         self._data = data
@@ -661,6 +657,15 @@ class LandscapeComputeBatchResult:
         data: xr.Dataset,
         if_exists: str,
     ):
+        """
+        Initialize staged landscape compute batch result wrapper.
+
+        :param domain: Owning landscape domain.
+        :param metric: Metric name used for this batch.
+        :param names: Output variable names in this batch.
+        :param data: Staged compute dataset.
+        :param if_exists: Conflict policy used for this operation.
+        """
         self._domain = domain
         self._metric = metric
         self._names = names
@@ -691,17 +696,34 @@ class LandscapeDomain:
     """
 
     def __init__(self, atlas):
+        """
+        Initialize landscape domain view for an Atlas instance.
+
+        :param atlas: Owning Atlas instance.
+        """
         self._atlas = atlas
         self._data = None
         self._staged_overlays: dict[str, xr.DataArray] = {}
 
     @staticmethod
     def _validate_if_exists(if_exists: str) -> None:
+        """
+        Validate landscape overwrite policy.
+
+        :param if_exists: Conflict policy value.
+        :returns: ``None``.
+        :raises ValueError: If policy is not ``error``, ``replace``, or ``noop``.
+        """
         valid_if_exists = {"error", "replace", "noop"}
         if if_exists not in valid_if_exists:
             raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
 
     def _build_unifier(self):
+        """
+        Build Unifier configured from owning Atlas settings.
+
+        :returns: Configured :class:`cleo.unification.unifier.Unifier`.
+        """
         from cleo.unification import Unifier
 
         atlas = self._atlas
@@ -811,6 +833,14 @@ class LandscapeDomain:
         source,
         name,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """
+        Normalize and validate source/name inputs for distance compute batches.
+
+        :param source: Source variable name or non-empty sequence of names.
+        :param name: Optional output name or sequence of output names.
+        :returns: Tuple ``(sources, names)`` as normalized non-empty string tuples.
+        :raises ValueError: If inputs are empty, duplicated, mismatched, or wrong type.
+        """
         if isinstance(source, str):
             sources = (source,)
         elif isinstance(source, (list, tuple)) and source:
@@ -861,10 +891,23 @@ class LandscapeDomain:
 
     @staticmethod
     def _distance_spec_json(source_var: str) -> str:
+        """
+        Build canonical JSON payload for distance metric identity.
+
+        :param source_var: Source variable name.
+        :returns: Canonical JSON string payload.
+        """
         return _distance_spec_json(source_var)
 
     @staticmethod
     def _distance_spec_matches(da: xr.DataArray, expected_spec_json: str) -> bool:
+        """
+        Compare staged/store variable distance identity to expected payload.
+
+        :param da: Candidate distance data variable.
+        :param expected_spec_json: Expected canonical JSON payload.
+        :returns: ``True`` when payloads match exactly, else ``False``.
+        """
         return _distance_spec_matches(da, expected_spec_json)
 
     def _materialize_staged(
@@ -874,6 +917,14 @@ class LandscapeDomain:
         if_exists: str,
         noop_existing: bool = False,
     ) -> xr.DataArray:
+        """
+        Materialize one staged landscape variable into active store.
+
+        :param name: Variable name to materialize.
+        :param if_exists: Conflict policy.
+        :param noop_existing: Internal marker for no-op materialization path.
+        :returns: Materialized variable from active landscape data.
+        """
         self._validate_if_exists(if_exists)
         if noop_existing and if_exists == "noop":
             self._staged_overlays.pop(name, None)
@@ -901,6 +952,13 @@ class LandscapeDomain:
         names: tuple[str, ...],
         if_exists: str,
     ) -> xr.Dataset:
+        """
+        Materialize a batch of staged landscape variables into active store.
+
+        :param names: Variable names to materialize.
+        :param if_exists: Conflict policy.
+        :returns: Dataset containing materialized variables.
+        """
         self._validate_if_exists(if_exists)
         if not names:
             return xr.Dataset()
@@ -1081,9 +1139,17 @@ class LandscapeDomain:
         if_exists: str = "error",
     ) -> LandscapeAddResult:
         """
-        Stage a raster landscape variable candidate and return an operation object.
+        Stage a raster landscape variable candidate.
 
         Vector sources are exposed via :meth:`rasterize`.
+
+        :param name: Target variable name.
+        :param source_path: Raster source path.
+        :param kind: Source kind. Must be ``"raster"``.
+        :param params: Optional source registration parameters.
+        :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+        :returns: Operation wrapper for staged addition.
+        :raises ValueError: If ``kind`` or ``if_exists`` is invalid, or conflicts are disallowed.
         """
         self._validate_if_exists(if_exists)
         if kind != "raster":
@@ -1139,10 +1205,18 @@ class LandscapeDomain:
         if_exists: str = "error",
     ) -> LandscapeAddResult:
         """
-        Stage a vector-rasterized landscape variable and return an operation object.
+        Stage a vector-rasterized landscape variable.
 
         The input ``shape`` may be a path-like vector source or a GeoDataFrame.
         Rasterization aligns to the atlas wind/landscape grid.
+
+        :param shape: Vector source path or GeoDataFrame.
+        :param name: Target variable name.
+        :param column: Optional column name used for rasterized values.
+        :param all_touched: Rasterization inclusion policy.
+        :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+        :returns: Operation wrapper for staged rasterization.
+        :raises ValueError: If ``if_exists`` is invalid or conflicts are disallowed.
         """
         self._validate_if_exists(if_exists)
 

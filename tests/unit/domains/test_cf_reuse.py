@@ -4,7 +4,8 @@ import json
 import numpy as np
 import xarray as xr
 
-from cleo.domains import _cf_spec_matches, _resolve_cf_spec
+from cleo.domains import _cf_spec_matches
+from cleo.wind_metrics import resolve_cf_spec
 
 
 class TestCfSpecMatches:
@@ -14,7 +15,7 @@ class TestCfSpecMatches:
         """Returns False if existing CF lacks required metadata keys."""
         cf = xr.DataArray(np.ones((1, 2, 2)), dims=("turbine", "y", "x"))
         # No cleo:* attrs
-        spec = _resolve_cf_spec(None)
+        spec = resolve_cf_spec(None)
         turbines = ("T1",)
         assert not _cf_spec_matches(cf, spec, turbines)
 
@@ -27,7 +28,7 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1"])
 
-        spec = _resolve_cf_spec({"mode": "direct_cf_quadrature"})  # Different mode
+        spec = resolve_cf_spec({"mode": "direct_cf_quadrature"})  # Different mode
         turbines = ("T1",)
 
         assert not _cf_spec_matches(cf, spec, turbines)
@@ -41,7 +42,7 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1"])
 
-        spec = _resolve_cf_spec({"air_density": True})  # Different
+        spec = resolve_cf_spec({"air_density": True})  # Different
         turbines = ("T1",)
 
         assert not _cf_spec_matches(cf, spec, turbines)
@@ -55,7 +56,7 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1"])
 
-        spec = _resolve_cf_spec({"rews_n": 24})  # Different
+        spec = resolve_cf_spec({"rews_n": 24})  # Different
         turbines = ("T1",)
 
         assert not _cf_spec_matches(cf, spec, turbines)
@@ -69,7 +70,7 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1"])
 
-        spec = _resolve_cf_spec({"loss_factor": 0.95})  # Different
+        spec = resolve_cf_spec({"loss_factor": 0.95})  # Different
         turbines = ("T1",)
 
         assert not _cf_spec_matches(cf, spec, turbines)
@@ -83,7 +84,7 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1"])
 
-        spec = _resolve_cf_spec(None)
+        spec = resolve_cf_spec(None)
         turbines = ("T1", "T2")  # Different
 
         assert not _cf_spec_matches(cf, spec, turbines)
@@ -97,7 +98,7 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1", "T2"])
 
-        spec = _resolve_cf_spec(None)
+        spec = resolve_cf_spec(None)
         turbines = ("T2", "T1")  # Same turbines, different order
 
         assert not _cf_spec_matches(cf, spec, turbines)
@@ -111,7 +112,7 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1", "T2"])
 
-        spec = _resolve_cf_spec(
+        spec = resolve_cf_spec(
             None
         )  # Defaults: mode=direct_cf_quadrature, air_density=False, rews_n=12, loss_factor=1.0
         turbines = ("T1", "T2")
@@ -127,7 +128,7 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 0.95
         cf.attrs["cleo:turbines_json"] = json.dumps(["TurbineA"])
 
-        spec = _resolve_cf_spec(
+        spec = resolve_cf_spec(
             {
                 "mode": "hub",
                 "air_density": True,
@@ -148,18 +149,18 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1"])
 
-        spec = _resolve_cf_spec({"air_density": True})  # Bool in spec
+        spec = resolve_cf_spec({"air_density": True})  # Bool in spec
         turbines = ("T1",)
 
         assert _cf_spec_matches(cf, spec, turbines)
 
 
 class TestResolveCfSpecForReuse:
-    """Tests for _resolve_cf_spec used in CF reuse context."""
+    """Tests for resolve_cf_spec used in CF reuse context."""
 
     def test_defaults_match_expected_values(self):
         """Default CF spec values match what assess module produces."""
-        spec = _resolve_cf_spec(None)
+        spec = resolve_cf_spec(None)
         assert spec["mode"] == "direct_cf_quadrature"
         assert spec["air_density"] is False
         assert spec["rews_n"] == 12
@@ -167,7 +168,7 @@ class TestResolveCfSpecForReuse:
 
     def test_partial_override_preserves_other_defaults(self):
         """Partial spec override keeps non-specified defaults."""
-        spec = _resolve_cf_spec({"mode": "hub"})
+        spec = resolve_cf_spec({"mode": "hub"})
         assert spec["mode"] == "hub"
         assert spec["air_density"] is False  # Default preserved
         assert spec["rews_n"] == 12  # Default preserved

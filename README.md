@@ -26,8 +26,8 @@ Dependency management is defined in `pyproject.toml` (no tracked `environment.ya
 Use these commands directly (no Makefile required):
 
 ```bash
-# install dev dependencies
-python -m pip install -e ".[dev]"
+# install dev + docs dependencies
+python -m pip install -e ".[dev,docs]"
 
 # format/lint
 python -m ruff format --check .
@@ -46,6 +46,10 @@ python -m pip install build
 python -m build
 python -m pip install dist/*.whl
 python -c "import cleo; print('cleo import OK')"
+
+# docs build
+python -m mkdocs build --strict
+python -m mkdocs serve
 ```
 
 Optional local cleanup:

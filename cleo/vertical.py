@@ -9,7 +9,7 @@ import numpy as np
 import xarray as xr
 from scipy.special import gammaln
 
-from cleo.unification.vertical_policy import (
+from cleo.policies.vertical_policy import (
     DEFAULT_VERTICAL_POLICY,
     resolve_vertical_policy,
 )

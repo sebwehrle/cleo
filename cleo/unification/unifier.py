@@ -30,12 +30,11 @@ class Unifier:
         chunk_policy: dict[str, int] | None = None,
         fingerprint_method: str = "path_mtime_size",
     ) -> None:
-        """Initialize the Unifier.
+        """
+        Initialize the Unifier.
 
-        Args:
-            chunk_policy: Default chunking policy (e.g., {"x": 512, "y": 512}).
-            fingerprint_method: Method for computing source fingerprints.
-                Default is "path_mtime_size".
+        :param chunk_policy: Default chunking policy.
+        :param fingerprint_method: Method for computing source fingerprints.
         """
         self.chunk_policy = chunk_policy or {}
         self.fingerprint_method = fingerprint_method
@@ -182,3 +181,23 @@ class Unifier:
     def materialize_region(self, atlas, region_id: str) -> None:
         """Materialize region stores by subsetting from country stores."""
         return region_materializer.materialize_region(self, atlas, region_id)
+
+    def ensure_region_stores(self, atlas, region_id: str, *, logger) -> None:
+        """Ensure region stores exist for a given region selection.
+
+        This method handles region store lifecycle including:
+        - Removing stale/partial region directories
+        - Delegating to materialize_region for freshness/completeness checks
+        - Verifying region stores exist after materialization
+
+        :param atlas: Atlas instance with path and region attributes.
+        :param region_id: The region identifier.
+        :param logger: Logger instance for diagnostics.
+        :raises RuntimeError: If region stores are missing after materialization.
+        """
+        return region_materializer._ensure_region_stores_ready(
+            atlas=atlas,
+            unifier=self,
+            region_id=region_id,
+            logger=logger,
+        )

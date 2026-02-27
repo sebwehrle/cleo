@@ -11,12 +11,51 @@ CLEO prepares analysis-ready wind/landscape rasters and tabular exports; econome
 - **OS**: Linux (primary), macOS (secondary)
 - **System deps**: GDAL/PROJ (via rasterio/pyproj), HDF5/NetCDF
 
-For detailed environment requirements and dependency policies, see `CONTRACT_UNIFIED_ATLAS.md` Section C.
+For detailed environment requirements and dependency policies, see `docs/CONTRACT_UNIFIED_ATLAS.md` Section C.
 
 ## Installation
 
 ```bash
 python -m pip install -e .
+```
+
+Dependency management is defined in `pyproject.toml` (no tracked `environment.yaml`).
+
+## Development Commands (Canonical)
+
+Use these commands directly (no Makefile required):
+
+```bash
+# install dev dependencies
+python -m pip install -e ".[dev]"
+
+# format/lint
+python -m ruff format --check .
+python -m ruff check .
+
+# architecture/boundary guardrails
+python -m pytest -q tests/unit/compat
+
+# test suite
+python -m pytest -q tests/unit
+python -m pytest -q tests/integration
+python -m pytest -q tests/smoke
+
+# build + import verification
+python -m pip install build
+python -m build
+python -m pip install dist/*.whl
+python -c "import cleo; print('cleo import OK')"
+```
+
+Optional local cleanup:
+
+```bash
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+rm -rf build/ dist/ 2>/dev/null || true
 ```
 
 ## Quick Start

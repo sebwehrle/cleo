@@ -1,4 +1,4 @@
-"""Tests for Atlas construction contract compliance (CONTRACT_UNIFIED_ATLAS.md A2).
+"""Tests for Atlas construction contract compliance (docs/CONTRACT_UNIFIED_ATLAS.md A2).
 
 Verifies:
 - Atlas accepts all constructor parameters per contract A2

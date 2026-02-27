@@ -1,7 +1,7 @@
 """Tests for unit metadata contract compliance in assess module.
 
 Verifies that all metric outputs from assess.py have the canonical 'units' attr
-as defined in CONTRACT_UNIFIED_ATLAS.md section B9.2.
+as defined in docs/CONTRACT_UNIFIED_ATLAS.md section B9.2.
 """
 
 import numpy as np

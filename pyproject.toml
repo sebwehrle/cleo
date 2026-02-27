@@ -14,7 +14,7 @@ authors = [
 ]
 urls = {Homepage = "https://github.com/sebwehrle/cleo"}
 
-# Dependency version policy (see CONTRACT_UNIFIED_ATLAS.md Section C3):
+# Dependency version policy (see docs/CONTRACT_UNIFIED_ATLAS.md Section C3):
 # - Lower bounds: minimum versions known to work based on CI/testing
 # - Upper bounds: protective caps for ecosystem components with known breaking changes
 dependencies = [

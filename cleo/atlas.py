@@ -1264,7 +1264,7 @@ class Atlas:
             raise FileNotFoundError(
                 "Cleo packaged resources are missing (expected package dir `cleo/resources`). "
                 "This indicates a broken installation/build. "
-                "Reinstall from a proper wheel/sdist, or use the conda environment.yaml install."
+                "Reinstall from a proper wheel/sdist and ensure project dependencies are installed."
             )
 
         packaged = [p for p in pkg_root.iterdir() if p.is_file() and p.name.lower().endswith(".yml")]

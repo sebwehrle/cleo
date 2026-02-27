@@ -7,6 +7,7 @@ Contracts:
 
 from __future__ import annotations
 from pathlib import Path
+import pytest
 from cleo.atlas import Atlas
 
 EXPECTED_YMLS = {
@@ -64,3 +65,24 @@ def test_deploy_resources_is_idempotent_and_preserves_overrides(tmp_path: Path) 
     Atlas._deploy_resources(d)
 
     assert target.read_text(encoding="utf-8") == sentinel
+
+
+def test_deploy_resources_missing_pkg_root_message_has_no_environment_yaml(monkeypatch, tmp_path: Path) -> None:
+    import importlib.resources as importlib_resources
+
+    class _MissingRoot:
+        def joinpath(self, _name: str) -> "_MissingRoot":
+            return self
+
+        def is_dir(self) -> bool:
+            return False
+
+    monkeypatch.setattr(importlib_resources, "files", lambda _pkg: _MissingRoot())
+
+    d = _Dummy(tmp_path)
+    with pytest.raises(FileNotFoundError) as exc_info:
+        Atlas._deploy_resources(d)
+
+    msg = str(exc_info.value)
+    assert "proper wheel/sdist" in msg
+    assert "environment.yaml" not in msg

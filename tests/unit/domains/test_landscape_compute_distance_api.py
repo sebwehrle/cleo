@@ -39,9 +39,7 @@ def _base_store() -> xr.Dataset:
     return xr.Dataset(data_vars={"valid_mask": valid_mask, "roads": roads, "water": water}, coords={"y": y, "x": x})
 
 
-def test_compute_distance_batch_stages_and_returns_dataset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_compute_distance_batch_stages_and_returns_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = make_landscape_domain_atlas_stub(tmp_path)
     domain = LandscapeDomain(atlas)
     store = _base_store()
@@ -74,9 +72,7 @@ def test_compute_distance_rejects_source_not_in_store_even_if_staged(
         domain.compute("distance", source="roads")
 
 
-def test_compute_distance_if_exists_error_is_atomic(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_compute_distance_if_exists_error_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = make_landscape_domain_atlas_stub(tmp_path)
     domain = LandscapeDomain(atlas)
     store = _base_store()
@@ -111,9 +107,7 @@ def test_compute_distance_noop_requires_matching_spec_for_existing_store_var(
         domain.compute("distance", source="roads", if_exists="noop")
 
 
-def test_compute_distance_noop_uses_store_var_without_staging(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_compute_distance_noop_uses_store_var_without_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = make_landscape_domain_atlas_stub(tmp_path)
     domain = LandscapeDomain(atlas)
     store = _base_store()

@@ -30,7 +30,7 @@ def test_domain_result_repr_staged_guides_next_steps() -> None:
 
     text = repr(result)
     assert "DomainResult(metric='mean_wind_speed', state='staged'" in text
-    assert 'target=\'atlas.wind.data["mean_wind_speed"]\'' in text
+    assert "target='atlas.wind.data[\"mean_wind_speed\"]'" in text
     assert "Lazy data: .data" in text
     assert ".materialize(overwrite=True, allow_mode_change=False)" in text
     assert ".persist(run_id=None, metric_name=None)" in text

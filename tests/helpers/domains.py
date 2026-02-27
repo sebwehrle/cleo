@@ -20,8 +20,5 @@ def make_landscape_domain_atlas_stub(
         fingerprint_method="path_mtime_size",
     )
     if include_build_clc:
-        stub.build_clc = (
-            lambda source="clc2018": tmp_path / "data" / "raw" / "AUT" / "clc" / f"{source}.tif"
-        )
+        stub.build_clc = lambda source="clc2018": tmp_path / "data" / "raw" / "AUT" / "clc" / f"{source}.tif"
     return stub
-

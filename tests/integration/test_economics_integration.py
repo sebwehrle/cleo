@@ -15,7 +15,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
-import xarray as xr
 from rasterio.crs import CRS
 
 import cleo
@@ -40,9 +39,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -261,9 +258,7 @@ class TestEconomicsIntegration:
         assert "Missing required economics parameters" in error_msg
         assert "discount_rate" in error_msg
 
-    def test_partial_economics_missing_fields_raises(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_partial_economics_missing_fields_raises(self, materialized_atlas: Atlas) -> None:
         """Partial economics (some in baseline, some missing) raises error."""
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]
@@ -458,9 +453,7 @@ class TestLcoeFamilyMetricsIntegration:
             "om_variable_eur_per_kwh": 0.008,
         }
 
-    def test_min_lcoe_turbine_integration(
-        self, materialized_atlas: Atlas, full_economics: dict
-    ) -> None:
+    def test_min_lcoe_turbine_integration(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """min_lcoe_turbine computes successfully end-to-end."""
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]
@@ -478,9 +471,7 @@ class TestLcoeFamilyMetricsIntegration:
         assert np.all(result.values[valid_mask] == 0)
 
     @pytest.mark.skip(reason="optimal_power has dask fancy indexing limitation with chunked arrays")
-    def test_optimal_power_integration(
-        self, materialized_atlas: Atlas, full_economics: dict
-    ) -> None:
+    def test_optimal_power_integration(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """optimal_power computes successfully end-to-end."""
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]
@@ -498,9 +489,7 @@ class TestLcoeFamilyMetricsIntegration:
         assert np.all(valid > 0)
 
     @pytest.mark.skip(reason="optimal_energy has dask fancy indexing limitation with chunked arrays")
-    def test_optimal_energy_integration(
-        self, materialized_atlas: Atlas, full_economics: dict
-    ) -> None:
+    def test_optimal_energy_integration(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """optimal_energy computes successfully end-to-end."""
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]
@@ -517,9 +506,7 @@ class TestLcoeFamilyMetricsIntegration:
         assert len(valid) > 0
         assert np.all(valid > 0)
 
-    def test_lcoe_and_min_lcoe_turbine_grouped_spec_api(
-        self, materialized_atlas: Atlas, full_economics: dict
-    ) -> None:
+    def test_lcoe_and_min_lcoe_turbine_grouped_spec_api(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """lcoe and min_lcoe_turbine use the grouped spec API."""
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]

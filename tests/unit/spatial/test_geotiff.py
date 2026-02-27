@@ -100,7 +100,6 @@ def test_save_to_geotiff_with_nans_writes_nodata(tmp_path: Path):
         assert -9999 in data, "Nodata value should appear in raster"
 
 
-
 def test_save_to_geotiff_rejects_non_2d_xy(tmp_path: Path):
     da = xr.DataArray(
         np.ones((1, 2, 2)),
@@ -109,7 +108,6 @@ def test_save_to_geotiff_rejects_non_2d_xy(tmp_path: Path):
     )
     with pytest.raises(TypeError, match="expects exactly dims"):
         save_to_geotiff(da, "EPSG:4326", tmp_path, "tmp.tif")
-
 
 
 def test_save_to_geotiff_all_finite_succeeds(tmp_path: Path):

@@ -14,7 +14,6 @@ from tests.helpers.optional import requires_rioxarray, requires_rasterio
 requires_rioxarray()
 requires_rasterio()
 
-from pathlib import Path
 
 import dask.array as da
 import numpy as np
@@ -23,7 +22,6 @@ import xarray as xr
 from pyproj import CRS
 
 from cleo.assess import compute_air_density_correction_core
-from tests.helpers.asserts import assert_same_coords
 from tests.helpers.factories import da_xy_with_crs
 
 
@@ -142,9 +140,7 @@ def test_air_density_correction_high_altitude() -> None:
     result_high = compute_air_density_correction_core(elevation=elevation_high, template=template)
 
     # Higher altitude should have lower air density correction factor
-    assert np.all(result_high.values < result_low.values), (
-        "Higher altitude should have lower air density correction"
-    )
+    assert np.all(result_high.values < result_low.values), "Higher altitude should have lower air density correction"
 
 
 @pytest.mark.parametrize("user_input", ["EPSG:3035", 3035])

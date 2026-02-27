@@ -37,9 +37,7 @@ def test_materialize_clc_returns_cached_prepared_without_rebuilding(
     assert called["canonical"] == 0
 
 
-def test_materialize_clc_raises_when_no_valid_cells(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_materialize_clc_raises_when_no_valid_cells(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Create source raster placeholder path and skip download by ensuring it exists.
     source_path = tmp_path / "data" / "raw" / "clc" / CLC_SOURCES["clc2018"]["filename"]
     source_path.parent.mkdir(parents=True, exist_ok=True)

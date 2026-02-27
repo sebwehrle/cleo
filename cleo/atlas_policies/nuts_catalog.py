@@ -82,8 +82,7 @@ def load_nuts_region_catalog(
     catalog = read_raw_catalog()
     if not catalog:
         raise ValueError(
-            "No NUTS regions available for this atlas. "
-            "Ensure NUTS data is present (e.g. run cleo.loaders.load_nuts)."
+            "No NUTS regions available for this atlas. Ensure NUTS data is present (e.g. run cleo.loaders.load_nuts)."
         )
 
     cache = tuple(dict(row) for row in catalog)

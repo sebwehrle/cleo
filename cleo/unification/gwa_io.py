@@ -108,9 +108,7 @@ def _load_or_fetch_gwa_crs(atlas, iso3: str) -> CRS:
             extra={"iso3": iso3, "cache_path": str(cache)},
             exc_info=True,
         )
-        raise RuntimeError(
-            f"Failed to fetch GWA CRS for {iso3}; cache missing at {cache}. Error: {e}"
-        ) from e
+        raise RuntimeError(f"Failed to fetch GWA CRS for {iso3}; cache missing at {cache}. Error: {e}") from e
 
     # Persist to cache
     try:
@@ -121,9 +119,7 @@ def _load_or_fetch_gwa_crs(atlas, iso3: str) -> CRS:
             extra={"iso3": iso3, "cache_path": str(cache)},
             exc_info=True,
         )
-        raise RuntimeError(
-            f"Fetched CRS but failed to persist cache at {cache}: {e}"
-        ) from e
+        raise RuntimeError(f"Fetched CRS but failed to persist cache at {cache}: {e}") from e
 
     return crs
 
@@ -141,11 +137,13 @@ def _required_gwa_files(atlas) -> list[tuple[str, Path]]:
     required = []
 
     for h in GWA_HEIGHTS:
-        required.extend([
-            (f"gwa:file:weibull_A:{h}", raw_dir / f"{atlas.country}_combined-Weibull-A_{h}.tif"),
-            (f"gwa:file:weibull_k:{h}", raw_dir / f"{atlas.country}_combined-Weibull-k_{h}.tif"),
-            (f"gwa:file:rho:{h}", raw_dir / f"{atlas.country}_air-density_{h}.tif"),
-        ])
+        required.extend(
+            [
+                (f"gwa:file:weibull_A:{h}", raw_dir / f"{atlas.country}_combined-Weibull-A_{h}.tif"),
+                (f"gwa:file:weibull_k:{h}", raw_dir / f"{atlas.country}_combined-Weibull-k_{h}.tif"),
+                (f"gwa:file:rho:{h}", raw_dir / f"{atlas.country}_air-density_{h}.tif"),
+            ]
+        )
 
     return required
 
@@ -166,9 +164,7 @@ def _assert_all_required_gwa_present(atlas) -> list[tuple[str, Path]]:
     missing = [str(p) for (_sid, p) in req if not p.exists()]
 
     if missing:
-        raise FileNotFoundError(
-            "Missing required GWA files:\n" + "\n".join(missing)
-        )
+        raise FileNotFoundError("Missing required GWA files:\n" + "\n".join(missing))
 
     return req
 

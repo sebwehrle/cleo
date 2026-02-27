@@ -312,9 +312,7 @@ class Atlas:
         Requires prior build() call to create the skeleton store.
         """
         if not getattr(self, "_canonical_ready", False):
-            raise RuntimeError(
-                "Canonical stores not ready. Call atlas.build() first."
-            )
+            raise RuntimeError("Canonical stores not ready. Call atlas.build() first.")
         return open_zarr_dataset(self.wind_store_path, chunk_policy=self.chunk_policy)
 
     @property
@@ -324,9 +322,7 @@ class Atlas:
         Requires prior build() call to create the skeleton store.
         """
         if not getattr(self, "_canonical_ready", False):
-            raise RuntimeError(
-                "Canonical stores not ready. Call atlas.build() first."
-            )
+            raise RuntimeError("Canonical stores not ready. Call atlas.build() first.")
         return open_zarr_dataset(self.landscape_store_path, chunk_policy=self.chunk_policy)
 
     # -------------------------------------------------------------------------
@@ -360,6 +356,7 @@ class Atlas:
 
     def _load_nuts_region_catalog(self) -> list[dict]:
         """Load NUTS region catalog from store attrs (fast) or raw NUTS files (fallback)."""
+
         def _log_debug(msg: str) -> None:
             logger.debug(
                 msg,
@@ -425,28 +422,22 @@ class Atlas:
 
         clone = Atlas(
             self.path,
-            country = self.country,
-            crs = self.crs,
-            chunk_policy = dict(self.chunk_policy) if self.chunk_policy is not None else None,
-            compute_backend = self.compute_backend,
-            compute_workers = self.compute_workers,
-            region = None,
-            results_root = self.results_root,
-            fingerprint_method = self.fingerprint_method
+            country=self.country,
+            crs=self.crs,
+            chunk_policy=dict(self.chunk_policy) if self.chunk_policy is not None else None,
+            compute_backend=self.compute_backend,
+            compute_workers=self.compute_workers,
+            region=None,
+            results_root=self.results_root,
+            fingerprint_method=self.fingerprint_method,
         )
 
         clone._canonical_ready = bool(getattr(self, "_canonical_ready", False))
         clone._turbines_configured = getattr(self, "_turbines_configured", None)
         clone._wind_selected_turbines = getattr(self, "_wind_selected_turbines", None)
-        clone._timebase_configured = (
-            dict(self._timebase_configured)
-            if self._timebase_configured is not None
-            else None
-        )
+        clone._timebase_configured = dict(self._timebase_configured) if self._timebase_configured is not None else None
         clone._economics_configured = (
-            dict(self._economics_configured)
-            if self._economics_configured is not None
-            else None
+            dict(self._economics_configured) if self._economics_configured is not None else None
         )
 
         return clone
@@ -666,9 +657,7 @@ class Atlas:
 
         if prefix is not None:
             if not self._RUN_ID_PREFIX_PATTERN.match(prefix):
-                raise ValueError(
-                    f"prefix must match [A-Za-z0-9_-]+; got {prefix!r}"
-                )
+                raise ValueError(f"prefix must match [A-Za-z0-9_-]+; got {prefix!r}")
 
         now = datetime.now(timezone.utc)
         base = now.strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
@@ -718,10 +707,7 @@ class Atlas:
         )
 
         if not store_path.exists():
-            raise FileNotFoundError(
-                f"Result store not found: {store_path}. "
-                f"Run persist() first."
-            )
+            raise FileNotFoundError(f"Result store not found: {store_path}. Run persist() first.")
 
         return open_zarr_dataset(store_path)
 
@@ -758,10 +744,7 @@ class Atlas:
             metric_name=metric_name,
         )
         if not src_store.exists():
-            raise FileNotFoundError(
-                f"Result store not found: {src_store}. "
-                f"Run persist() first."
-            )
+            raise FileNotFoundError(f"Result store not found: {src_store}. Run persist() first.")
 
         # Open source store
         ds = open_zarr_dataset(src_store)
@@ -937,6 +920,75 @@ class Atlas:
 
         return deleted
 
+    # -------------------------------------------------------------------------
+    # Consolidated Analysis Export API (PR7)
+    # -------------------------------------------------------------------------
+
+    def export_analysis_dataset_zarr(
+        self,
+        path,
+        *,
+        domain: str = "both",
+        include_only=None,
+        prefix: bool = True,
+        exclude_template: bool = True,
+        compute: bool = True,
+    ):
+        """Export consolidated analysis dataset to a Zarr store.
+
+        Creates a schema-versioned Zarr store with provenance tracking.
+        The export includes variables from wind and/or landscape domains
+        with optional domain prefixing for collision avoidance.
+
+        :param path: Output path for the Zarr store. Must end with '.zarr'.
+        :param domain: Which domain(s) to include: ``"wind"``, ``"landscape"``,
+            or ``"both"`` (default).
+        :param include_only: Optional list of variables to export. For
+            ``domain="both"`` with ``prefix=True``, use prefixed names
+            (e.g., ``"wind__capacity_factors"``, ``"landscape__valid_mask"``).
+        :param prefix: When ``domain="both"``, prefix variables with
+            ``"wind__"`` / ``"landscape__"`` to avoid collisions.
+            Ignored for single-domain exports. Default ``True``.
+        :param exclude_template: If ``True`` (default), exclude template
+            variables from the export.
+        :param compute: If ``True`` (default), compute dask arrays before
+            writing. If ``False``, write lazily.
+
+        :returns: Path to the created Zarr store.
+        :rtype: pathlib.Path
+
+        :raises ValueError: If ``path`` doesn't end with '.zarr', if stores
+            are not ready, or if variable selection fails.
+        :raises FileExistsError: If the export store already exists.
+
+        Example::
+
+            # Export both domains with prefixing
+            atlas.export_analysis_dataset_zarr(
+                "output/analysis_export.zarr",
+                domain="both",
+                prefix=True,
+            )
+
+            # Export only wind domain, specific variables
+            atlas.export_analysis_dataset_zarr(
+                "output/wind_export.zarr",
+                domain="wind",
+                include_only=["capacity_factors", "mean_wind_speed"],
+            )
+        """
+        from cleo.exports import export_analysis_dataset_zarr
+
+        return export_analysis_dataset_zarr(
+            self,
+            path,
+            domain=domain,
+            include_only=include_only,
+            prefix=prefix,
+            exclude_template=exclude_template,
+            compute=compute,
+        )
+
     @property
     def path(self):
         """Atlas workspace root path.
@@ -1045,14 +1097,10 @@ class Atlas:
         :raises ValueError: If hours_per_year is not finite or <= 0.
         """
         if not isinstance(hours_per_year, (int, float)):
-            raise TypeError(
-                f"hours_per_year must be numeric, got {type(hours_per_year).__name__}"
-            )
+            raise TypeError(f"hours_per_year must be numeric, got {type(hours_per_year).__name__}")
         hours_per_year = float(hours_per_year)
         if not (hours_per_year > 0 and math.isfinite(hours_per_year)):
-            raise ValueError(
-                f"hours_per_year must be finite and > 0, got {hours_per_year}"
-            )
+            raise ValueError(f"hours_per_year must be finite and > 0, got {hours_per_year}")
         self._timebase_configured = {"hours_per_year": hours_per_year}
 
     @property
@@ -1077,6 +1125,7 @@ class Atlas:
         om_fixed_eur_per_kw_a: float | None = None,
         om_variable_eur_per_kwh: float | None = None,
         bos_cost_share: float | None = None,
+        grid_connect_cost_eur_per_kw: float | None = None,
     ) -> None:
         """Configure baseline economics assumptions for LCOE-family metrics.
 
@@ -1093,6 +1142,10 @@ class Atlas:
             Must be non-negative.
         :param bos_cost_share: Balance-of-system CAPEX share (location-dependent).
             Must be in range [0, 1]. Default when not configured is 0.0.
+        :param grid_connect_cost_eur_per_kw: Grid connection cost rate in EUR/kW.
+            Must be non-negative. Default when not configured is 50.0 (based on
+            Austrian regulation §54 ElWOG). Set to 0.0 to exclude grid connection
+            costs (e.g., for paper qLCOE without grid costs).
 
         :raises TypeError: If any parameter has wrong type.
         :raises ValueError: If any parameter is out of valid range.
@@ -1104,43 +1157,32 @@ class Atlas:
             ...     om_fixed_eur_per_kw_a=20.0,
             ...     om_variable_eur_per_kwh=0.008,
             ...     bos_cost_share=0.30,
+            ...     grid_connect_cost_eur_per_kw=50.0,
             ... )
         """
         config: dict[str, float | int] = {}
 
         if discount_rate is not None:
             if not isinstance(discount_rate, (int, float)):
-                raise TypeError(
-                    f"discount_rate must be numeric, got {type(discount_rate).__name__}"
-                )
+                raise TypeError(f"discount_rate must be numeric, got {type(discount_rate).__name__}")
             discount_rate = float(discount_rate)
             if not (0.0 <= discount_rate < 1.0 and math.isfinite(discount_rate)):
-                raise ValueError(
-                    f"discount_rate must be finite and in range [0, 1), got {discount_rate}"
-                )
+                raise ValueError(f"discount_rate must be finite and in range [0, 1), got {discount_rate}")
             config["discount_rate"] = discount_rate
 
         if lifetime_a is not None:
             if not isinstance(lifetime_a, int):
-                raise TypeError(
-                    f"lifetime_a must be int, got {type(lifetime_a).__name__}"
-                )
+                raise TypeError(f"lifetime_a must be int, got {type(lifetime_a).__name__}")
             if lifetime_a <= 0:
-                raise ValueError(
-                    f"lifetime_a must be positive, got {lifetime_a}"
-                )
+                raise ValueError(f"lifetime_a must be positive, got {lifetime_a}")
             config["lifetime_a"] = lifetime_a
 
         if om_fixed_eur_per_kw_a is not None:
             if not isinstance(om_fixed_eur_per_kw_a, (int, float)):
-                raise TypeError(
-                    f"om_fixed_eur_per_kw_a must be numeric, got {type(om_fixed_eur_per_kw_a).__name__}"
-                )
+                raise TypeError(f"om_fixed_eur_per_kw_a must be numeric, got {type(om_fixed_eur_per_kw_a).__name__}")
             om_fixed_eur_per_kw_a = float(om_fixed_eur_per_kw_a)
             if not (om_fixed_eur_per_kw_a >= 0.0 and math.isfinite(om_fixed_eur_per_kw_a)):
-                raise ValueError(
-                    f"om_fixed_eur_per_kw_a must be finite and >= 0, got {om_fixed_eur_per_kw_a}"
-                )
+                raise ValueError(f"om_fixed_eur_per_kw_a must be finite and >= 0, got {om_fixed_eur_per_kw_a}")
             config["om_fixed_eur_per_kw_a"] = om_fixed_eur_per_kw_a
 
         if om_variable_eur_per_kwh is not None:
@@ -1150,22 +1192,28 @@ class Atlas:
                 )
             om_variable_eur_per_kwh = float(om_variable_eur_per_kwh)
             if not (om_variable_eur_per_kwh >= 0.0 and math.isfinite(om_variable_eur_per_kwh)):
-                raise ValueError(
-                    f"om_variable_eur_per_kwh must be finite and >= 0, got {om_variable_eur_per_kwh}"
-                )
+                raise ValueError(f"om_variable_eur_per_kwh must be finite and >= 0, got {om_variable_eur_per_kwh}")
             config["om_variable_eur_per_kwh"] = om_variable_eur_per_kwh
 
         if bos_cost_share is not None:
             if not isinstance(bos_cost_share, (int, float)):
-                raise TypeError(
-                    f"bos_cost_share must be numeric, got {type(bos_cost_share).__name__}"
-                )
+                raise TypeError(f"bos_cost_share must be numeric, got {type(bos_cost_share).__name__}")
             bos_cost_share = float(bos_cost_share)
             if not (0.0 <= bos_cost_share <= 1.0 and math.isfinite(bos_cost_share)):
-                raise ValueError(
-                    f"bos_cost_share must be finite and in range [0, 1], got {bos_cost_share}"
-                )
+                raise ValueError(f"bos_cost_share must be finite and in range [0, 1], got {bos_cost_share}")
             config["bos_cost_share"] = bos_cost_share
+
+        if grid_connect_cost_eur_per_kw is not None:
+            if not isinstance(grid_connect_cost_eur_per_kw, (int, float)):
+                raise TypeError(
+                    f"grid_connect_cost_eur_per_kw must be numeric, got {type(grid_connect_cost_eur_per_kw).__name__}"
+                )
+            grid_connect_cost_eur_per_kw = float(grid_connect_cost_eur_per_kw)
+            if not (grid_connect_cost_eur_per_kw >= 0.0 and math.isfinite(grid_connect_cost_eur_per_kw)):
+                raise ValueError(
+                    f"grid_connect_cost_eur_per_kw must be finite and >= 0, got {grid_connect_cost_eur_per_kw}"
+                )
+            config["grid_connect_cost_eur_per_kw"] = grid_connect_cost_eur_per_kw
 
         if config:
             if self._economics_configured is None:
@@ -1190,6 +1238,7 @@ class Atlas:
         # Start with defaults
         effective: dict[str, float | int] = {
             "bos_cost_share": 0.0,  # Default: all CAPEX is location-independent
+            "grid_connect_cost_eur_per_kw": 50.0,  # Default: 50 EUR/kW (Austrian §54 ElWOG)
         }
 
         # Apply configured baseline
@@ -1218,10 +1267,7 @@ class Atlas:
                 "Reinstall from a proper wheel/sdist, or use the conda environment.yaml install."
             )
 
-        packaged = [
-            p for p in pkg_root.iterdir()
-            if p.is_file() and p.name.lower().endswith(".yml")
-        ]
+        packaged = [p for p in pkg_root.iterdir() if p.is_file() and p.name.lower().endswith(".yml")]
         if not packaged:
             raise FileNotFoundError(
                 "Cleo packaged resources directory exists but contains no *.yml files. "
@@ -1239,9 +1285,7 @@ class Atlas:
                 shutil.copy(src_path, dest)
             copied += 1
 
-        logger.info(
-            f"Resource files ensured in {dest_dir} (copied={copied}, skipped_existing={skipped})."
-        )
+        logger.info(f"Resource files ensured in {dest_dir} (copied={copied}, skipped_existing={skipped}).")
 
     def _setup_logging(self, console_level: str = "INFO", file_level: str = "DEBUG") -> None:
         """Configure the ``cleo`` logger namespace without mutating root logger."""
@@ -1328,22 +1372,15 @@ class Atlas:
         valid_names = set(feasible_regions[name_col].astype(str).to_numpy())
         valid_ids = set(feasible_regions[id_col].astype(str).to_numpy()) if id_col else set()
 
-        invalid_regions = [
-            r for r in region_list
-            if (r not in valid_names) and (r not in valid_ids)
-        ]
+        invalid_regions = [r for r in region_list if (r not in valid_names) and (r not in valid_ids)]
         if invalid_regions:
             hint = "NAME_LATN" if id_col is None else "NAME_LATN or NUTS_ID"
-            raise ValueError(
-                f"{', '.join(invalid_regions)} are not valid regions in {self.country} "
-                f"(expected {hint})."
-            )
+            raise ValueError(f"{', '.join(invalid_regions)} are not valid regions in {self.country} (expected {hint}).")
 
         if id_col:
             selected_shapes = feasible_regions[
-                feasible_regions[name_col].isin(region_list)
-                | feasible_regions[id_col].isin(region_list)
-                ]
+                feasible_regions[name_col].isin(region_list) | feasible_regions[id_col].isin(region_list)
+            ]
         else:
             selected_shapes = feasible_regions[feasible_regions[name_col].isin(region_list)]
 

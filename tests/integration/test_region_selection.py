@@ -11,7 +11,6 @@ Offline-only: uses local synthetic fixtures with no network calls.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import numpy as np
@@ -45,9 +44,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -357,12 +354,8 @@ class TestRegionStores:
         region_x_size = region_wind.sizes["x"]
         region_wind.close()
 
-        assert region_y_size < base_y_size, (
-            f"Region y ({region_y_size}) should be smaller than base ({base_y_size})"
-        )
-        assert region_x_size < base_x_size, (
-            f"Region x ({region_x_size}) should be smaller than base ({base_x_size})"
-        )
+        assert region_y_size < base_y_size, f"Region y ({region_y_size}) should be smaller than base ({base_y_size})"
+        assert region_x_size < base_x_size, f"Region x ({region_x_size}) should be smaller than base ({base_x_size})"
 
     def test_region_data_routes_to_region_store(self, region_atlas: Atlas) -> None:
         """atlas.wind.data routes to region store when region selected."""
@@ -463,16 +456,12 @@ class TestRegionMaterialization:
         # Verify it was written to region store, NOT base store
         region_wind_path = atlas.path / "regions" / atlas._region_id / "wind.zarr"
         region_wind = xr.open_zarr(region_wind_path, consolidated=False)
-        assert "capacity_factors" in region_wind, (
-            "capacity_factors should be in region wind store"
-        )
+        assert "capacity_factors" in region_wind, "capacity_factors should be in region wind store"
         region_wind.close()
 
         # Base store should NOT have capacity_factors
         base_wind = xr.open_zarr(atlas.wind_store_path, consolidated=False)
-        assert "capacity_factors" not in base_wind, (
-            "capacity_factors should NOT be in base wind store"
-        )
+        assert "capacity_factors" not in base_wind, "capacity_factors should NOT be in base wind store"
         base_wind.close()
 
     def test_selection_persists_after_materialize(self, region_atlas: Atlas) -> None:

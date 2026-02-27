@@ -9,7 +9,7 @@ Note: These tests use physical units that pint can handle. Currency units
 import numpy as np
 import pytest
 import xarray as xr
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 from cleo.domains import WindDomain, LandscapeDomain
 
@@ -164,9 +164,7 @@ class TestWindDomainConvertUnits:
 class TestLandscapeDomainConvertUnits:
     """Tests for LandscapeDomain.convert_units()."""
 
-    def _make_mock_landscape_domain(
-        self, data_vars: dict[str, xr.DataArray]
-    ) -> LandscapeDomain:
+    def _make_mock_landscape_domain(self, data_vars: dict[str, xr.DataArray]) -> LandscapeDomain:
         """Create a LandscapeDomain with mock atlas and data."""
         mock_atlas = MagicMock()
 

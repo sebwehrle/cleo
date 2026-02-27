@@ -67,14 +67,16 @@ def materialize_wind(unifier, atlas) -> None:
     rho_source_ids = []
 
     for sid, path in req_files:
-        sources.append({
-            "source_id": sid,
-            "name": path.name,
-            "kind": "raster",
-            "path": str(path),
-            "params_json": json.dumps({"layer": sid.split(":")[2], "height": int(sid.split(":")[-1])}),
-            "fingerprint": fingerprint_file(path, unifier.fingerprint_method),
-        })
+        sources.append(
+            {
+                "source_id": sid,
+                "name": path.name,
+                "kind": "raster",
+                "path": str(path),
+                "params_json": json.dumps({"layer": sid.split(":")[2], "height": int(sid.split(":")[-1])}),
+                "fingerprint": fingerprint_file(path, unifier.fingerprint_method),
+            }
+        )
 
         da = _open_gwa_raster(
             atlas,
@@ -103,14 +105,16 @@ def materialize_wind(unifier, atlas) -> None:
         ("gwa:bundle:rho", rho_source_ids),
     ]:
         bundle_fingerprint = hashlib.sha256(json.dumps(sorted(source_ids)).encode()).hexdigest()[:16]
-        sources.append({
-            "source_id": bundle_name,
-            "name": bundle_name.split(":")[-1],
-            "kind": "bundle",
-            "path": "",
-            "params_json": json.dumps({"source_ids": sorted(source_ids)}),
-            "fingerprint": bundle_fingerprint,
-        })
+        sources.append(
+            {
+                "source_id": bundle_name,
+                "name": bundle_name.split(":")[-1],
+                "kind": "bundle",
+                "path": "",
+                "params_json": json.dumps({"source_ids": sorted(source_ids)}),
+                "fingerprint": bundle_fingerprint,
+            }
+        )
 
     def stack_by_height(arrays_list):
         sorted_arrays = sorted(arrays_list, key=lambda x: x[0])
@@ -128,16 +132,16 @@ def materialize_wind(unifier, atlas) -> None:
     rho = stack_by_height(rho_arrays)
     rho.name = "rho"
 
-    ds_wind = xr.Dataset({
-        "weibull_A": weibull_A,
-        "weibull_k": weibull_k,
-        "rho": rho,
-        "template": ref_da,
-    })
-
-    ds_tech, tech_sources, tech_variables = _ingest_turbines_and_costs(
-        atlas, unifier.fingerprint_method
+    ds_wind = xr.Dataset(
+        {
+            "weibull_A": weibull_A,
+            "weibull_k": weibull_k,
+            "rho": rho,
+            "template": ref_da,
+        }
     )
+
+    ds_tech, tech_sources, tech_variables = _ingest_turbines_and_costs(atlas, unifier.fingerprint_method)
     sources.extend(tech_sources)
 
     ds = xr.merge([ds_wind, ds_tech])
@@ -150,21 +154,25 @@ def materialize_wind(unifier, atlas) -> None:
         ("weibull_k", "gwa:bundle:weibull_k"),
         ("rho", "gwa:bundle:rho"),
     ]:
-        variables.append({
-            "variable_name": var_name,
-            "source_id": bundle_source,
+        variables.append(
+            {
+                "variable_name": var_name,
+                "source_id": bundle_source,
+                "resampling_method": "bilinear",
+                "nodata_policy": "nan",
+                "dtype": str(ds[var_name].dtype),
+            }
+        )
+
+    variables.append(
+        {
+            "variable_name": "template",
+            "source_id": f"gwa:file:weibull_A:{ref_height}",
             "resampling_method": "bilinear",
             "nodata_policy": "nan",
-            "dtype": str(ds[var_name].dtype),
-        })
-
-    variables.append({
-        "variable_name": "template",
-        "source_id": f"gwa:file:weibull_A:{ref_height}",
-        "resampling_method": "bilinear",
-        "nodata_policy": "nan",
-        "dtype": str(ds["template"].dtype),
-    })
+            "dtype": str(ds["template"].dtype),
+        }
+    )
 
     variables.extend(tech_variables)
 
@@ -185,8 +193,12 @@ def materialize_wind(unifier, atlas) -> None:
 
     transform = ref_da.rio.transform()
     transform_tuple = (
-        transform.a, transform.b, transform.c,
-        transform.d, transform.e, transform.f,
+        transform.a,
+        transform.b,
+        transform.c,
+        transform.d,
+        transform.e,
+        transform.f,
     )
     crs_wkt = str(ref_da.rio.crs.to_wkt()) if ref_da.rio.crs else ""
     shape = (ref_da.sizes["y"], ref_da.sizes["x"])
@@ -204,14 +216,17 @@ def materialize_wind(unifier, atlas) -> None:
     for s in sources:
         input_items.append((s["source_id"], s["fingerprint"]))
 
-    params_str = json.dumps({
-        "country": atlas.country,
-        "target_crs": str(target_crs),
-        "region": atlas.region,
-        "chunk_policy": chunk_policy,
-        "mask_policy": mask_policy,
-        "fingerprint_method": unifier.fingerprint_method,
-    }, sort_keys=True)
+    params_str = json.dumps(
+        {
+            "country": atlas.country,
+            "target_crs": str(target_crs),
+            "region": atlas.region,
+            "chunk_policy": chunk_policy,
+            "mask_policy": mask_policy,
+            "fingerprint_method": unifier.fingerprint_method,
+        },
+        sort_keys=True,
+    )
     params_fingerprint = hashlib.sha256(params_str.encode()).hexdigest()[:16]
     input_items.append(("unify:params", params_fingerprint))
 

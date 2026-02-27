@@ -26,6 +26,7 @@ __all__ = [
 # Assertions
 # -----------------------------------------------------------------------------
 
+
 def assert_close(
     actual: Any,
     expected: Any,
@@ -62,6 +63,7 @@ def _as_float_array(x: Any) -> np.ndarray:
 # -----------------------------------------------------------------------------
 # Weibull distribution: analytic oracles
 # -----------------------------------------------------------------------------
+
 
 def weibull_cdf(u: Any, k: float, a: float) -> np.ndarray:
     r"""
@@ -111,6 +113,7 @@ def weibull_pdf(u: Any, k: float, a: float) -> np.ndarray:
 # -----------------------------------------------------------------------------
 # Air-density correction helpers and CF oracles
 # -----------------------------------------------------------------------------
+
 
 def density_speed_scale(rho: Any, *, rho0: float = 1.225) -> np.ndarray:
     r"""

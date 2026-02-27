@@ -416,9 +416,7 @@ class TestZarrV3Compatibility:
             )
 
         # Verify turbine metadata is in JSON attrs, not as arrays
-        assert "cleo_turbines_json" in ds.attrs, (
-            "Turbine metadata must be stored in cleo_turbines_json attr"
-        )
+        assert "cleo_turbines_json" in ds.attrs, "Turbine metadata must be stored in cleo_turbines_json attr"
 
         # Verify turbine coordinate is integer-indexed
         if "turbine" in ds.coords:

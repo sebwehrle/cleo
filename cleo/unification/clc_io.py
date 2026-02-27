@@ -16,8 +16,7 @@ def load_clc_codes(path: Path) -> dict[int, str]:
     resource = Path(path) / "resources" / "clc_codes.yml"
     if not resource.exists():
         raise FileNotFoundError(
-            f"Missing CLC mapping resource: {resource}. "
-            "Run atlas.deploy_resources() to populate resources."
+            f"Missing CLC mapping resource: {resource}. Run atlas.deploy_resources() to populate resources."
         )
     with open(resource, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
@@ -77,4 +76,3 @@ def prepare_clc_to_wind_grid(
     clc = clc.rio.write_nodata(np.nan)
     clc.rio.to_raster(prepared_path)
     return prepared_path
-

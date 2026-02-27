@@ -65,9 +65,7 @@ class TestCrsGuardrails:
 
                 for pattern in self.CRS_COMPARISON_PATTERNS:
                     if re.search(pattern, stripped):
-                        violations.append(
-                            f"{path.name}:{lineno}: direct CRS comparison: {line.strip()}"
-                        )
+                        violations.append(f"{path.name}:{lineno}: direct CRS comparison: {line.strip()}")
 
         if violations:
             msg = (

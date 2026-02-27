@@ -3,6 +3,16 @@
 CLEO is an `xarray`-based package for wind resource assessment with Global Wind Atlas (GWA) inputs.
 It materializes canonical Zarr stores, computes wind/energy metrics, and persists/exports results.
 
+CLEO prepares analysis-ready wind/landscape rasters and tabular exports; econometric regression is out of scope.
+
+## Supported Environment
+
+- **Python**: 3.10+
+- **OS**: Linux (primary), macOS (secondary)
+- **System deps**: GDAL/PROJ (via rasterio/pyproj), HDF5/NetCDF
+
+For detailed environment requirements and dependency policies, see `CONTRACT_UNIFIED_ATLAS.md` Section C.
+
 ## Installation
 
 ```bash

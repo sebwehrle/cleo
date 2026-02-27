@@ -68,9 +68,9 @@ def _write_base_stores(root: Path) -> None:
 @pytest.mark.parametrize(
     ("bounds", "expected_shape"),
     [
-        ((9.0, 9.0, 11.0, 31.0), (3, 1)),   # x-axis single cell
+        ((9.0, 9.0, 11.0, 31.0), (3, 1)),  # x-axis single cell
         ((-1.0, 19.0, 21.0, 21.0), (1, 3)),  # y-axis single cell
-        ((9.0, 19.0, 11.0, 21.0), (1, 1)),   # both axes single cell
+        ((9.0, 19.0, 11.0, 21.0), (1, 1)),  # both axes single cell
     ],
 )
 def test_region_materialization_handles_single_cell_axes(

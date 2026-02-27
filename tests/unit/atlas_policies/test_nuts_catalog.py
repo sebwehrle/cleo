@@ -11,9 +11,7 @@ from cleo.atlas_policies.nuts_catalog import load_nuts_region_catalog
 
 
 def test_load_nuts_region_catalog_returns_cached_rows_copy(tmp_path: Path) -> None:
-    cache = (
-        {"name": "Wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2},
-    )
+    cache = ({"name": "Wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2},)
 
     rows, returned_cache = load_nuts_region_catalog(
         cached_rows=cache,

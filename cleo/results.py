@@ -11,10 +11,12 @@ import numpy as np
 import xarray as xr
 
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from cleo.domains import WindDomain
 
 from cleo.dask_utils import compute as dask_compute
+from cleo.store import single_writer_lock
 from cleo.unification.store_io import turbine_ids_from_json
 
 logger = logging.getLogger(__name__)
@@ -190,9 +192,7 @@ def read_result_store_datetime(store_path: Path) -> datetime.datetime:
         g = zarr.open_group(store_path, mode="r")
         created_at = g.attrs.get("created_at")
         if created_at:
-            store_dt = datetime.datetime.fromisoformat(
-                str(created_at).replace("Z", "+00:00")
-            )
+            store_dt = datetime.datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
     except (OSError, ValueError, TypeError, KeyError):
         logger.debug(
             "Falling back to mtime for result-store age check.",
@@ -247,10 +247,7 @@ def persist_result(
         metric_name=metric_name,
     )
     if store_path.exists():
-        raise FileExistsError(
-            f"Result store already exists: {store_path}. "
-            f"Use a different run_id or metric_name."
-        )
+        raise FileExistsError(f"Result store already exists: {store_path}. Use a different run_id or metric_name.")
 
     if isinstance(obj, xr.DataArray):
         da = obj
@@ -279,13 +276,9 @@ def persist_result(
         g.attrs["store_state"] = "complete"
         g.attrs["run_id"] = run_id
         g.attrs["metric_name"] = metric_name
-        g.attrs["created_at"] = datetime.datetime.now(
-            datetime.timezone.utc
-        ).isoformat()
+        g.attrs["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         if params is not None:
-            g.attrs["params_json"] = json.dumps(
-                params, sort_keys=True, separators=(",", ":")
-            )
+            g.attrs["params_json"] = json.dumps(params, sort_keys=True, separators=(",", ":"))
 
         try:
             if getattr(atlas, "_canonical_ready", False):
@@ -315,9 +308,7 @@ def normalize_metric_for_active_wind_store(
     if "turbine" in out.dims:
         meta_json = existing_ds.attrs.get("cleo_turbines_json")
         if not meta_json:
-            raise RuntimeError(
-                "Wind store missing cleo_turbines_json attr; cannot align turbine coordinates."
-            )
+            raise RuntimeError("Wind store missing cleo_turbines_json attr; cannot align turbine coordinates.")
         turbine_ids = turbine_ids_from_json(meta_json)
         turbine_id_to_idx = {tid: i for i, tid in enumerate(turbine_ids)}
         full_turbine_indices = list(range(len(turbine_ids)))
@@ -331,9 +322,7 @@ def normalize_metric_for_active_wind_store(
             try:
                 computed_indices = [turbine_id_to_idx[tid] for tid in computed_ids]
             except KeyError as exc:
-                raise ValueError(
-                    f"Computed metric includes unknown turbine id {exc.args[0]!r}."
-                ) from exc
+                raise ValueError(f"Computed metric includes unknown turbine id {exc.args[0]!r}.") from exc
         else:
             computed_indices = out.coords["turbine"].values.tolist()
 
@@ -343,9 +332,7 @@ def normalize_metric_for_active_wind_store(
 
     existing_dims = set(existing_ds.sizes.keys())
     coords_to_drop = [
-        coord_name
-        for coord_name in out.coords
-        if coord_name in existing_dims and coord_name not in out.dims
+        coord_name for coord_name in out.coords if coord_name in existing_dims and coord_name not in out.dims
     ]
     if coords_to_drop:
         out = out.drop_vars(coords_to_drop)
@@ -381,10 +368,7 @@ class DomainResult:
             mode = self._data.attrs.get("cleo:cf_mode")
 
         target = f'atlas.wind.data["{self._metric}"]'
-        header = (
-            f"DomainResult(metric={self._metric!r}, state={state!r}, "
-            f"target={target!r}"
-        )
+        header = f"DomainResult(metric={self._metric!r}, state={state!r}, target={target!r}"
         if mode is not None:
             header += f", mode={mode!r}"
         header += ")"
@@ -444,10 +428,7 @@ class DomainResult:
 
         if self._metric in existing_ds.data_vars and not overwrite:
             existing_ds.close()
-            raise ValueError(
-                f"Variable {self._metric!r} already exists in wind.zarr; "
-                f"use overwrite=True to replace."
-            )
+            raise ValueError(f"Variable {self._metric!r} already exists in wind.zarr; use overwrite=True to replace.")
 
         # Mode-guard for capacity_factors: prevent silent mode flips
         if self._metric == "capacity_factors" and self._metric in existing_ds.data_vars:
@@ -479,25 +460,27 @@ class DomainResult:
         var_exists = self._metric in existing_ds.data_vars
         existing_ds.close()
 
-        # If overwriting, delete the existing variable first to ensure full replacement
-        # (mode="a" with zarr can lead to partial overwrites if shape/coords differ)
-        if var_exists and overwrite:
+        # Acquire single-writer lock for all write operations
+        with single_writer_lock(store_path):
+            # If overwriting, delete the existing variable first to ensure full replacement
+            # (mode="a" with zarr can lead to partial overwrites if shape/coords differ)
+            if var_exists and overwrite:
+                root = zarr.open_group(store_path, mode="a")
+                if self._metric in root:
+                    del root[self._metric]
+
+            # Write metric to wind.zarr (append mode to preserve existing vars)
+            ds_to_write = xr.Dataset({self._metric: da})
+            ds_to_write.to_zarr(
+                store_path,
+                mode="a",  # Append to existing store
+                consolidated=False,
+            )
+
+            # Restore preserved attributes (to_zarr may overwrite them)
             root = zarr.open_group(store_path, mode="a")
-            if self._metric in root:
-                del root[self._metric]
-
-        # Write metric to wind.zarr (append mode to preserve existing vars)
-        ds_to_write = xr.Dataset({self._metric: da})
-        ds_to_write.to_zarr(
-            store_path,
-            mode="a",  # Append to existing store
-            consolidated=False,
-        )
-
-        # Restore preserved attributes (to_zarr may overwrite them)
-        root = zarr.open_group(store_path, mode="a")
-        for key, val in existing_attrs.items():
-            root.attrs[key] = val
+            for key, val in existing_attrs.items():
+                root.attrs[key] = val
 
         overlays = getattr(self._domain, "_computed_overlays", None)
         if isinstance(overlays, dict):

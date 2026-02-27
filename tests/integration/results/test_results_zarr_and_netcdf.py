@@ -111,7 +111,6 @@ class MockAtlas:
         params: dict | None = None,
     ) -> Path:
         """Persist a result to Zarr store."""
-        import json
         from cleo.store import atomic_dir
 
         store_path = Path(self.results_root) / run_id / f"{metric_name}.zarr"
@@ -139,16 +138,14 @@ class MockAtlas:
 
             g.attrs["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             if params is not None:
-                g.attrs["params_json"] = json.dumps(
-                    params, sort_keys=True, separators=(",", ":")
-                )
+                g.attrs["params_json"] = json.dumps(params, sort_keys=True, separators=(",", ":"))
 
             try:
                 if self._canonical_ready:
-                    w = self.wind_zarr
-                    l = self.landscape_zarr
-                    g.attrs["wind_grid_id"] = w.attrs.get("grid_id", "")
-                    g.attrs["landscape_grid_id"] = l.attrs.get("grid_id", "")
+                    wind = self.wind_zarr
+                    land = self.landscape_zarr
+                    g.attrs["wind_grid_id"] = wind.attrs.get("grid_id", "")
+                    g.attrs["landscape_grid_id"] = land.attrs.get("grid_id", "")
             except Exception:
                 pass
 
@@ -224,9 +221,7 @@ class MockAtlas:
                         g = zarr.open_group(store, mode="r")
                         created_at = g.attrs.get("created_at")
                         if created_at:
-                            store_dt = datetime.datetime.fromisoformat(
-                                created_at.replace("Z", "+00:00")
-                            )
+                            store_dt = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     except Exception:
                         pass
 
@@ -263,9 +258,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -290,9 +283,7 @@ def _create_elevation_raster(
 ) -> None:
     """Create a legacy elevation GeoTIFF."""
     data = np.random.rand(*shape).astype(np.float32) * 3000
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",

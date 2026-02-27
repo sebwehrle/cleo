@@ -34,9 +34,7 @@ def enforce_query_height_bounds(
     q_out = q.copy()
     if np.min(q_out) < min_supported_m:
         if min_policy == "error":
-            raise ValueError(
-                f"query height below supported minimum {min_supported_m} m: min={float(np.min(q_out))}"
-            )
+            raise ValueError(f"query height below supported minimum {min_supported_m} m: min={float(np.min(q_out))}")
         if min_policy == "clamp_to_10":
             q_out = np.maximum(q_out, min_supported_m)
         else:
@@ -44,9 +42,7 @@ def enforce_query_height_bounds(
 
     if np.max(q_out) > max_supported_m:
         if max_policy == "error":
-            raise ValueError(
-                f"query height above supported maximum {max_supported_m} m: max={float(np.max(q_out))}"
-            )
+            raise ValueError(f"query height above supported maximum {max_supported_m} m: max={float(np.max(q_out))}")
         raise ValueError(f"Unsupported max_policy: {max_policy!r}")
 
     return q_out
@@ -152,7 +148,9 @@ def interp_log_linear_ln_z(
         )
 
     lnz = np.log(z)
-    lnq = np.log(q_stack).assign_coords(ln_height=("height", lnz)).swap_dims({"height": "ln_height"}).sortby("ln_height")
+    lnq = (
+        np.log(q_stack).assign_coords(ln_height=("height", lnz)).swap_dims({"height": "ln_height"}).sortby("ln_height")
+    )
 
     ln_target = xr.DataArray(np.log(qh), dims=("query_height",), coords={"query_height": qh})
     lnq_out = lnq.interp(ln_height=ln_target, method="linear")
@@ -284,7 +282,9 @@ def evaluate_density_at_heights(
     if float(np.max(qh)) <= z_top:
         return rho_interp
 
-    rho_top = interp_log_linear_ln_z(rho_stack, query_heights_m=np.array([z_top], dtype=np.float64)).squeeze("query_height")
+    rho_top = interp_log_linear_ln_z(rho_stack, query_heights_m=np.array([z_top], dtype=np.float64)).squeeze(
+        "query_height"
+    )
     if cfg["rho_extrap_above_200"] == "constant_at_200":
         rho_above = rho_top.expand_dims(query_height=q_coord)
     elif cfg["rho_extrap_above_200"] == "exp_scale_height":
@@ -345,13 +345,19 @@ def evaluate_weibull_at_heights(
 
     q_coord = xr.DataArray(qh, dims=("query_height",), coords={"query_height": qh})
     if float(np.max(qh)) > z_top:
-        mu_top = interp_log_linear_ln_z(mu_stack, query_heights_m=np.array([z_top], dtype=np.float64)).squeeze("query_height")
-        mu_above = mu_top.expand_dims(query_height=q_coord) * (q_coord / z_top) ** alpha.expand_dims(query_height=q_coord)
+        mu_top = interp_log_linear_ln_z(mu_stack, query_heights_m=np.array([z_top], dtype=np.float64)).squeeze(
+            "query_height"
+        )
+        mu_above = mu_top.expand_dims(query_height=q_coord) * (q_coord / z_top) ** alpha.expand_dims(
+            query_height=q_coord
+        )
         mu_q = xr.where(q_coord <= z_top, mu_q_in, mu_above).rename("mean_wind_speed")
     else:
         mu_q = mu_q_in.rename("mean_wind_speed")
 
-    k_top = interp_log_linear_ln_z(cv_stack, query_heights_m=np.array([z_top], dtype=np.float64)).squeeze("query_height")
+    k_top = interp_log_linear_ln_z(cv_stack, query_heights_m=np.array([z_top], dtype=np.float64)).squeeze(
+        "query_height"
+    )
     k_top = invert_cv_to_k(k_top, cv_lut=cv_lut, k_lut=k_lut)
     k_q = xr.where(q_coord <= z_top, k_q_in, k_top.expand_dims(query_height=q_coord)).rename("weibull_k")
 

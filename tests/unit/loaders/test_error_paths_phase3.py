@@ -66,4 +66,3 @@ def test_get_clc_codes_reverse_reads_reverse_mapping(tmp_path) -> None:
     self = SimpleNamespace(parent=parent)
     reverse = L.get_clc_codes(self, reverse=True)
     assert reverse["urban"] == 111
-

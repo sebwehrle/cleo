@@ -58,13 +58,13 @@ def test_weighted_alpha_regression_and_clamp() -> None:
     heights = np.array([50.0, 100.0, 150.0, 200.0], dtype=np.float64)
     alpha_true = 0.2
     c = 3.0
-    mu = c * (heights ** alpha_true)
+    mu = c * (heights**alpha_true)
     mu_stack = _stack_from_heights(mu[:, None, None], heights.tolist())
     alpha = weighted_top_shear_alpha(mu_stack, alpha_min=-0.05, alpha_max=0.35)
     assert np.isclose(float(alpha.values.item()), alpha_true, rtol=1e-5, atol=1e-5)
 
     # Strong shear should be clipped.
-    mu2 = c * (heights ** 0.8)
+    mu2 = c * (heights**0.8)
     mu2_stack = _stack_from_heights(mu2[:, None, None], heights.tolist())
     alpha2 = weighted_top_shear_alpha(mu2_stack, alpha_min=-0.05, alpha_max=0.35)
     assert np.isclose(float(alpha2.values.item()), 0.35, atol=1e-12)

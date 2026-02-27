@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -49,9 +49,7 @@ class TestMaybeChunkBandDimension:
         )
 
         # Chunk with band explicitly specified
-        result = dask_utils.maybe_chunk(
-            da, enabled=True, chunks={"band": 1, "y": 32, "x": 32}
-        )
+        result = dask_utils.maybe_chunk(da, enabled=True, chunks={"band": 1, "y": 32, "x": 32})
 
         assert dask_utils.is_dask_backed(result)
         band_idx = result.dims.index("band")
@@ -149,9 +147,7 @@ class TestChunksForRasterio:
 
     def test_dict_chunks_preserves_explicit_band(self):
         """chunks_for_rasterio preserves explicit band chunk."""
-        result = dask_utils.chunks_for_rasterio(
-            enabled=True, chunks={"band": 1, "y": 32, "x": 32}
-        )
+        result = dask_utils.chunks_for_rasterio(enabled=True, chunks={"band": 1, "y": 32, "x": 32})
         assert result == {"band": 1, "y": 32, "x": 32}
 
 
@@ -229,13 +225,9 @@ class TestRasterioLazyLoading:
             )
 
             # Test 2: Open WITH chunks - should be dask-backed (THIS IS THE FIX)
-            chunks = dask_utils.chunks_for_rasterio(
-                enabled=True, chunks={"y": 32, "x": 32}
-            )
+            chunks = dask_utils.chunks_for_rasterio(enabled=True, chunks={"y": 32, "x": 32})
             da_lazy = rxr.open_rasterio(f.name, chunks=chunks)
-            assert dask_utils.is_dask_backed(da_lazy), (
-                "Expected dask-backed when chunks passed to open_rasterio"
-            )
+            assert dask_utils.is_dask_backed(da_lazy), "Expected dask-backed when chunks passed to open_rasterio"
 
             # Verify chunk sizes
             band_idx = da_lazy.dims.index("band")

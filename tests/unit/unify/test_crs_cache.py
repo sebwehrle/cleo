@@ -6,7 +6,7 @@ Tests are offline-only: network calls are mocked.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -195,7 +195,8 @@ class TestOpenGwaRasterWithCrsCache:
 
         with patch("cleo.unification.gwa_io.fetch_gwa_crs") as mock_fetch:
             da = _open_gwa_raster(
-                atlas, raster_path,
+                atlas,
+                raster_path,
                 iso3="AUT",
                 target_crs="epsg:3035",
             )
@@ -223,7 +224,8 @@ class TestOpenGwaRasterWithCrsCache:
 
         with patch("cleo.unification.gwa_io.fetch_gwa_crs") as mock_fetch:
             da = _open_gwa_raster(
-                atlas, raster_path,
+                atlas,
+                raster_path,
                 iso3="AUT",
                 target_crs="epsg:3035",
             )
@@ -247,7 +249,8 @@ class TestOpenGwaRasterWithCrsCache:
 
         with patch("cleo.unification.gwa_io.fetch_gwa_crs", return_value=test_crs_str) as mock_fetch:
             da = _open_gwa_raster(
-                atlas, raster_path,
+                atlas,
+                raster_path,
                 iso3="AUT",
                 target_crs="epsg:3035",
             )

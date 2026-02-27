@@ -137,7 +137,8 @@ class TestLcoeDirectCallWithGroupedSpec:
         """_wind_metric_lcoe works with all economics parameters."""
         wind, land = minimal_wind_land
         result = _wind_metric_lcoe(
-            wind, land,
+            wind,
+            land,
             turbines=("T1",),
             mode="hub",
             air_density=False,
@@ -158,7 +159,8 @@ class TestLcoeDirectCallWithGroupedSpec:
         """LCOE economics_json contains bos_cost_share."""
         wind, land = minimal_wind_land
         result = _wind_metric_lcoe(
-            wind, land,
+            wind,
+            land,
             turbines=("T1",),
             mode="hub",
             bos_cost_share=0.3,

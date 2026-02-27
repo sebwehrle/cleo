@@ -46,10 +46,14 @@ def test_atlas_policies_have_no_direct_store_io_calls() -> None:
                 continue
             dotted = _dotted_name(node.func)
             attr = node.func.attr if isinstance(node.func, ast.Attribute) else ""
-            if (
-                dotted in {"zarr.open_group", "xr.open_zarr", "xarray.open_zarr", "shutil.rmtree"}
-                or attr in {"to_zarr", "iterdir", "glob", "rglob", "unlink", "rmdir"}
-            ):
+            if dotted in {"zarr.open_group", "xr.open_zarr", "xarray.open_zarr", "shutil.rmtree"} or attr in {
+                "to_zarr",
+                "iterdir",
+                "glob",
+                "rglob",
+                "unlink",
+                "rmdir",
+            }:
                 violations.append(f"{path}:{node.lineno} -> {dotted or attr}")
 
     assert violations == [], "atlas_policies performed direct store/filesystem I/O:\n" + "\n".join(violations)

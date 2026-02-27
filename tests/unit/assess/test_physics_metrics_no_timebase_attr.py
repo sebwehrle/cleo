@@ -9,7 +9,6 @@ This is important because:
 3. Only economics metrics (LCOE, optimal_energy, etc.) depend on timebase
 """
 
-import json
 import numpy as np
 import xarray as xr
 
@@ -38,9 +37,11 @@ def _make_minimal_inputs():
     )
 
     u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
-    power_curves = np.vstack([
-        np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0),
-    ]).astype(np.float64)
+    power_curves = np.vstack(
+        [
+            np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0),
+        ]
+    ).astype(np.float64)
 
     return {
         "A_stack": A_stack,
@@ -67,9 +68,7 @@ def test_capacity_factors_has_no_hours_per_year_attr():
         mode="hub",
     )
 
-    assert "cleo:hours_per_year" not in result.attrs, (
-        "capacity_factors must NOT carry timebase metadata"
-    )
+    assert "cleo:hours_per_year" not in result.attrs, "capacity_factors must NOT carry timebase metadata"
 
 
 def test_mean_wind_speed_has_no_hours_per_year_attr():
@@ -85,9 +84,7 @@ def test_mean_wind_speed_has_no_hours_per_year_attr():
 
     result = mean_wind_speed_from_weibull(A=A, k=k)
 
-    assert "cleo:hours_per_year" not in result.attrs, (
-        "mean_wind_speed must NOT carry timebase metadata"
-    )
+    assert "cleo:hours_per_year" not in result.attrs, "mean_wind_speed must NOT carry timebase metadata"
 
 
 def test_rews_mps_has_no_hours_per_year_attr():
@@ -104,9 +101,7 @@ def test_rews_mps_has_no_hours_per_year_attr():
         rews_n=5,
     )
 
-    assert "cleo:hours_per_year" not in result.attrs, (
-        "rews_mps must NOT carry timebase metadata"
-    )
+    assert "cleo:hours_per_year" not in result.attrs, "rews_mps must NOT carry timebase metadata"
 
 
 def test_physics_metrics_have_no_timebase_related_attrs():
@@ -124,11 +119,5 @@ def test_physics_metrics_have_no_timebase_related_attrs():
     )
 
     # Check no timebase-related attrs
-    timebase_attrs = [
-        key for key in cf.attrs.keys()
-        if "hours" in key.lower() or "timebase" in key.lower()
-    ]
-    assert not timebase_attrs, (
-        f"capacity_factors should have no timebase-related attrs, "
-        f"found: {timebase_attrs}"
-    )
+    timebase_attrs = [key for key in cf.attrs.keys() if "hours" in key.lower() or "timebase" in key.lower()]
+    assert not timebase_attrs, f"capacity_factors should have no timebase-related attrs, found: {timebase_attrs}"

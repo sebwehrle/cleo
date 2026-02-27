@@ -131,9 +131,7 @@ def read_region_store_meta(region_dir: Path) -> RegionMeta:
             g = zarr.open_group(store_path, mode="r")
             created_attr = g.attrs.get("created_at")
             if created_attr:
-                created_at = datetime.datetime.fromisoformat(
-                    str(created_attr).replace("Z", "+00:00")
-                )
+                created_at = datetime.datetime.fromisoformat(str(created_attr).replace("Z", "+00:00"))
                 break
         except (OSError, ValueError, TypeError, KeyError):
             logger.debug(

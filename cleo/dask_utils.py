@@ -44,10 +44,7 @@ def ensure_dask_available(*, feature: str) -> None:
     :raises ImportError: If ``dask`` is unavailable.
     """
     if not dask_is_available():
-        raise ImportError(
-            f"{feature} requires 'dask' but it is not installed. "
-            "Install dask in the active environment."
-        )
+        raise ImportError(f"{feature} requires 'dask' but it is not installed. Install dask in the active environment.")
 
 
 def normalize_chunks(chunks: ChunksSpec) -> dict[str, int]:
@@ -72,8 +69,7 @@ def normalize_compute_backend(backend: str) -> ComputeBackend:
     allowed = {"serial", "threads", "processes", "distributed"}
     if normalized not in allowed:
         raise ValueError(
-            f"Unknown compute_backend {backend!r}. "
-            "Expected one of: 'serial', 'threads', 'processes', 'distributed'."
+            f"Unknown compute_backend {backend!r}. Expected one of: 'serial', 'threads', 'processes', 'distributed'."
         )
     return normalized  # type: ignore[return-value]
 
@@ -94,9 +90,7 @@ def normalize_compute_workers(workers: int | None, *, backend: ComputeBackend) -
             "configure worker count on the active dask.distributed Client."
         )
     if backend_n == "serial" and workers_n != 1:
-        raise ValueError(
-            "compute_workers must be None or 1 when compute_backend='serial'."
-        )
+        raise ValueError("compute_workers must be None or 1 when compute_backend='serial'.")
     return workers_n
 
 
@@ -200,10 +194,7 @@ def maybe_chunk(
         try:
             return obj.chunk("auto")  # type: ignore[arg-type]
         except (ValueError, TypeError, AttributeError, RuntimeError) as e:
-            raise ValueError(
-                "Failed to chunk object with chunks='auto'. "
-                f"Available dims: {tuple(obj.dims)!r}"
-            ) from e
+            raise ValueError(f"Failed to chunk object with chunks='auto'. Available dims: {tuple(obj.dims)!r}") from e
 
     chunks_n = normalize_chunks(chunks)
 
@@ -214,10 +205,7 @@ def maybe_chunk(
     try:
         return obj.chunk(chunks_n)  # type: ignore[arg-type]
     except (ValueError, TypeError, AttributeError, RuntimeError) as e:
-        raise ValueError(
-            f"Failed to chunk object with chunks={chunks_n!r}. "
-            f"Available dims: {tuple(obj.dims)!r}"
-        ) from e
+        raise ValueError(f"Failed to chunk object with chunks={chunks_n!r}. Available dims: {tuple(obj.dims)!r}") from e
 
 
 def get_distributed_client_and_dashboard() -> tuple[Any, str | None]:
@@ -229,9 +217,7 @@ def get_distributed_client_and_dashboard() -> tuple[Any, str | None]:
     try:
         from dask.distributed import get_client
     except (ImportError, ModuleNotFoundError) as e:
-        raise RuntimeError(
-            "compute_backend='distributed' requires 'dask[distributed]' installed."
-        ) from e
+        raise RuntimeError("compute_backend='distributed' requires 'dask[distributed]' installed.") from e
 
     try:
         client = get_client()
@@ -282,15 +268,11 @@ def scheduler_context(*, backend: ComputeBackend, num_workers: ComputeWorkers = 
 
 
 @overload
-def compute(
-    obj: xr.DataArray, *, backend: ComputeBackend, num_workers: ComputeWorkers = None
-) -> xr.DataArray: ...
+def compute(obj: xr.DataArray, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.DataArray: ...
 
 
 @overload
-def compute(
-    obj: xr.Dataset, *, backend: ComputeBackend, num_workers: ComputeWorkers = None
-) -> xr.Dataset: ...
+def compute(obj: xr.Dataset, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.Dataset: ...
 
 
 def compute(
@@ -306,15 +288,11 @@ def compute(
 
 
 @overload
-def persist(
-    obj: xr.DataArray, *, backend: ComputeBackend, num_workers: ComputeWorkers = None
-) -> xr.DataArray: ...
+def persist(obj: xr.DataArray, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.DataArray: ...
 
 
 @overload
-def persist(
-    obj: xr.Dataset, *, backend: ComputeBackend, num_workers: ComputeWorkers = None
-) -> xr.Dataset: ...
+def persist(obj: xr.Dataset, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.Dataset: ...
 
 
 def persist(

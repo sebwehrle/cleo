@@ -108,7 +108,6 @@ def test_build_copdem_elevation_like(tmp_path):
 
 def test_build_copdem_elevation_like_empty_tiles():
     """Test that empty tile_paths raises ValueError."""
-    import pytest
     import xarray as xr
 
     # Create a dummy reference DataArray
@@ -117,7 +116,6 @@ def test_build_copdem_elevation_like_empty_tiles():
 
     with pytest.raises(ValueError, match="empty"):
         build_copdem_elevation_like(reference_da, [])
-
 
 
 def test_build_copdem_elevation_like_masks_nodata(tmp_path):
@@ -155,7 +153,6 @@ def test_build_copdem_elevation_like_masks_nodata(tmp_path):
 
     out = build_copdem_elevation_like(reference_da, [tile_path])
     assert np.isnan(out.values).any()
-
 
 
 def test_load_elevation_uses_air_density_when_reference_lacks_crs(monkeypatch, tmp_path):
@@ -235,7 +232,6 @@ def test_load_elevation_raises_when_no_crs_and_no_air_density(monkeypatch, tmp_p
     Test that load_elevation raises ValueError when reference_da lacks CRS
     and air-density file does not exist.
     """
-    import pytest
 
     iso3 = "AUT"
 
@@ -254,7 +250,6 @@ def test_load_elevation_raises_when_no_crs_and_no_air_density(monkeypatch, tmp_p
 
     assert "no CRS" in str(exc_info.value)
     assert "air-density" in str(exc_info.value)
-
 
 
 def test_load_elevation_uses_legacy_when_present(monkeypatch, tmp_path):
@@ -421,7 +416,6 @@ def test_load_elevation_uses_copdem_when_legacy_absent(monkeypatch, tmp_path):
     # Assert returned elevation matches mocked DataArray (value 1000)
     assert elevation.name == "elevation"
     assert np.allclose(elevation.values, 1000.0)
-
 
 
 def test_load_elevation_legacy_matches_reference_grid(tmp_path, monkeypatch):

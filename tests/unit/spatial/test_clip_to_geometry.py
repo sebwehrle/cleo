@@ -28,7 +28,6 @@ def test_clip_to_geometry_rejects_path_string():
         clip_to_geometry(dummy, "nonexistent.shp")
 
 
-
 def test_clip_to_geometry_repairs_invalid_geometry():
     # self-intersecting polygon (invalid)
     poly = Polygon([(0.2, 0.2), (0.8, 0.8), (0.8, 0.2), (0.2, 0.8), (0.2, 0.2)])
@@ -43,7 +42,6 @@ def test_clip_to_geometry_repairs_invalid_geometry():
     # Oracle: the function must not proceed with invalid geometry
     assert used.is_valid.all()
     assert "a" in clipped.data_vars
-
 
 
 def test_clip_to_geometry_repairs_invalid_geom_tiny_polygon_does_not_raise():
@@ -114,7 +112,6 @@ def test_rio_clip_robust_fallback_path(monkeypatch):
     - result is a DataArray
     """
     from rioxarray.exceptions import NoDataInBounds
-    from unittest.mock import MagicMock, call
 
     # Create a simple DataArray with rio accessor
     da = xr.DataArray(

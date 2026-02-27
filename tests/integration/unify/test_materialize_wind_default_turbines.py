@@ -72,9 +72,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -243,6 +241,7 @@ class TestMaterializeWindDefaultTurbines:
 
         # Verify turbine IDs match discovered turbines
         import json
+
         root = zarr.open_group(wind_path, mode="r")
         turbines_json = root.attrs.get("cleo_turbines_json", "[]")
         turbines_meta = json.loads(turbines_json)
@@ -271,6 +270,7 @@ class TestMaterializeWindDefaultTurbines:
 
         # Verify the specific turbine is present
         import json
+
         root = zarr.open_group(tmp_path / "wind.zarr", mode="r")
         turbines_json = root.attrs.get("cleo_turbines_json", "[]")
         turbines_meta = json.loads(turbines_json)
@@ -316,6 +316,7 @@ class TestMaterializeWindDefaultTurbines:
 
         # Verify only configured turbine is present
         import json
+
         root = zarr.open_group(tmp_path / "wind.zarr", mode="r")
         turbines_json = root.attrs.get("cleo_turbines_json", "[]")
         turbines_meta = json.loads(turbines_json)
@@ -358,10 +359,7 @@ class TestMaterializeWindDefaultTurbines:
         resources_src = Path(cleo.__file__).resolve().parent / "resources"
         all_yamls = list(resources_src.glob("*.yml"))
         non_turbine_stems = {"clc_codes", "cost_assumptions"}
-        other_turbines = [
-            p.stem for p in all_yamls
-            if p.stem not in non_turbine_stems and p.stem != "Enercon.E40.500"
-        ]
+        other_turbines = [p.stem for p in all_yamls if p.stem not in non_turbine_stems and p.stem != "Enercon.E40.500"]
 
         if other_turbines:
             second_turbine = other_turbines[0]
@@ -381,6 +379,4 @@ class TestMaterializeWindDefaultTurbines:
             inputs_id1 = root1.attrs["inputs_id"]
             inputs_id2 = root2.attrs["inputs_id"]
 
-            assert inputs_id1 != inputs_id2, (
-                "inputs_id should differ when default turbines differ"
-            )
+            assert inputs_id1 != inputs_id2, "inputs_id should differ when default turbines differ"

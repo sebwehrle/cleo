@@ -110,10 +110,12 @@ class TestConvertMultipleVariables:
 
     def test_convert_multiple_variables_inplace(self):
         """Convert handles multiple variables inplace."""
-        ds = xr.Dataset({
-            "distance": (("y", "x"), np.ones((2, 2)) * 1000),
-            "elevation": (("y", "x"), np.ones((2, 2)) * 500),
-        })
+        ds = xr.Dataset(
+            {
+                "distance": (("y", "x"), np.ones((2, 2)) * 1000),
+                "elevation": (("y", "x"), np.ones((2, 2)) * 500),
+            }
+        )
         ds["distance"].attrs["units"] = "m"
         ds["elevation"].attrs["units"] = "m"
         self = SimpleNamespace(data=ds)
@@ -127,9 +129,11 @@ class TestConvertMultipleVariables:
 
     def test_convert_multiple_variables_returns_dict(self):
         """Convert returns dict when inplace=False."""
-        ds = xr.Dataset({
-            "distance": (("y", "x"), np.ones((2, 2)) * 1000),
-        })
+        ds = xr.Dataset(
+            {
+                "distance": (("y", "x"), np.ones((2, 2)) * 1000),
+            }
+        )
         ds["distance"].attrs["units"] = "m"
         self = SimpleNamespace(data=ds)
 

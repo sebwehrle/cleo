@@ -85,4 +85,3 @@ def test_resolve_region_cleanup_id_validates_and_resolves() -> None:
 
     with pytest.raises(ValueError, match="region cannot be empty"):
         resolve_region_cleanup_id(region="   ", resolve_region_name=lambda name: ("n", "id", 2))
-

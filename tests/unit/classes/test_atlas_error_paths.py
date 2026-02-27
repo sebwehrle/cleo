@@ -82,9 +82,7 @@ def test_clean_regions_treats_unreadable_store_state_as_incomplete(
     assert region_dir.exists()
 
 
-def test_ensure_region_stores_requires_region_id_store_layout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_ensure_region_stores_requires_region_id_store_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = Atlas(tmp_path, "AUT", "epsg:3035")
     atlas._region_name = "Niederösterreich"
     atlas._region_id = "AT12"

@@ -1,7 +1,6 @@
 """Tests for Unifier.ensure_store_skeleton and store attributes."""
 
 import json
-import pytest
 from pathlib import Path
 
 import zarr

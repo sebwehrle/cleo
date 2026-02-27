@@ -42,10 +42,12 @@ class TestCFMetadataProvenance:
         hub_heights_m = np.array([100.0, 100.0], dtype=np.float64)
         # Smaller rotor diameters to fit within height range
         rotor_diameters_m = np.array([80.0, 80.0], dtype=np.float64)
-        power_curves = np.vstack([
-            np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0),
-            np.clip((u_grid - 4.0) / 9.0, 0.0, 1.0),
-        ]).astype(np.float64)
+        power_curves = np.vstack(
+            [
+                np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0),
+                np.clip((u_grid - 4.0) / 9.0, 0.0, 1.0),
+            ]
+        ).astype(np.float64)
 
         return {
             "A_stack": A_stack,

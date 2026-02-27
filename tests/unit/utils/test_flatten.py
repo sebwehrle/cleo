@@ -14,10 +14,15 @@ def test_flatten_excludes_template_and_flattens_2d_and_3d():
         {
             "template": (("y", "x"), np.ones((2, 2))),
             "v2": (("y", "x"), np.array([[1.0, 2.0], [3.0, np.nan]])),
-            "v3": (("height", "y", "x"), np.array([
-                [[10.0, 11.0], [12.0, np.nan]],
-                [[20.0, 21.0], [22.0, np.nan]],
-            ])),
+            "v3": (
+                ("height", "y", "x"),
+                np.array(
+                    [
+                        [[10.0, 11.0], [12.0, np.nan]],
+                        [[20.0, 21.0], [22.0, np.nan]],
+                    ]
+                ),
+            ),
         },
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0], "height": [50, 100]},
     )

@@ -43,9 +43,7 @@ def _extract_turbine_power_kw(
             cap_val = wind["turbine_capacity"].isel(turbine=tidx).values
             power_list.append(float(cap_val))
         else:
-            raise ValueError(
-                f"Turbine {tid!r} missing capacity info; need 'capacity', 'capacity_kw', or 'capacity_mw'"
-            )
+            raise ValueError(f"Turbine {tid!r} missing capacity info; need 'capacity', 'capacity_kw', or 'capacity_mw'")
     return np.array(power_list, dtype=np.float64)
 
 
@@ -71,7 +69,8 @@ def _extract_overnight_cost_eur_per_kw(
         elif "overnight_cost" in meta:
             cost_list.append(float(meta["overnight_cost"]))
         elif wind is not None and all(
-            v in wind for v in ("turbine_capacity", "turbine_hub_height", "turbine_rotor_diameter", "turbine_commissioning_year")
+            v in wind
+            for v in ("turbine_capacity", "turbine_hub_height", "turbine_rotor_diameter", "turbine_commissioning_year")
         ):
             # Fall back to Rinne cost model using wind store data
             tidx = id_to_idx[tid]
@@ -87,6 +86,7 @@ def _extract_overnight_cost_eur_per_kw(
                 f"Turbine {tid!r} missing overnight cost; need 'overnight_cost_eur_per_kw' or 'overnight_cost'"
             )
     return np.array(cost_list, dtype=np.float64)
+
 
 def _wind_metric_mean_wind_speed(
     wind: xr.Dataset,
@@ -117,9 +117,7 @@ def _wind_metric_mean_wind_speed(
         raise ValueError(f"No height dimension in wind store {var_A}")
     available = [int(h) for h in A.coords["height"].values]
     if height not in available:
-        raise ValueError(
-            f"height={height} not in wind store; available: {sorted(available)}"
-        )
+        raise ValueError(f"height={height} not in wind store; available: {sorted(available)}")
 
     # Compute mean wind speed
     da = mean_wind_speed_from_weibull(A=A.sel(height=height), k=k.sel(height=height))
@@ -300,8 +298,7 @@ def _wind_metric_rews_mps(
             d = meta.get("rotor_diameter") or meta.get("rotor_diameter_m")
             if d is None:
                 raise ValueError(
-                    f"rews_mps requires rotor_diameter for turbine {tid!r}; "
-                    "not found in wind store or turbine metadata"
+                    f"rews_mps requires rotor_diameter for turbine {tid!r}; not found in wind store or turbine metadata"
                 )
             diameters.append(float(d))
         rotor_diameters_m = np.array(diameters, dtype=np.float64)
@@ -333,6 +330,7 @@ def _wind_metric_rews_mps(
     )
     return out.where(land["valid_mask"])
 
+
 def _wind_metric_lcoe(
     wind: xr.Dataset,
     land: xr.Dataset | None,
@@ -343,6 +341,7 @@ def _wind_metric_lcoe(
     air_density: bool = False,
     loss_factor: float = 1.0,
     bos_cost_share: float = 0.0,
+    grid_connect_cost_eur_per_kw: float = 50.0,
     om_fixed_eur_per_kw_a: float | None = None,
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
@@ -381,7 +380,8 @@ def _wind_metric_lcoe(
         cf = _precomputed_cf
     else:
         cf = _wind_metric_capacity_factors(
-            wind, land,
+            wind,
+            land,
             turbines=turbines,
             mode=mode,
             rews_n=rews_n,
@@ -401,6 +401,7 @@ def _wind_metric_lcoe(
         power_kw=power_kw,
         overnight_cost_eur_per_kw=overnight_cost,
         bos_cost_share=bos_cost_share,
+        grid_connect_cost_eur_per_kw=grid_connect_cost_eur_per_kw,
         om_fixed_eur_per_kw_a=om_fixed_eur_per_kw_a,
         om_variable_eur_per_kwh=om_variable_eur_per_kwh,
         discount_rate=discount_rate,
@@ -422,6 +423,7 @@ def _wind_metric_min_lcoe_turbine(
     air_density: bool = False,
     loss_factor: float = 1.0,
     bos_cost_share: float = 0.0,
+    grid_connect_cost_eur_per_kw: float = 50.0,
     om_fixed_eur_per_kw_a: float | None = None,
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
@@ -435,13 +437,15 @@ def _wind_metric_min_lcoe_turbine(
     Returns turbine index (int32) with minimum LCOE at each pixel.
     """
     lcoe = _wind_metric_lcoe(
-        wind, land,
+        wind,
+        land,
         turbines=turbines,
         mode=mode,
         rews_n=rews_n,
         air_density=air_density,
         loss_factor=loss_factor,
         bos_cost_share=bos_cost_share,
+        grid_connect_cost_eur_per_kw=grid_connect_cost_eur_per_kw,
         om_fixed_eur_per_kw_a=om_fixed_eur_per_kw_a,
         om_variable_eur_per_kwh=om_variable_eur_per_kwh,
         discount_rate=discount_rate,
@@ -467,6 +471,7 @@ def _wind_metric_optimal_power(
     air_density: bool = False,
     loss_factor: float = 1.0,
     bos_cost_share: float = 0.0,
+    grid_connect_cost_eur_per_kw: float = 50.0,
     om_fixed_eur_per_kw_a: float | None = None,
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
@@ -480,13 +485,15 @@ def _wind_metric_optimal_power(
     Returns rated power (kW) of minimum-LCOE turbine at each pixel.
     """
     lcoe = _wind_metric_lcoe(
-        wind, land,
+        wind,
+        land,
         turbines=turbines,
         mode=mode,
         rews_n=rews_n,
         air_density=air_density,
         loss_factor=loss_factor,
         bos_cost_share=bos_cost_share,
+        grid_connect_cost_eur_per_kw=grid_connect_cost_eur_per_kw,
         om_fixed_eur_per_kw_a=om_fixed_eur_per_kw_a,
         om_variable_eur_per_kwh=om_variable_eur_per_kwh,
         discount_rate=discount_rate,
@@ -514,6 +521,7 @@ def _wind_metric_optimal_energy(
     air_density: bool = False,
     loss_factor: float = 1.0,
     bos_cost_share: float = 0.0,
+    grid_connect_cost_eur_per_kw: float = 50.0,
     om_fixed_eur_per_kw_a: float | None = None,
     om_variable_eur_per_kwh: float | None = None,
     discount_rate: float | None = None,
@@ -548,7 +556,8 @@ def _wind_metric_optimal_energy(
         cf = _precomputed_cf
     else:
         cf = _wind_metric_capacity_factors(
-            wind, land,
+            wind,
+            land,
             turbines=turbines,
             mode=mode,
             rews_n=rews_n,
@@ -568,6 +577,7 @@ def _wind_metric_optimal_energy(
         power_kw=power_kw,
         overnight_cost_eur_per_kw=overnight_cost,
         bos_cost_share=bos_cost_share,
+        grid_connect_cost_eur_per_kw=grid_connect_cost_eur_per_kw,
         om_fixed_eur_per_kw_a=om_fixed_eur_per_kw_a,
         om_variable_eur_per_kwh=om_variable_eur_per_kwh,
         discount_rate=discount_rate,
@@ -584,6 +594,7 @@ def _wind_metric_optimal_energy(
 
     # valid_mask already applied via CF -> LCOE -> e (NaN propagates)
     return e
+
 
 # Wind metrics registry
 _WIND_METRICS = {
@@ -611,7 +622,9 @@ _WIND_METRICS = {
         "required": set(),
         "composed": True,  # accepts grouped cf={} and economics={} specs
         "allowed": {
-            "turbines", "cf", "economics",
+            "turbines",
+            "cf",
+            "economics",
             "hours_per_year",  # injected internally by domain
         },
     },
@@ -621,7 +634,9 @@ _WIND_METRICS = {
         "required": set(),
         "composed": True,
         "allowed": {
-            "turbines", "cf", "economics",
+            "turbines",
+            "cf",
+            "economics",
             "hours_per_year",  # injected internally by domain
         },
     },
@@ -631,7 +646,9 @@ _WIND_METRICS = {
         "required": set(),
         "composed": True,
         "allowed": {
-            "turbines", "cf", "economics",
+            "turbines",
+            "cf",
+            "economics",
             "hours_per_year",  # injected internally by domain
         },
     },
@@ -641,7 +658,9 @@ _WIND_METRICS = {
         "required": set(),
         "composed": True,
         "allowed": {
-            "turbines", "cf", "economics",
+            "turbines",
+            "cf",
+            "economics",
             "hours_per_year",  # injected internally by domain
         },
     },
@@ -672,4 +691,5 @@ _FLAT_ECONOMICS_KWARGS = {
     "om_fixed_eur_per_kw_a",
     "om_variable_eur_per_kwh",
     "bos_cost_share",
+    "grid_connect_cost_eur_per_kw",
 }

@@ -40,9 +40,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -258,9 +256,7 @@ class TestPersistCollision:
 class TestExportResultNetcdfStringCoords:
     """Regression tests for NetCDF export with string/object dtype coords."""
 
-    def test_export_result_netcdf_handles_string_coords_roundtrip(
-        self, tmp_path: Path
-    ) -> None:
+    def test_export_result_netcdf_handles_string_coords_roundtrip(self, tmp_path: Path) -> None:
         """NetCDF export handles string turbine coordinates correctly.
 
         Regression test: export_result_netcdf must encode object/string dtype

@@ -72,6 +72,7 @@ def test_projected_crs_bounds_transformed_to_lonlat(tmp_path, monkeypatch):
     (tmp_path / "data" / "raw" / "AUT").mkdir(parents=True, exist_ok=True)
 
     from cleo.loaders import load_elevation
+
     load_elevation(tmp_path, "AUT", ref)
 
     # Assert bounds were captured and are valid lon/lat degrees
@@ -131,6 +132,7 @@ def test_epsg4326_bounds_passed_unchanged(tmp_path, monkeypatch):
     (tmp_path / "data" / "raw" / "AUT").mkdir(parents=True, exist_ok=True)
 
     from cleo.loaders import load_elevation
+
     load_elevation(tmp_path, "AUT", ref)
 
     # Get actual bounds from reference
@@ -141,7 +143,6 @@ def test_epsg4326_bounds_passed_unchanged(tmp_path, monkeypatch):
     assert captured["min_lat"] == actual_bounds[1], f"min_lat mismatch: {captured['min_lat']} != {actual_bounds[1]}"
     assert captured["max_lon"] == actual_bounds[2], f"max_lon mismatch: {captured['max_lon']} != {actual_bounds[2]}"
     assert captured["max_lat"] == actual_bounds[3], f"max_lat mismatch: {captured['max_lat']} != {actual_bounds[3]}"
-
 
 
 def test_tiles_for_bbox_austria():

@@ -13,6 +13,7 @@ from rasterio import features
 from rasterio.transform import Affine
 from shapely.geometry import mapping
 
+from cleo.store import single_writer_lock
 from cleo.unification.fingerprint import hash_inputs_id
 from cleo.unification.materializers.shared import _stable_json
 
@@ -29,14 +30,10 @@ def _infer_axis_step(subset_coords: np.ndarray, base_coords: np.ndarray, axis_na
     elif base.size >= 2:
         step = float(base[1] - base[0])
     else:
-        raise RuntimeError(
-            f"Cannot infer {axis_name}-axis spacing from a single-cell grid."
-        )
+        raise RuntimeError(f"Cannot infer {axis_name}-axis spacing from a single-cell grid.")
 
     if not np.isfinite(step) or step == 0.0:
-        raise RuntimeError(
-            f"Invalid {axis_name}-axis spacing {step!r}; expected a non-zero finite value."
-        )
+        raise RuntimeError(f"Invalid {axis_name}-axis spacing {step!r}; expected a non-zero finite value.")
     return step
 
 
@@ -73,8 +70,7 @@ def _ensure_region_stores_ready(
             "expected_landscape_exists": expected_land.exists(),
         }
         raise RuntimeError(
-            f"Region stores are still missing after materialize_region({region_id!r}). "
-            f"Details: {details}"
+            f"Region stores are still missing after materialize_region({region_id!r}). Details: {details}"
         )
 
 
@@ -164,13 +160,9 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
     land_base = xr.open_zarr(land_base_path, consolidated=False, chunks=unifier.chunk_policy)
 
     if wind_base.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "wind.zarr is not complete; run atlas.build() first."
-        )
+        raise RuntimeError("wind.zarr is not complete; run atlas.build() first.")
     if land_base.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "landscape.zarr is not complete; run atlas.build() first."
-        )
+        raise RuntimeError("landscape.zarr is not complete; run atlas.build() first.")
 
     base_wind_inputs_id = wind_base.attrs.get("inputs_id", "")
     base_land_inputs_id = land_base.attrs.get("inputs_id", "")
@@ -180,8 +172,7 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
     region_gdf = atlas.get_nuts_region(region_id)
     if region_gdf is None or region_gdf.empty:
         raise FileNotFoundError(
-            f"Could not find region geometry for {region_id!r}. "
-            f"Ensure NUTS shapefile is available."
+            f"Could not find region geometry for {region_id!r}. Ensure NUTS shapefile is available."
         )
 
     # 3) Get bounding box of region in store CRS
@@ -243,17 +234,11 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
 
     # Apply mask only to spatial variables to avoid broadcasting
     # non-spatial turbine metadata onto y/x.
-    wind_spatial_vars = [
-        name for name, var in wind_region_ds.data_vars.items()
-        if "y" in var.dims and "x" in var.dims
-    ]
+    wind_spatial_vars = [name for name, var in wind_region_ds.data_vars.items() if "y" in var.dims and "x" in var.dims]
     if wind_spatial_vars:
         wind_region_ds[wind_spatial_vars] = wind_region_ds[wind_spatial_vars].where(mask_da)
 
-    land_spatial_vars = [
-        name for name, var in land_region_ds.data_vars.items()
-        if "y" in var.dims and "x" in var.dims
-    ]
+    land_spatial_vars = [name for name, var in land_region_ds.data_vars.items() if "y" in var.dims and "x" in var.dims]
     if land_spatial_vars:
         land_region_ds[land_spatial_vars] = land_region_ds[land_spatial_vars].where(mask_da)
 
@@ -296,16 +281,17 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
     for var in wind_region_ds.variables.values():
         var.encoding.pop("chunks", None)
 
-    # Write wind region store (compute to materialize)
-    if wind_region_path.exists():
-        shutil.rmtree(wind_region_path)
+    # Write wind region store (compute to materialize) with single-writer lock
+    with single_writer_lock(wind_region_path):
+        if wind_region_path.exists():
+            shutil.rmtree(wind_region_path)
 
-    wind_region_ds.to_zarr(
-        wind_region_path,
-        mode="w",
-        consolidated=False,
-        align_chunks=True,
-    )
+        wind_region_ds.to_zarr(
+            wind_region_path,
+            mode="w",
+            consolidated=False,
+            align_chunks=True,
+        )
 
     logger.info(
         f"Created region wind store: {wind_region_path} "
@@ -325,15 +311,17 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
     for var in land_region_ds.variables.values():
         var.encoding.pop("chunks", None)
 
-    if land_region_path.exists():
-        shutil.rmtree(land_region_path)
+    # Write landscape region store with single-writer lock
+    with single_writer_lock(land_region_path):
+        if land_region_path.exists():
+            shutil.rmtree(land_region_path)
 
-    land_region_ds.to_zarr(
-        land_region_path,
-        mode="w",
-        consolidated=False,
-        align_chunks=True,
-    )
+        land_region_ds.to_zarr(
+            land_region_path,
+            mode="w",
+            consolidated=False,
+            align_chunks=True,
+        )
 
     logger.info(
         f"Created region landscape store: {land_region_path} "

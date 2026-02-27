@@ -89,9 +89,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -148,9 +146,7 @@ def _create_copdem_tile(
     # Add some variation
     data += np.random.rand(*shape).astype(np.float32) * 100
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -221,14 +217,10 @@ class TestMaterializeLandscapeCopdemPath:
         sources_json = root.attrs.get("cleo_manifest_sources_json", "[]")
         sources = json.loads(sources_json)
         source_ids = [s["source_id"] for s in sources]
-        assert "elevation:copdem" in source_ids, (
-            f"manifest should include elevation:copdem source, got: {source_ids}"
-        )
+        assert "elevation:copdem" in source_ids, f"manifest should include elevation:copdem source, got: {source_ids}"
 
         # Verify elevation data has the correct shape (matches y/x coords)
-        assert ds["elevation"].shape == ds["valid_mask"].shape, (
-            "Elevation should have same shape as valid_mask"
-        )
+        assert ds["elevation"].shape == ds["valid_mask"].shape, "Elevation should have same shape as valid_mask"
 
         # Elevation is masked by valid_mask, so NaN where valid_mask is False
         # (We don't assert on actual values since synthetic tiles may not

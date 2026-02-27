@@ -79,4 +79,3 @@ def test_list_result_stores_rejects_invalid_tokens(tmp_path: Path) -> None:
         list_result_stores(tmp_path / "results", run_id="../outside")
     with pytest.raises(ValueError, match="metric_name"):
         list_result_stores(tmp_path / "results", metric_name="../outside")
-

@@ -15,12 +15,9 @@ def _write_region_catalog(path: Path, mapping: dict[str, str]) -> None:
     """Write region catalog attrs used by Atlas region resolution."""
     g = zarr.open_group(str(path / "landscape.zarr"), mode="w")
     rows = [
-        {"name": name.title(), "name_norm": name, "nuts_id": nuts_id, "level": 2}
-        for name, nuts_id in mapping.items()
+        {"name": name.title(), "name_norm": name, "nuts_id": nuts_id, "level": 2} for name, nuts_id in mapping.items()
     ]
-    g.attrs["cleo_region_catalog_json"] = json.dumps(
-        rows, sort_keys=True, separators=(",", ":")
-    )
+    g.attrs["cleo_region_catalog_json"] = json.dumps(rows, sort_keys=True, separators=(",", ":"))
 
 
 def _create_region_store_set(

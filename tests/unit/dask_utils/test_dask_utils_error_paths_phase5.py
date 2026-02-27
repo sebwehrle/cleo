@@ -55,7 +55,10 @@ def test_get_distributed_client_and_dashboard_errors(monkeypatch: pytest.MonkeyP
 
 def test_scheduler_context_distributed_path(monkeypatch: pytest.MonkeyPatch) -> None:
     called = {"n": 0}
-    monkeypatch.setattr("cleo.dask_utils.get_distributed_client_and_dashboard", lambda: called.__setitem__("n", called["n"] + 1) or ("c", None))
+    monkeypatch.setattr(
+        "cleo.dask_utils.get_distributed_client_and_dashboard",
+        lambda: called.__setitem__("n", called["n"] + 1) or ("c", None),
+    )
     with D.scheduler_context(backend="distributed"):
         pass
     assert called["n"] == 1

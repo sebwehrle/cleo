@@ -70,16 +70,23 @@ def test_write_manifest_sources_adds_created_at(tmp_path: Path) -> None:
 
     M.write_manifest_sources(
         store,
-        [{"source_id": "s1", "name": "a", "kind": "raster", "path": "/tmp/a", "params_json": "{}", "fingerprint": "abc"}],
+        [
+            {
+                "source_id": "s1",
+                "name": "a",
+                "kind": "raster",
+                "path": "/tmp/a",
+                "params_json": "{}",
+                "fingerprint": "abc",
+            }
+        ],
     )
     manifest = M._read_manifest(store)
     assert len(manifest["sources"]) == 1
     assert "created_at" in manifest["sources"][0]
 
 
-def test_load_or_fetch_gwa_crs_raises_if_cache_write_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_load_or_fetch_gwa_crs_raises_if_cache_write_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     atlas = SimpleNamespace(path=tmp_path)
     monkeypatch.setattr("cleo.unification.gwa_io.fetch_gwa_crs", lambda _iso3: "EPSG:3035")
 

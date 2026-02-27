@@ -1,7 +1,6 @@
 # tests/helpers/factories.py
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
 import numpy as np
@@ -31,6 +30,7 @@ __all__ = [
 # -----------------------------------------------------------------------------
 # Existing helpers (kept as-is in spirit and signature)
 # -----------------------------------------------------------------------------
+
 
 def xy_coords(n: int = 5, x0: float = 0.0, y0: float = 0.0, dx: float = 1.0, dy: float = 1.0):
     x = x0 + dx * np.arange(n)
@@ -75,7 +75,7 @@ def da_xy_with_crs(
     da = da_xy(values, n=n, name=name, attrs=attrs)
     try:
         # noqa: F401 - activates .rio accessor
-        import rioxarray  # type: ignore
+        pass  # type: ignore
     except Exception as e:  # pragma: no cover
         raise ImportError(
             "da_xy_with_crs requires optional dependency 'rioxarray'. "
@@ -87,6 +87,7 @@ def da_xy_with_crs(
 # -----------------------------------------------------------------------------
 # New shared factories
 # -----------------------------------------------------------------------------
+
 
 def wind_speed_axis(
     u_max: float = 40.0,
@@ -159,9 +160,7 @@ def ds_template_xy(
         try:
             import rioxarray  # type: ignore  # noqa: F401
         except Exception as e:  # pragma: no cover
-            raise ImportError(
-                "ds_template_xy(with_crs=True) requires optional dependency 'rioxarray'."
-            ) from e
+            raise ImportError("ds_template_xy(with_crs=True) requires optional dependency 'rioxarray'.") from e
         tmpl = tmpl.rio.write_crs(crs)
     ds = xr.Dataset(data_vars={"template": tmpl})
     if attrs:
@@ -202,9 +201,7 @@ def _field_3d(
                         out[i, iy, ix] = float(value(float(h), iy, ix))  # type: ignore[misc]
             return out
 
-    raise ValueError(
-        "Unsupported value for 3D field. Provide scalar, ndarray(shape=(nh,ny,nx)), or callable."
-    )
+    raise ValueError("Unsupported value for 3D field. Provide scalar, ndarray(shape=(nh,ny,nx)), or callable.")
 
 
 def weibull_params_da(
@@ -230,12 +227,8 @@ def weibull_params_da(
     A3 = _field_3d(A, heights=h, ny=n, nx=n)
     k3 = _field_3d(k, heights=h, ny=n, nx=n)
 
-    A_da = xr.DataArray(
-        A3, dims=("height", "y", "x"), coords={"height": h, "y": y, "x": x}, name=A_name
-    )
-    k_da = xr.DataArray(
-        k3, dims=("height", "y", "x"), coords={"height": h, "y": y, "x": x}, name=k_name
-    )
+    A_da = xr.DataArray(A3, dims=("height", "y", "x"), coords={"height": h, "y": y, "x": x}, name=A_name)
+    k_da = xr.DataArray(k3, dims=("height", "y", "x"), coords={"height": h, "y": y, "x": x}, name=k_name)
     return A_da, k_da
 
 

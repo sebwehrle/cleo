@@ -10,9 +10,7 @@ Covered metrics:
 - optimal_energy
 """
 
-import json
 import numpy as np
-import pytest
 import xarray as xr
 
 from cleo.economics import (

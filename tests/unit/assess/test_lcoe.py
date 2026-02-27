@@ -125,7 +125,7 @@ def test_levelized_cost_oracle_with_om_and_discounting() -> None:
     overnight_cost_eur = 3_000_000.0
     grid_cost = xr.DataArray([[200_000.0]], dims=("y", "x"), coords={"y": [0], "x": [0]})
 
-    om_fixed_eur_per_kw = 30.0      # EUR/kW-year equivalent in model's NPV structure
+    om_fixed_eur_per_kw = 30.0  # EUR/kW-year equivalent in model's NPV structure
     om_variable_eur_per_kwh = 0.002  # EUR/kWh
 
     got = levelized_cost(
@@ -163,8 +163,8 @@ def test_levelized_cost_scaling_invariance_power_and_costs() -> None:
 
     common = dict(
         capacity_factors=cf,
-        om_fixed=25.0,          # EUR/kW-year
-        om_variable=0.0015,     # EUR/kWh
+        om_fixed=25.0,  # EUR/kW-year
+        om_variable=0.0015,  # EUR/kWh
         discount_rate=0.05,
         lifetime=20,
         hours_per_year=8766,

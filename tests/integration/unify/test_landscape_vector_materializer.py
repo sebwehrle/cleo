@@ -87,9 +87,7 @@ def _create_raster(
     if add_nodata:
         data[:2, :2] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
     profile = {
         "driver": "GTiff",
         "dtype": "float32",
@@ -132,12 +130,8 @@ def _create_elevation_raster(atlas_path: Path, country: str = "AUT") -> None:
 
 
 def _sample_vector() -> gpd.GeoDataFrame:
-    left = Polygon(
-        [(4000000, 2600000), (4000000, 2700000), (4050000, 2700000), (4050000, 2600000)]
-    )
-    right = Polygon(
-        [(4050000, 2600000), (4050000, 2700000), (4100000, 2700000), (4100000, 2600000)]
-    )
+    left = Polygon([(4000000, 2600000), (4000000, 2700000), (4050000, 2700000), (4050000, 2600000)])
+    right = Polygon([(4050000, 2600000), (4050000, 2700000), (4100000, 2700000), (4100000, 2600000)])
     return gpd.GeoDataFrame(
         {"overnight_stays": [10.0, 25.0]},
         geometry=[left, right],

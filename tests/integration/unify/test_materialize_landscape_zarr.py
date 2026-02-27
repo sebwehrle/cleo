@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from unittest.mock import patch
 
 import geopandas as gpd
 import numpy as np
@@ -117,9 +116,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -149,9 +146,7 @@ def _create_elevation_raster(
     # Elevation values between 0 and 3000m
     data = np.random.rand(*shape).astype(np.float32) * 3000
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -317,9 +312,7 @@ class TestMaterializeLandscapeZarr:
 
         # Where valid_mask is False, elevation should be NaN
         invalid_mask = ~valid_mask
-        assert np.all(np.isnan(elevation[invalid_mask])), (
-            "Elevation should be NaN where valid_mask is False"
-        )
+        assert np.all(np.isnan(elevation[invalid_mask])), "Elevation should be NaN where valid_mask is False"
 
     def test_manifest_contains_sources_and_variables(self, tmp_path: Path) -> None:
         """Manifest sources and variables exist with correct entries."""
@@ -490,8 +483,7 @@ class TestZarrV3Compatibility:
         for name, var in ds.data_vars.items():
             dtype_kind = getattr(var.dtype, "kind", None)
             assert dtype_kind not in ("U", "S", "O"), (
-                f"Data variable {name!r} has string/object dtype {var.dtype}, "
-                f"which is not Zarr v3 compatible."
+                f"Data variable {name!r} has string/object dtype {var.dtype}, which is not Zarr v3 compatible."
             )
 
         # Check all coordinates (except spatial_ref which is special)
@@ -500,8 +492,7 @@ class TestZarrV3Compatibility:
                 continue
             dtype_kind = getattr(coord.dtype, "kind", None)
             assert dtype_kind not in ("U", "S", "O"), (
-                f"Coordinate {name!r} has string/object dtype {coord.dtype}, "
-                f"which is not Zarr v3 compatible."
+                f"Coordinate {name!r} has string/object dtype {coord.dtype}, which is not Zarr v3 compatible."
             )
 
     def test_landscape_store_no_consolidated_metadata(self, tmp_path: Path) -> None:

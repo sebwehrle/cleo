@@ -27,22 +27,13 @@ CLC_SOURCES: dict[str, dict[str, str]] = {
 def source_cache_path(atlas_path: Path, source: str) -> Path:
     """Return cache path for the full CLC source raster."""
     if source not in CLC_SOURCES:
-        raise ValueError(
-            f"Unsupported CLC source {source!r}. Supported: {sorted(CLC_SOURCES)}"
-        )
+        raise ValueError(f"Unsupported CLC source {source!r}. Supported: {sorted(CLC_SOURCES)}")
     return Path(atlas_path) / "data" / "raw" / "clc" / CLC_SOURCES[source]["filename"]
 
 
 def prepared_country_path(atlas_path: Path, country: str, source: str) -> Path:
     """Return cache path for country-prepared CLC raster aligned to wind grid."""
-    return (
-        Path(atlas_path)
-        / "data"
-        / "raw"
-        / str(country)
-        / "clc"
-        / f"{country}_{source}_windgrid.tif"
-    )
+    return Path(atlas_path) / "data" / "raw" / str(country) / "clc" / f"{country}_{source}_windgrid.tif"
 
 
 def default_category_name(atlas_path: Path, code: int) -> str | None:
@@ -68,9 +59,7 @@ def materialize_clc(
     Returns path to prepared GeoTIFF in ``<atlas>/data/raw/<ISO3>/clc/``.
     """
     if source not in CLC_SOURCES:
-        raise ValueError(
-            f"Unsupported CLC source {source!r}. Supported: {sorted(CLC_SOURCES)}"
-        )
+        raise ValueError(f"Unsupported CLC source {source!r}. Supported: {sorted(CLC_SOURCES)}")
 
     source_path = source_cache_path(Path(atlas.path), source)
     source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,10 +73,7 @@ def materialize_clc(
     if (not source_path.exists()) or force_download:
         download_url = url or CLC_SOURCES[source].get("url")
         if not download_url:
-            raise RuntimeError(
-                f"No download URL configured for source {source!r}; "
-                "provide url=... explicitly."
-            )
+            raise RuntimeError(f"No download URL configured for source {source!r}; provide url=... explicitly.")
         download_to_path(download_url, source_path)
 
     if not getattr(atlas, "_canonical_ready", False):

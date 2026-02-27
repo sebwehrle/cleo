@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from cleo.atlas import Atlas
 
+
 def _mock_region_catalog(tmp_path: Path) -> None:
     # Create minimal landscape.zarr root group with attrs only (no arrays needed).
     g = zarr.open_group(str(tmp_path / "landscape.zarr"), mode="w")
@@ -24,16 +25,13 @@ def _mock_region_catalog(tmp_path: Path) -> None:
             "level": 2,
         }
     ]
-    g.attrs["cleo_region_catalog_json"] = json.dumps(
-        catalog, sort_keys=True, separators=(",", ":")
-    )
+    g.attrs["cleo_region_catalog_json"] = json.dumps(catalog, sort_keys=True, separators=(",", ":"))
+
 
 class TestAtlasConstructorContractA2:
     """Tests for Atlas.__init__() per contract section A2."""
 
-    def test_atlas_exposes_build_lifecycle_and_not_legacy_materialize_names(
-        self, tmp_path: Path
-    ) -> None:
+    def test_atlas_exposes_build_lifecycle_and_not_legacy_materialize_names(self, tmp_path: Path) -> None:
         atlas = Atlas(
             tmp_path,
             country="AUT",

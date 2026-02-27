@@ -7,9 +7,7 @@ from pathlib import Path
 from cleo.atlas import Atlas
 
 
-def test_load_nuts_region_catalog_uses_cache_and_returns_defensive_copies(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_load_nuts_region_catalog_uses_cache_and_returns_defensive_copies(tmp_path: Path, monkeypatch) -> None:
     atlas = Atlas(tmp_path, "AUT", "epsg:3035")
     calls = {"count": 0}
     fallback_catalog = [
@@ -34,4 +32,3 @@ def test_load_nuts_region_catalog_uses_cache_and_returns_defensive_copies(
     assert calls["count"] == 1, "raw fallback should not be called after cache is primed"
     assert second == fallback_catalog
     assert tuple(second) == atlas._nuts_region_catalog_cache
-

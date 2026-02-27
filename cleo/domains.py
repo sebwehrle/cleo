@@ -17,6 +17,7 @@ from cleo.unification.store_io import (
     resolve_active_landscape_store_path,
     turbine_ids_from_json,
 )
+from cleo.validation import validate_dataset, ValidationError
 
 
 _DISTANCE_SPEC_ALGO = "edt"
@@ -143,20 +144,16 @@ class WindDomain:
         if not store_path.exists():
             if self._atlas._region_name is not None:
                 raise FileNotFoundError(
-                    f"Region wind store missing at {store_path}; "
-                    f"call atlas.build() after selecting region."
+                    f"Region wind store missing at {store_path}; call atlas.build() after selecting region."
                 )
-            raise FileNotFoundError(
-                f"Wind store missing at {store_path}; call atlas.build()."
-            )
+            raise FileNotFoundError(f"Wind store missing at {store_path}; call atlas.build().")
 
         ds = open_zarr_dataset(store_path, chunk_policy=self._atlas.chunk_policy)
-        state = ds.attrs.get("store_state", "")
-        if state != "complete":
-            raise RuntimeError(
-                f"Wind store incomplete (store_state={state!r}); "
-                f"call atlas.build()."
-            )
+        # Centralized validation via cleo.validation
+        try:
+            validate_dataset(ds, kind="wind")
+        except ValidationError as e:
+            raise RuntimeError(f"Wind store validation failed; call atlas.build().\n{e}") from e
         self._data = self._apply_public_turbine_index(ds)
         return self._data
 
@@ -188,14 +185,10 @@ class WindDomain:
         """
         ds = self.data
         if "turbine" not in ds.dims:
-            raise RuntimeError(
-                "No turbines in wind store; call Atlas.build() to add turbines."
-            )
+            raise RuntimeError("No turbines in wind store; call Atlas.build() to add turbines.")
         # Read from cleo_turbines_json attr (avoids string arrays in Zarr v3)
         if "cleo_turbines_json" not in ds.attrs:
-            raise RuntimeError(
-                "Wind store missing cleo_turbines_json attr; re-run build_canonical()."
-            )
+            raise RuntimeError("Wind store missing cleo_turbines_json attr; re-run build_canonical().")
         return turbine_ids_from_json(ds.attrs["cleo_turbines_json"])
 
     @property
@@ -225,9 +218,7 @@ class WindDomain:
         requested = set(turbines)
         unknown = requested - available
         if unknown:
-            raise ValueError(
-                f"Unknown turbines: {sorted(unknown)}; see atlas.wind.turbines"
-            )
+            raise ValueError(f"Unknown turbines: {sorted(unknown)}; see atlas.wind.turbines")
         return tuple(turbines)
 
     def _apply_public_turbine_index(self, ds: xr.Dataset) -> xr.Dataset:
@@ -258,8 +249,7 @@ class WindDomain:
             )
         if len(set(names)) != len(names):
             raise RuntimeError(
-                "Wind store has duplicate turbine ids in cleo_turbines_json; "
-                "cannot build a unique turbine index."
+                "Wind store has duplicate turbine ids in cleo_turbines_json; cannot build a unique turbine index."
             )
 
         # Preserve current integer labels as turbine_id (best effort)
@@ -301,9 +291,7 @@ class WindDomain:
             duplicate, or unknown.
         """
         if (turbines is None) == (turbine_indices is None):
-            raise ValueError(
-                "Provide exactly one of turbines=... or turbine_indices=...."
-            )
+            raise ValueError("Provide exactly one of turbines=... or turbine_indices=....")
 
         if turbines is not None:
             if isinstance(turbines, (str, bytes)):
@@ -312,13 +300,9 @@ class WindDomain:
                     "got a single string/bytes value. Use turbines=[...]."
                 )
             if not isinstance(turbines, (list, tuple)):
-                raise ValueError(
-                    f"turbines must be a list/tuple of strings, got {type(turbines).__name__}"
-                )
+                raise ValueError(f"turbines must be a list/tuple of strings, got {type(turbines).__name__}")
             if not turbines:
-                raise ValueError(
-                    "turbines must be non-empty; use clear_selection() to clear"
-                )
+                raise ValueError("turbines must be non-empty; use clear_selection() to clear")
 
             # Validate: strings, strip, reject empty, reject duplicates
             cleaned = []
@@ -341,18 +325,11 @@ class WindDomain:
 
         # turbine_indices path
         if isinstance(turbine_indices, (str, bytes)):
-            raise ValueError(
-                "turbine_indices must be a non-empty list/tuple of integers; "
-                "got a string/bytes value."
-            )
+            raise ValueError("turbine_indices must be a non-empty list/tuple of integers; got a string/bytes value.")
         if not isinstance(turbine_indices, (list, tuple)):
-            raise ValueError(
-                f"turbine_indices must be a list/tuple of integers, got {type(turbine_indices).__name__}"
-            )
+            raise ValueError(f"turbine_indices must be a list/tuple of integers, got {type(turbine_indices).__name__}")
         if not turbine_indices:
-            raise ValueError(
-                "turbine_indices must be non-empty; use clear_selection() to clear"
-            )
+            raise ValueError("turbine_indices must be non-empty; use clear_selection() to clear")
 
         available = self.turbines
         n_available = len(available)
@@ -360,13 +337,9 @@ class WindDomain:
         seen_indices: set[int] = set()
         for idx in turbine_indices:
             if not isinstance(idx, int) or isinstance(idx, bool):
-                raise ValueError(
-                    f"Each turbine index must be an integer, got {type(idx).__name__}"
-                )
+                raise ValueError(f"Each turbine index must be an integer, got {type(idx).__name__}")
             if idx < 0 or idx >= n_available:
-                raise ValueError(
-                    f"turbine index out of range: {idx}. Valid range is [0, {n_available - 1}]"
-                )
+                raise ValueError(f"turbine index out of range: {idx}. Valid range is [0, {n_available - 1}]")
             if idx in seen_indices:
                 raise ValueError(f"Duplicate turbine index: {idx}")
             seen_indices.add(idx)
@@ -434,10 +407,7 @@ class WindDomain:
 
         ds = self.data
         if variable not in ds.data_vars:
-            raise ValueError(
-                f"Variable {variable!r} not found in wind data. "
-                f"Available: {sorted(ds.data_vars)}"
-            )
+            raise ValueError(f"Variable {variable!r} not found in wind data. Available: {sorted(ds.data_vars)}")
 
         da = ds[variable]
         converted = convert_dataarray(da, to_unit, from_unit=from_unit)
@@ -508,9 +478,7 @@ class WindDomain:
                 "Use atlas.wind.compute(...).materialize(...) to write into the active wind store."
             )
 
-        materialize_only_kwargs = tuple(
-            key for key in ("overwrite", "allow_mode_change") if key in kwargs
-        )
+        materialize_only_kwargs = tuple(key for key in ("overwrite", "allow_mode_change") if key in kwargs)
         if materialize_only_kwargs:
             keys_text = ", ".join(repr(key) for key in materialize_only_kwargs)
             raise ValueError(
@@ -520,9 +488,7 @@ class WindDomain:
             )
 
         # Reject timebase kwargs - must use atlas.configure_timebase()
-        timebase_kwargs = tuple(
-            key for key in ("hours_per_year",) if key in kwargs
-        )
+        timebase_kwargs = tuple(key for key in ("hours_per_year",) if key in kwargs)
         if timebase_kwargs:
             keys_text = ", ".join(repr(key) for key in timebase_kwargs)
             raise ValueError(
@@ -532,9 +498,7 @@ class WindDomain:
 
         if metric not in _WIND_METRICS:
             supported = sorted(_WIND_METRICS.keys())
-            raise ValueError(
-                f"Unknown metric {metric!r}. Supported: {supported}"
-            )
+            raise ValueError(f"Unknown metric {metric!r}. Supported: {supported}")
 
         spec = _WIND_METRICS[metric]
         fn = spec["fn"]
@@ -545,9 +509,7 @@ class WindDomain:
         # Check required kwargs
         missing = required - kwargs.keys()
         if missing:
-            raise ValueError(
-                f"Missing required parameters for {metric}: {sorted(missing)}"
-            )
+            raise ValueError(f"Missing required parameters for {metric}: {sorted(missing)}")
 
         # Check for unknown kwargs (strict enforcement)
         if allowed is not None:
@@ -557,8 +519,7 @@ class WindDomain:
                 internal_params = {"hours_per_year"}
                 user_allowed = sorted(allowed - internal_params)
                 raise ValueError(
-                    f"Unknown parameter(s) for metric {metric!r}: {sorted(unknown)}. "
-                    f"Allowed: {user_allowed}"
+                    f"Unknown parameter(s) for metric {metric!r}: {sorted(unknown)}. Allowed: {user_allowed}"
                 )
 
         # Handle composed metrics (LCOE-family): grouped cf={} and economics={} specs
@@ -570,7 +531,7 @@ class WindDomain:
                 raise ValueError(
                     f"For {metric!r}, CF parameters must be passed via cf={{...}}, "
                     f"not as flat kwargs. Found: {sorted(flat_cf_present)}. "
-                    f"Use: compute({metric!r}, cf={{\"mode\": ..., \"air_density\": ...}}, ...)"
+                    f'Use: compute({metric!r}, cf={{"mode": ..., "air_density": ...}}, ...)'
                 )
 
             flat_econ_present = set(kwargs.keys()) & _FLAT_ECONOMICS_KWARGS
@@ -578,7 +539,7 @@ class WindDomain:
                 raise ValueError(
                     f"For {metric!r}, economics parameters must be passed via economics={{...}}, "
                     f"not as flat kwargs. Found: {sorted(flat_econ_present)}. "
-                    f"Use: compute({metric!r}, economics={{\"discount_rate\": ..., ...}}, ...)"
+                    f'Use: compute({metric!r}, economics={{"discount_rate": ..., ...}}, ...)'
                 )
 
             # Extract grouped specs
@@ -611,15 +572,11 @@ class WindDomain:
                 if self.selected_turbines is not None:
                     turbines = self.selected_turbines
                 else:
-                    raise ValueError(
-                        "turbines required; use atlas.wind.select(...) or pass turbines=."
-                    )
+                    raise ValueError("turbines required; use atlas.wind.select(...) or pass turbines=.")
             else:
                 # Validate provided turbines (explicit override for this call only)
                 if len(turbines) == 0:
-                    raise ValueError(
-                        "turbines must be non-empty; see atlas.wind.turbines"
-                    )
+                    raise ValueError("turbines must be non-empty; see atlas.wind.turbines")
                 turbines = self._validate_turbines(list(turbines))
             kwargs["turbines"] = turbines
 
@@ -742,9 +699,7 @@ class LandscapeDomain:
     def _validate_if_exists(if_exists: str) -> None:
         valid_if_exists = {"error", "replace", "noop"}
         if if_exists not in valid_if_exists:
-            raise ValueError(
-                f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
-            )
+            raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
 
     def _build_unifier(self):
         from cleo.unification import Unifier
@@ -764,24 +719,16 @@ class LandscapeDomain:
         if not store_path.exists():
             if getattr(self._atlas, "_region_name", None) is not None:
                 raise FileNotFoundError(
-                    f"Region landscape store missing at {store_path}; "
-                    f"call atlas.build() after selecting region."
+                    f"Region landscape store missing at {store_path}; call atlas.build() after selecting region."
                 )
-            raise FileNotFoundError(
-                f"Landscape store missing at {store_path}; call atlas.build()."
-            )
+            raise FileNotFoundError(f"Landscape store missing at {store_path}; call atlas.build().")
 
         ds = open_zarr_dataset(store_path, chunk_policy=self._atlas.chunk_policy)
-        state = ds.attrs.get("store_state", "")
-        if state != "complete":
-            raise RuntimeError(
-                f"Landscape store incomplete (store_state={state!r}); "
-                f"call atlas.build()."
-            )
-        if "valid_mask" not in ds.data_vars:
-            raise RuntimeError(
-                "Landscape store missing valid_mask; call atlas.build()."
-            )
+        # Centralized validation via cleo.validation
+        try:
+            validate_dataset(ds, kind="landscape")
+        except ValidationError as e:
+            raise RuntimeError(f"Landscape store validation failed; call atlas.build().\n{e}") from e
 
         self._data = ds
         return self._data
@@ -848,10 +795,7 @@ class LandscapeDomain:
 
         ds = self.data
         if variable not in ds.data_vars:
-            raise ValueError(
-                f"Variable {variable!r} not found in landscape data. "
-                f"Available: {sorted(ds.data_vars)}"
-            )
+            raise ValueError(f"Variable {variable!r} not found in landscape data. Available: {sorted(ds.data_vars)}")
 
         da = ds[variable]
         converted = convert_dataarray(da, to_unit, from_unit=from_unit)
@@ -965,11 +909,7 @@ class LandscapeDomain:
         if not getattr(atlas, "_canonical_ready", False):
             atlas.build_canonical()
 
-        staged_to_write = {
-            name: self._staged_overlays[name]
-            for name in names
-            if name in self._staged_overlays
-        }
+        staged_to_write = {name: self._staged_overlays[name] for name in names if name in self._staged_overlays}
 
         if staged_to_write:
             u = self._build_unifier()
@@ -1001,9 +941,7 @@ class LandscapeDomain:
           cell in one or more source variables.
         """
         if metric != "distance":
-            raise ValueError(
-                f"Unknown metric {metric!r}. Supported: {['distance']}"
-            )
+            raise ValueError(f"Unknown metric {metric!r}. Supported: {['distance']}")
 
         if "inplace" in kwargs:
             raise ValueError(
@@ -1040,10 +978,7 @@ class LandscapeDomain:
                 )
 
         if if_exists == "error":
-            conflicts = [
-                nm for nm in names
-                if nm in self._staged_overlays or nm in store_ds.data_vars
-            ]
+            conflicts = [nm for nm in names if nm in self._staged_overlays or nm in store_ds.data_vars]
             if conflicts:
                 raise ValueError(
                     f"distance compute would overwrite existing variable(s): {conflicts!r}. "
@@ -1153,8 +1088,7 @@ class LandscapeDomain:
         self._validate_if_exists(if_exists)
         if kind != "raster":
             raise ValueError(
-                "add(...) only supports kind='raster'. "
-                "Use atlas.landscape.rasterize(...) for vector sources."
+                "add(...) only supports kind='raster'. Use atlas.landscape.rasterize(...) for vector sources."
             )
 
         atlas = self._atlas
@@ -1280,20 +1214,14 @@ class LandscapeDomain:
         elif isinstance(categories, list) and categories:
             codes = [int(c) for c in categories]
         else:
-            raise ValueError(
-                "categories must be 'all', an int code, or a non-empty list of int codes."
-            )
+            raise ValueError("categories must be 'all', an int code, or a non-empty list of int codes.")
 
         if name is None:
             if len(codes) > 1:
-                raise ValueError(
-                    "name is required when adding multiple CLC codes in one variable."
-                )
+                raise ValueError("name is required when adding multiple CLC codes in one variable.")
             inferred = default_category_name(atlas.path, codes[0])
             if inferred is None:
-                raise ValueError(
-                    f"No default variable name known for CLC code {codes[0]!r}; pass name=..."
-                )
+                raise ValueError(f"No default variable name known for CLC code {codes[0]!r}; pass name=...")
             variable_name = inferred
         else:
             variable_name = name

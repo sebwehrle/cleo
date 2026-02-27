@@ -12,7 +12,6 @@ import numpy as np
 import xarray as xr
 import rioxarray  # noqa: F401
 import geopandas as gpd
-from types import SimpleNamespace
 from shapely.geometry import box
 from cleo.spatial import bbox, clip_to_geometry, crs_equal
 
@@ -34,9 +33,7 @@ def test_bbox_returns_floats():
 
     # Assert all elements are Python floats (or int), not xarray types
     for i, val in enumerate(result):
-        assert isinstance(val, (float, int)), (
-            f"Element {i} is {type(val).__name__}, expected float or int"
-        )
+        assert isinstance(val, (float, int)), f"Element {i} is {type(val).__name__}, expected float or int"
 
     # Assert values are correct
     xmin, ymin, xmax, ymax = result
@@ -67,9 +64,7 @@ def test_bbox_with_data_attribute():
 
     class MockAtlas:
         def __init__(self):
-            self.data = xr.Dataset(
-                coords={"y": [10.0, 20.0], "x": [100.0, 150.0, 200.0]}
-            )
+            self.data = xr.Dataset(coords={"y": [10.0, 20.0], "x": [100.0, 150.0, 200.0]})
 
     mock = MockAtlas()
     result = bbox(mock)
@@ -85,16 +80,15 @@ def test_bbox_with_data_attribute():
     assert ymax == 20.0
 
 
-
 def test_crs_equal_accepts_case_mismatched_crs():
     """
     set_attributes should accept case-mismatched but equivalent CRS.
     E.g., "EPSG:4326" (data) vs "epsg:4326" (parent) are semantically equal.
     """
     # Create minimal dataset with CRS in uppercase
-    ds = xr.Dataset({
-        "a": xr.DataArray(np.zeros((2, 2)), dims=("y", "x"), coords={"y": [0, 1], "x": [0, 1]})
-    }).rio.write_crs("EPSG:4326")
+    ds = xr.Dataset(
+        {"a": xr.DataArray(np.zeros((2, 2)), dims=("y", "x"), coords={"y": [0, 1], "x": [0, 1]})}
+    ).rio.write_crs("EPSG:4326")
 
     assert crs_equal(ds.rio.crs, "epsg:4326") is True
 
@@ -105,13 +99,13 @@ def test_clip_to_geometry_accepts_case_mismatched_crs():
     E.g., "EPSG:4326" (data) vs "epsg:4326" (parent) are semantically equal.
     """
     # Create minimal dataset with CRS in uppercase
-    ds = xr.Dataset({
-        "template": xr.DataArray(
-            np.ones((3, 3)),
-            dims=("y", "x"),
-            coords={"y": [0.0, 0.5, 1.0], "x": [0.0, 0.5, 1.0]}
-        )
-    }).rio.write_crs("EPSG:4326")
+    ds = xr.Dataset(
+        {
+            "template": xr.DataArray(
+                np.ones((3, 3)), dims=("y", "x"), coords={"y": [0.0, 0.5, 1.0], "x": [0.0, 0.5, 1.0]}
+            )
+        }
+    ).rio.write_crs("EPSG:4326")
 
     # Dummy object with lowercase CRS
     dummy = types.SimpleNamespace()

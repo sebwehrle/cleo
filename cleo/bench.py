@@ -118,9 +118,7 @@ def _normalize_context(context: dict[str, Any] | None) -> dict[str, Any]:
             continue
         ctx_key = f"ctx_{norm}"
         if ctx_key in out:
-            raise ValueError(
-                f"Context keys collide after normalization: {key!r} -> {ctx_key!r}"
-            )
+            raise ValueError(f"Context keys collide after normalization: {key!r} -> {ctx_key!r}")
         out[ctx_key] = value
     return out
 
@@ -185,9 +183,7 @@ def _benchmark_callable(
         tree_rss_after = _proc_tree_rss_mb()
         rss_delta_mb = None if rss_before is None or rss_after is None else (rss_after - rss_before)
         tree_rss_delta_mb = (
-            None
-            if tree_rss_before is None or tree_rss_after is None
-            else (tree_rss_after - tree_rss_before)
+            None if tree_rss_before is None or tree_rss_after is None else (tree_rss_after - tree_rss_before)
         )
 
         if run_idx >= warmup:
@@ -322,9 +318,7 @@ def benchmark_callable_variants(
     if baseline_label is None:
         baseline_label = labels[0]
     if baseline_label not in labels:
-        raise ValueError(
-            f"baseline_label {baseline_label!r} not found in variant labels {labels!r}"
-        )
+        raise ValueError(f"baseline_label {baseline_label!r} not found in variant labels {labels!r}")
 
     frames: list[pd.DataFrame] = []
     for variant in variants:
@@ -394,9 +388,7 @@ def benchmark_metric_variants(
     if baseline_label is None:
         baseline_label = labels[0]
     if baseline_label not in labels:
-        raise ValueError(
-            f"baseline_label {baseline_label!r} not found in variant labels {labels!r}"
-        )
+        raise ValueError(f"baseline_label {baseline_label!r} not found in variant labels {labels!r}")
 
     frames: list[pd.DataFrame] = []
     for variant in variants:
@@ -462,9 +454,7 @@ def evaluate_cf_mode_acceptance(
     - ``status``: ``pass`` | ``fail`` | ``insufficient_sample``
     """
     if baseline_col not in df.columns or candidate_col not in df.columns:
-        raise ValueError(
-            f"Dataframe must contain columns {baseline_col!r} and {candidate_col!r}"
-        )
+        raise ValueError(f"Dataframe must contain columns {baseline_col!r} and {candidate_col!r}")
     if insufficient_sample_policy not in {"fail", "skip"}:
         raise ValueError("insufficient_sample_policy must be 'fail' or 'skip'")
 

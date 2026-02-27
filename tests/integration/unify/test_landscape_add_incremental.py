@@ -126,9 +126,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -153,9 +151,7 @@ def _create_elevation_raster(
 ) -> None:
     """Create a legacy elevation GeoTIFF."""
     data = np.random.rand(*shape).astype(np.float32) * 3000
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -184,9 +180,7 @@ def _create_extra_layer_raster(
     Extent is larger than AOI to test clipping.
     """
     data = np.full(shape, fill_value, dtype=np.float32)
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -286,9 +280,7 @@ class TestLandscapeAddIncremental:
 
         # Where valid_mask is False, extra_layer should be NaN
         invalid_mask = ~valid_mask
-        assert np.all(np.isnan(extra_layer[invalid_mask])), (
-            "extra_layer should be NaN where valid_mask is False"
-        )
+        assert np.all(np.isnan(extra_layer[invalid_mask])), "extra_layer should be NaN where valid_mask is False"
 
     def test_existing_vars_unchanged(self, tmp_path: Path) -> None:
         """Adding a new layer does NOT modify existing variables."""
@@ -322,12 +314,10 @@ class TestLandscapeAddIncremental:
         elevation_after = landscape_after["elevation"].values
 
         np.testing.assert_array_equal(
-            valid_mask_before, valid_mask_after,
-            err_msg="valid_mask should not change after adding new layer"
+            valid_mask_before, valid_mask_after, err_msg="valid_mask should not change after adding new layer"
         )
         np.testing.assert_array_equal(
-            elevation_before, elevation_after,
-            err_msg="elevation should not change after adding new layer"
+            elevation_before, elevation_after, err_msg="elevation should not change after adding new layer"
         )
 
     def test_manifest_sources_updated(self, tmp_path: Path) -> None:
@@ -414,9 +404,7 @@ class TestLandscapeAddIncremental:
         root_after = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
         inputs_id_after = root_after.attrs["inputs_id"]
 
-        assert inputs_id_before != inputs_id_after, (
-            "inputs_id should change after materialization"
-        )
+        assert inputs_id_before != inputs_id_after, "inputs_id should change after materialization"
 
     def test_grid_id_unchanged(self, tmp_path: Path) -> None:
         """grid_id remains unchanged after adding new layer."""

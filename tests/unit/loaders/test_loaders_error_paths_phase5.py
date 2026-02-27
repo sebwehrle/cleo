@@ -147,12 +147,16 @@ def test_load_weibull_parameters_wraps_reprojection_errors(tmp_path: Path, monke
     _write_tif(a_path, np.ones((2, 2), dtype=np.float32))
     _write_tif(k_path, np.ones((2, 2), dtype=np.float32))
 
-    monkeypatch.setattr("cleo.loaders.reproject_raster_if_needed", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad")))
+    monkeypatch.setattr(
+        "cleo.loaders.reproject_raster_if_needed", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad"))
+    )
     with pytest.raises(RuntimeError, match="Failed to load Weibull parameters"):
         L.load_weibull_parameters(self_obj, 100)
 
 
-def test_load_gwa_skips_existing_files_and_handles_download_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_gwa_skips_existing_files_and_handles_download_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     parent = SimpleNamespace(path=tmp_path, country="AUT")
     self_obj = SimpleNamespace(parent=parent)
     raw_dir = tmp_path / "data" / "raw" / "AUT"

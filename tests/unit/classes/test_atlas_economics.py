@@ -1,6 +1,5 @@
 """Unit tests for Atlas.configure_economics() and related methods."""
 
-import math
 import pytest
 from pathlib import Path
 
@@ -178,7 +177,7 @@ class TestEffectiveEconomics:
 
         effective = atlas._effective_economics()
 
-        assert effective == {"bos_cost_share": 0.0}
+        assert effective == {"bos_cost_share": 0.0, "grid_connect_cost_eur_per_kw": 50.0}
 
     def test_effective_economics_with_baseline(self, tmp_path: Path) -> None:
         """Baseline configuration is included in effective."""
@@ -190,6 +189,7 @@ class TestEffectiveEconomics:
         assert effective["discount_rate"] == 0.05
         assert effective["lifetime_a"] == 25
         assert effective["bos_cost_share"] == 0.0  # default
+        assert effective["grid_connect_cost_eur_per_kw"] == 50.0  # default
 
     def test_effective_economics_override_takes_precedence(self, tmp_path: Path) -> None:
         """Per-call overrides take precedence over baseline."""

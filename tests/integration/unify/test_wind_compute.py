@@ -141,9 +141,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        *bounds, shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(*bounds, shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -464,9 +462,7 @@ class TestDomainResultMaterializeOverwrite:
         assert first_air_density == 0, "First materialize should have air_density=0"
 
         # Cache again with air_density=True - should overwrite
-        atlas.wind.compute(
-            "capacity_factors", air_density=True
-        ).materialize(overwrite=True)
+        atlas.wind.compute("capacity_factors", air_density=True).materialize(overwrite=True)
 
         # Verify overwrite - attrs should be updated
         assert "capacity_factors" in atlas.wind.data
@@ -500,9 +496,7 @@ class TestDomainResultMaterializeOverwrite:
             atlas.wind.compute("capacity_factors", mode="rews").materialize()
 
         # Cache with mode="rews" and allow_mode_change=True should succeed
-        atlas.wind.compute(
-            "capacity_factors", mode="rews"
-        ).materialize(overwrite=True, allow_mode_change=True)
+        atlas.wind.compute("capacity_factors", mode="rews").materialize(overwrite=True, allow_mode_change=True)
 
         # Verify mode changed
         assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_mode") == "rews"
@@ -530,9 +524,7 @@ class TestDomainResultMaterializeOverwrite:
         with pytest.raises(ValueError, match="already exists"):
             atlas.wind.compute("capacity_factors").materialize(overwrite=False)
 
-    def test_materialize_returns_store_backed_metric_after_subset_alignment(
-        self, tmp_path: Path
-    ) -> None:
+    def test_materialize_returns_store_backed_metric_after_subset_alignment(self, tmp_path: Path) -> None:
         """materialize() returns the surfaced store-backed metric (not pre-write subset object)."""
         turbine_names = ["Enercon.E40.500", "Vestas.V112.3075"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)

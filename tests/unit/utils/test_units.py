@@ -6,8 +6,6 @@ import xarray as xr
 
 from cleo.units import (
     CANONICAL_UNITS,
-    LEGACY_UNIT_ATTR_KEY,
-    UNIT_ATTR_KEY,
     assert_convertible,
     conversion_factor,
     convert_dataarray,
@@ -289,10 +287,12 @@ class TestConvertDatasetVariable:
 
     def test_converts_single_variable(self):
         """Converts a single variable in dataset."""
-        ds = xr.Dataset({
-            "distance": xr.DataArray([100.0, 200.0, 300.0]),
-            "count": xr.DataArray([1, 2, 3]),
-        })
+        ds = xr.Dataset(
+            {
+                "distance": xr.DataArray([100.0, 200.0, 300.0]),
+                "count": xr.DataArray([1, 2, 3]),
+            }
+        )
         ds["distance"].attrs["units"] = "m"
 
         result = convert_dataset_variable(ds, "distance", "km")
@@ -304,9 +304,11 @@ class TestConvertDatasetVariable:
 
     def test_does_not_mutate_input(self):
         """Returns new Dataset, does not mutate input."""
-        ds = xr.Dataset({
-            "distance": xr.DataArray([100.0, 200.0, 300.0]),
-        })
+        ds = xr.Dataset(
+            {
+                "distance": xr.DataArray([100.0, 200.0, 300.0]),
+            }
+        )
         ds["distance"].attrs["units"] = "m"
 
         result = convert_dataset_variable(ds, "distance", "km")
@@ -319,9 +321,11 @@ class TestConvertDatasetVariable:
 
     def test_raises_for_missing_variable(self):
         """Raises ValueError for missing variable."""
-        ds = xr.Dataset({
-            "distance": xr.DataArray([100.0]),
-        })
+        ds = xr.Dataset(
+            {
+                "distance": xr.DataArray([100.0]),
+            }
+        )
 
         with pytest.raises(ValueError, match="not found in Dataset"):
             convert_dataset_variable(ds, "nonexistent", "km")

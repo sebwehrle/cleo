@@ -50,8 +50,7 @@ def _read_nuts_region_catalog(
     shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
     if not shp_files:
         raise FileNotFoundError(
-            f"NUTS shapefile not found under {nuts_dir}. "
-            "Run NUTS download/extract first (e.g. cleo.loaders.load_nuts)."
+            f"NUTS shapefile not found under {nuts_dir}. Run NUTS download/extract first (e.g. cleo.loaders.load_nuts)."
         )
 
     nuts = _read_vector_file(shp_files[0])

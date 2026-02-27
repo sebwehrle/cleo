@@ -16,7 +16,7 @@ from rasterio.enums import MergeAlg, Resampling
 from rasterio.features import rasterize as rio_rasterize
 
 from cleo.spatial import canonical_crs_str, to_crs_if_needed
-from cleo.store import atomic_dir
+from cleo.store import atomic_dir, single_writer_lock
 from cleo.unification.fingerprint import (
     fingerprint_path_mtime_size,
     get_git_info,
@@ -47,9 +47,7 @@ def _load_vector_shape(shape):
     try:
         import geopandas as gpd
     except ImportError as exc:  # pragma: no cover - exercised in optional-deps envs
-        raise RuntimeError(
-            "geopandas is required for vector rasterization support."
-        ) from exc
+        raise RuntimeError("geopandas is required for vector rasterization support.") from exc
 
     if isinstance(shape, (str, Path)):
         return gpd.read_file(shape)
@@ -57,9 +55,7 @@ def _load_vector_shape(shape):
     if isinstance(shape, gpd.GeoDataFrame):
         return shape.copy()
 
-    raise TypeError(
-        "shape must be a path (str|Path) or a geopandas.GeoDataFrame."
-    )
+    raise TypeError("shape must be a path (str|Path) or a geopandas.GeoDataFrame.")
 
 
 def _vector_values_for_column(gdf, *, column: str | None) -> list[float]:
@@ -69,22 +65,16 @@ def _vector_values_for_column(gdf, *, column: str | None) -> list[float]:
 
     if column not in gdf.columns:
         available = [c for c in gdf.columns if c != "geometry"]
-        raise ValueError(
-            f"Column {column!r} not found in shape. Available columns: {available!r}"
-        )
+        raise ValueError(f"Column {column!r} not found in shape. Available columns: {available!r}")
 
     vals = gdf[column].to_numpy()
     if not np.issubdtype(vals.dtype, np.number):
-        raise TypeError(
-            f"Column {column!r} must be numeric, got dtype={vals.dtype!r}."
-        )
+        raise TypeError(f"Column {column!r} must be numeric, got dtype={vals.dtype!r}.")
     out: list[float] = []
     for idx, raw in enumerate(vals.tolist()):
         value = float(raw)
         if not np.isfinite(value):
-            raise ValueError(
-                f"Column {column!r} contains non-finite value at row {idx}: {value!r}."
-            )
+            raise ValueError(f"Column {column!r} contains non-finite value at row {idx}: {value!r}.")
         out.append(value)
     return out
 
@@ -189,16 +179,12 @@ def _register_landscape_source_entry(
 
     valid_if_exists = {"error", "replace", "noop"}
     if if_exists not in valid_if_exists:
-        raise ValueError(
-            f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
-        )
+        raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
 
     store_path = Path(atlas.path) / "landscape.zarr"
     root = zarr.open_group(store_path, mode="r")
     if root.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first."
-        )
+        raise RuntimeError("landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first.")
 
     source_id = f"land:{kind}:{name}"
     other_kind = "vector" if kind == "raster" else "raster"
@@ -217,9 +203,7 @@ def _register_landscape_source_entry(
                 f"  Existing source_id: {other_source_id!r}\n"
                 "  Use if_exists='replace' to replace with new source kind."
             )
-        existing_sources = [
-            src for src in existing_sources if src["source_id"] != other_source_id
-        ]
+        existing_sources = [src for src in existing_sources if src["source_id"] != other_source_id]
         source_by_id.pop(other_source_id, None)
 
     if source_id in source_by_id:
@@ -249,9 +233,7 @@ def _register_landscape_source_entry(
             )
 
         if if_exists == "error":
-            config_matches = (
-                existing_path == str(source_path) and existing_params == params_json
-            )
+            config_matches = existing_path == str(source_path) and existing_params == params_json
             if not config_matches:
                 raise ValueError(
                     f"Source {source_id!r} already registered with different configuration.\n"
@@ -333,15 +315,11 @@ def _current_landscape_source_fingerprint(
 
     column = params.get("column")
     if column is not None and not isinstance(column, str):
-        raise TypeError(
-            f"Vector source params['column'] must be str|None, got {type(column).__name__}."
-        )
+        raise TypeError(f"Vector source params['column'] must be str|None, got {type(column).__name__}.")
     all_touched = bool(params.get("all_touched", False))
     gdf = _load_vector_shape(source_path)
     if gdf.crs is None:
-        raise ValueError(
-            f"Vector source {source_path} has no CRS; cannot materialize."
-        )
+        raise ValueError(f"Vector source {source_path} has no CRS; cannot materialize.")
     gdf = to_crs_if_needed(gdf, atlas.crs)
     gdf = gdf.reset_index(drop=True)
     return _vector_semantic_hash(
@@ -364,23 +342,16 @@ def _prepare_vector_landscape_variable_data(
     """Prepare a vector-sourced landscape variable without writing to store."""
     gdf = _load_vector_shape(source_path)
     if gdf.crs is None:
-        raise RuntimeError(
-            f"Source vector {source_path} has no CRS; cannot materialize."
-        )
+        raise RuntimeError(f"Source vector {source_path} has no CRS; cannot materialize.")
 
     column = params.get("column")
     if column is not None and not isinstance(column, str):
-        raise TypeError(
-            f"Vector source params['column'] must be str|None, got {type(column).__name__}."
-        )
+        raise TypeError(f"Vector source params['column'] must be str|None, got {type(column).__name__}.")
     all_touched = bool(params.get("all_touched", False))
 
     gdf = to_crs_if_needed(gdf, wind_ref.rio.crs)
     burn_values = _vector_values_for_column(gdf, column=column)
-    shapes = [
-        (geom, value)
-        for geom, value in zip(gdf.geometry.tolist(), burn_values, strict=True)
-    ]
+    shapes = [(geom, value) for geom, value in zip(gdf.geometry.tolist(), burn_values, strict=True)]
 
     transform = wind_ref.rio.transform(recalc=True)
     out_shape = (int(wind_ref.sizes["y"]), int(wind_ref.sizes["x"]))
@@ -418,22 +389,16 @@ def materialize_landscape(unifier, atlas) -> None:
     wind = xr.open_zarr(wind_path, consolidated=False, chunks=unifier.chunk_policy)
 
     if wind.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "wind.zarr is not complete; run Unifier.materialize_wind(atlas) first."
-        )
+        raise RuntimeError("wind.zarr is not complete; run Unifier.materialize_wind(atlas) first.")
 
     wind_grid_id = wind.attrs.get("grid_id") or ""
     wind_inputs_id = wind.attrs.get("inputs_id") or ""
     if not wind_grid_id or not wind_inputs_id:
-        raise RuntimeError(
-            "wind.zarr missing grid_id/inputs_id; cannot materialize landscape."
-        )
+        raise RuntimeError("wind.zarr missing grid_id/inputs_id; cannot materialize landscape.")
 
     # Choose wind_ref for alignment
     if "weibull_A" not in wind:
-        raise RuntimeError(
-            "wind.zarr missing weibull_A; cannot define canonical grid."
-        )
+        raise RuntimeError("wind.zarr missing weibull_A; cannot define canonical grid.")
 
     wind_ref = wind["weibull_A"].isel(height=0)
     if "height" in wind["weibull_A"].dims:
@@ -451,9 +416,7 @@ def materialize_landscape(unifier, atlas) -> None:
 
     # Ensure wind_ref has a valid transform
     if wind_ref.rio.transform() is None:
-        wind_ref = wind_ref.rio.write_transform(
-            wind_ref.rio.transform(recalc=True)
-        )
+        wind_ref = wind_ref.rio.write_transform(wind_ref.rio.transform(recalc=True))
 
     # AOI geometry: same definition as wind
     aoi_gdf = _aoi_geom_or_none(atlas)
@@ -467,9 +430,7 @@ def materialize_landscape(unifier, atlas) -> None:
 
     elev_meta: dict[str, Any] | None = None
     if local_elev.exists():
-        elevation = _open_local_elevation(
-            atlas, local_elev, wind_ref, aoi_gdf
-        ).rename("elevation")
+        elevation = _open_local_elevation(atlas, local_elev, wind_ref, aoi_gdf).rename("elevation")
         elev_kind = "local"
     else:
         elevation, elev_meta = _build_copdem_elevation(atlas, wind_ref, aoi_gdf)
@@ -595,15 +556,13 @@ def materialize_landscape(unifier, atlas) -> None:
                 name="valid_mask derived from wind weibull_A",
                 kind="derived",
                 path=str(wind_path),
-                params_json=_stable_json({
-                    "ref": "weibull_A",
-                    "height": int(wind_ref["height"].values)
-                    if "height" in wind_ref.coords
-                    else None,
-                }),
-                fingerprint=hashlib.sha256(
-                    f"{wind_grid_id}:{wind_inputs_id}".encode("utf-8")
-                ).hexdigest(),
+                params_json=_stable_json(
+                    {
+                        "ref": "weibull_A",
+                        "height": int(wind_ref["height"].values) if "height" in wind_ref.coords else None,
+                    }
+                ),
+                fingerprint=hashlib.sha256(f"{wind_grid_id}:{wind_inputs_id}".encode("utf-8")).hexdigest(),
                 created_at=_now_iso(),
             )
         )
@@ -615,9 +574,7 @@ def materialize_landscape(unifier, atlas) -> None:
                     name="local elevation GeoTIFF",
                     kind="raster",
                     path=str(local_elev),
-                    params_json=_stable_json({
-                        "clip": "aoi" if aoi_gdf is not None else "none"
-                    }),
+                    params_json=_stable_json({"clip": "aoi" if aoi_gdf is not None else "none"}),
                     fingerprint=fingerprint_path_mtime_size(local_elev),
                     created_at=_now_iso(),
                 )
@@ -630,9 +587,7 @@ def materialize_landscape(unifier, atlas) -> None:
                     kind="network+raster",
                     path="copdem://",
                     params_json=_stable_json(elev_meta),
-                    fingerprint=hashlib.sha256(
-                        _stable_json(elev_meta).encode("utf-8")
-                    ).hexdigest(),
+                    fingerprint=hashlib.sha256(_stable_json(elev_meta).encode("utf-8")).hexdigest(),
                     created_at=_now_iso(),
                 )
             )
@@ -653,9 +608,7 @@ def materialize_landscape(unifier, atlas) -> None:
         vars_.append(
             dict(
                 variable_name="elevation",
-                source_id=(
-                    "elevation:local" if elev_kind == "local" else "elevation:copdem"
-                ),
+                source_id=("elevation:local" if elev_kind == "local" else "elevation:copdem"),
                 materialized_at=_now_iso(),
                 resampling_method="bilinear",
                 nodata_policy="nan",
@@ -731,9 +684,7 @@ def prepare_landscape_variable_data(
 
     wind = xr.open_zarr(wind_path, consolidated=False, chunks=unifier.chunk_policy)
     if wind.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "wind.zarr is not complete; run Unifier.materialize_wind(atlas) first."
-        )
+        raise RuntimeError("wind.zarr is not complete; run Unifier.materialize_wind(atlas) first.")
     wind_grid_id = wind.attrs.get("grid_id") or ""
 
     wind_ref = wind["weibull_A"].isel(height=0)
@@ -754,14 +705,10 @@ def prepare_landscape_variable_data(
     land = xr.open_zarr(store_path, consolidated=False, chunks=unifier.chunk_policy)
     land_root = zarr.open_group(store_path, mode="r")
     if land_root.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first."
-        )
+        raise RuntimeError("landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first.")
     land_grid_id = land_root.attrs.get("grid_id") or ""
     if land_grid_id != wind_grid_id:
-        raise RuntimeError(
-            f"landscape.zarr grid_id mismatch: {land_grid_id!r} != wind grid_id {wind_grid_id!r}"
-        )
+        raise RuntimeError(f"landscape.zarr grid_id mismatch: {land_grid_id!r} != wind grid_id {wind_grid_id!r}")
     if "valid_mask" not in land:
         raise RuntimeError("landscape.zarr missing valid_mask")
 
@@ -790,9 +737,7 @@ def prepare_landscape_variable_data(
 
         da = rxr.open_rasterio(source_path, parse_coordinates=True).squeeze(drop=True)
         if da.rio.crs is None:
-            raise RuntimeError(
-                f"Source raster {source_path} has no CRS; cannot materialize."
-            )
+            raise RuntimeError(f"Source raster {source_path} has no CRS; cannot materialize.")
 
         if aoi is not None:
             aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
@@ -807,9 +752,7 @@ def prepare_landscape_variable_data(
         clc_codes_raw = params.get("clc_codes")
         if clc_codes_raw is not None:
             if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
-                raise ValueError(
-                    "params['clc_codes'] must be a non-empty list of integer CLC codes."
-                )
+                raise ValueError("params['clc_codes'] must be a non-empty list of integer CLC codes.")
             clc_codes = [int(code) for code in clc_codes_raw]
             da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
 
@@ -847,23 +790,18 @@ def materialize_landscape_computed_variables(
     """Materialize precomputed landscape variables into active landscape store."""
     valid_if_exists = {"error", "replace", "noop"}
     if if_exists not in valid_if_exists:
-        raise ValueError(
-            f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
-        )
+        raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
     if not variables:
         return {"written": [], "skipped": []}
 
     store_path = resolve_active_landscape_store_path(atlas)
     if not store_path.exists():
-        raise FileNotFoundError(
-            f"Active landscape store does not exist at {store_path}; call atlas.build()."
-        )
+        raise FileNotFoundError(f"Active landscape store does not exist at {store_path}; call atlas.build().")
 
     root = zarr.open_group(store_path, mode="r")
     if root.attrs.get("store_state") != "complete":
         raise RuntimeError(
-            f"Landscape store incomplete (store_state={root.attrs.get('store_state')!r}); "
-            "call atlas.build()."
+            f"Landscape store incomplete (store_state={root.attrs.get('store_state')!r}); call atlas.build()."
         )
 
     land = xr.open_zarr(store_path, consolidated=False, chunks=unifier.chunk_policy)
@@ -888,43 +826,45 @@ def materialize_landscape_computed_variables(
     written: list[str] = []
     skipped: list[str] = []
 
-    for name in names:
-        da = variables[name]
-        exists = name in existing_vars
-        try:
-            if exists and if_exists == "noop":
-                skipped.append(name)
-                continue
+    # Acquire single-writer lock for the duration of all write operations
+    with single_writer_lock(store_path):
+        for name in names:
+            da = variables[name]
+            exists = name in existing_vars
+            try:
+                if exists and if_exists == "noop":
+                    skipped.append(name)
+                    continue
 
-            if "x" in da.dims and "y" in da.dims:
-                if not np.array_equal(da.coords["y"].values, y_ref):
-                    raise ValueError(f"Computed variable {name!r} has y coords not matching active landscape grid.")
-                if not np.array_equal(da.coords["x"].values, x_ref):
-                    raise ValueError(f"Computed variable {name!r} has x coords not matching active landscape grid.")
+                if "x" in da.dims and "y" in da.dims:
+                    if not np.array_equal(da.coords["y"].values, y_ref):
+                        raise ValueError(f"Computed variable {name!r} has y coords not matching active landscape grid.")
+                    if not np.array_equal(da.coords["x"].values, x_ref):
+                        raise ValueError(f"Computed variable {name!r} has x coords not matching active landscape grid.")
 
-            if exists and if_exists == "replace":
-                _atomic_replace_variable_dir(store_path, name)
-                existing_vars.discard(name)
+                if exists and if_exists == "replace":
+                    _atomic_replace_variable_dir(store_path, name)
+                    existing_vars.discard(name)
 
-            da.rename(name).to_dataset().to_zarr(store_path, mode="a", consolidated=False)
+                da.rename(name).to_dataset().to_zarr(store_path, mode="a", consolidated=False)
 
-            root_w = zarr.open_group(store_path, mode="a")
-            for key, value in preserve_attrs.items():
-                root_w.attrs[key] = value
+                root_w = zarr.open_group(store_path, mode="a")
+                for key, value in preserve_attrs.items():
+                    root_w.attrs[key] = value
 
-            written.append(name)
-            existing_vars.add(name)
+                written.append(name)
+                existing_vars.add(name)
 
-        except Exception as exc:
-            remaining = [n for n in names if n not in written and n not in skipped and n != name]
-            err = RuntimeError(
-                "Failed to materialize computed landscape variables. "
-                f"written={written!r}, skipped={skipped!r}, failed={[name] + remaining!r}"
-            )
-            setattr(err, "written", tuple(written))
-            setattr(err, "skipped", tuple(skipped))
-            setattr(err, "failed", tuple([name] + remaining))
-            raise err from exc
+            except Exception as exc:
+                remaining = [n for n in names if n not in written and n not in skipped and n != name]
+                err = RuntimeError(
+                    "Failed to materialize computed landscape variables. "
+                    f"written={written!r}, skipped={skipped!r}, failed={[name] + remaining!r}"
+                )
+                setattr(err, "written", tuple(written))
+                setattr(err, "skipped", tuple(skipped))
+                setattr(err, "failed", tuple([name] + remaining))
+                raise err from exc
 
     return {"written": written, "skipped": skipped}
 
@@ -939,9 +879,7 @@ def materialize_landscape_variable(
     """Materialize a single landscape variable from a registered source."""
     valid_if_exists = {"error", "replace", "noop"}
     if if_exists not in valid_if_exists:
-        raise ValueError(
-            f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}"
-        )
+        raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
     store_path = Path(atlas.path) / "landscape.zarr"
     wind_path = Path(atlas.path) / "wind.zarr"
 
@@ -949,9 +887,7 @@ def materialize_landscape_variable(
     wind = xr.open_zarr(wind_path, consolidated=False, chunks=unifier.chunk_policy)
 
     if wind.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "wind.zarr is not complete; run Unifier.materialize_wind(atlas) first."
-        )
+        raise RuntimeError("wind.zarr is not complete; run Unifier.materialize_wind(atlas) first.")
 
     wind_grid_id = wind.attrs.get("grid_id") or ""
     wind_inputs_id = wind.attrs.get("inputs_id") or ""
@@ -978,15 +914,11 @@ def materialize_landscape_variable(
 
     land_root = zarr.open_group(store_path, mode="r")
     if land_root.attrs.get("store_state") != "complete":
-        raise RuntimeError(
-            "landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first."
-        )
+        raise RuntimeError("landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first.")
 
     land_grid_id = land_root.attrs.get("grid_id") or ""
     if land_grid_id != wind_grid_id:
-        raise RuntimeError(
-            f"landscape.zarr grid_id mismatch: {land_grid_id!r} != wind grid_id {wind_grid_id!r}"
-        )
+        raise RuntimeError(f"landscape.zarr grid_id mismatch: {land_grid_id!r} != wind grid_id {wind_grid_id!r}")
 
     if "valid_mask" not in land:
         raise RuntimeError("landscape.zarr missing valid_mask")
@@ -1053,10 +985,11 @@ def materialize_landscape_variable(
                 f"  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
             )
         elif if_exists == "replace":
-            # Remove existing variable directory for atomic replacement
-            _atomic_replace_variable_dir(store_path, variable_name)
-            # Re-open landscape store after modification
-            land = xr.open_zarr(store_path, consolidated=False, chunks=unifier.chunk_policy)
+            do_replace = True
+        else:
+            do_replace = False
+    else:
+        do_replace = False
 
     # Use stored fingerprint for inputs_id (consistent with registration)
     fingerprint = stored_fingerprint
@@ -1068,58 +1001,66 @@ def materialize_landscape_variable(
     # 6) Preserve existing attrs before appending (to_zarr may overwrite)
     preserve_attrs = dict(land_root.attrs)
 
-    # 7) Append variable into store
-    da.to_dataset().to_zarr(store_path, mode="a", consolidated=False)
+    # Acquire single-writer lock for all write operations
+    with single_writer_lock(store_path):
+        # Handle replace if needed (inside lock to prevent race conditions)
+        if do_replace:
+            _atomic_replace_variable_dir(store_path, variable_name)
+            # Re-open landscape store after modification
+            land = xr.open_zarr(store_path, consolidated=False, chunks=unifier.chunk_policy)
 
-    # 8) Restore preserved attrs after append
-    root = zarr.open_group(store_path, mode="a")
-    for k, v in preserve_attrs.items():
-        root.attrs[k] = v
+        # 7) Append variable into store
+        da.to_dataset().to_zarr(store_path, mode="a", consolidated=False)
 
-    # 9) Update manifest JSON with new variable
-    manifest = _read_manifest(store_path)
-    existing_vars = manifest.get("variables", [])
-    existing_var_names = [v["variable_name"] for v in existing_vars]
+        # 8) Restore preserved attrs after append
+        root = zarr.open_group(store_path, mode="a")
+        for k, v in preserve_attrs.items():
+            root.attrs[k] = v
 
-    # Update or add the new variable
-    new_var = {
-        "variable_name": variable_name,
-        "source_id": source_id,
-        "resampling_method": "nearest" if categorical else "bilinear",
-        "nodata_policy": "nan",
-        "dtype": str(da.dtype),
-    }
+        # 9) Update manifest JSON with new variable
+        manifest = _read_manifest(store_path)
+        existing_vars = manifest.get("variables", [])
+        existing_var_names = [v["variable_name"] for v in existing_vars]
 
-    if variable_name in existing_var_names:
-        # Update existing entry
-        for i, v in enumerate(existing_vars):
-            if v["variable_name"] == variable_name:
-                existing_vars[i] = new_var
-                break
-    else:
-        existing_vars.append(new_var)
+        # Update or add the new variable
+        new_var = {
+            "variable_name": variable_name,
+            "source_id": source_id,
+            "resampling_method": "nearest" if categorical else "bilinear",
+            "nodata_policy": "nan",
+            "dtype": str(da.dtype),
+        }
 
-    manifest["variables"] = existing_vars
-    _write_manifest_atomic(store_path, manifest)
+        if variable_name in existing_var_names:
+            # Update existing entry
+            for i, v in enumerate(existing_vars):
+                if v["variable_name"] == variable_name:
+                    existing_vars[i] = new_var
+                    break
+        else:
+            existing_vars.append(new_var)
 
-    # 11) Update inputs_id deterministically
-    items: list[tuple[str, str]] = []
-    items.append(("wind:grid_id", wind_grid_id))
-    items.append(("wind:inputs_id", wind_inputs_id))
-    items.append(("mask_policy", "nan+valid_mask_in_landscape"))
-    items.append(("region", _stable_json(getattr(atlas, "region", None))))
-    items.append(("chunk_policy", _stable_json(unifier.chunk_policy)))
-    items.append(("incremental_add", "landscape_add_v1"))
-    items.append((f"layer:{variable_name}:source_id", source_id))
-    items.append((f"layer:{variable_name}:fingerprint", fingerprint))
-    items.append((f"layer:{variable_name}:params_json", params_json))
+        manifest["variables"] = existing_vars
+        _write_manifest_atomic(store_path, manifest)
 
-    new_inputs_id = hash_inputs_id(items, method=unifier.fingerprint_method)
+        # 11) Update inputs_id deterministically
+        items: list[tuple[str, str]] = []
+        items.append(("wind:grid_id", wind_grid_id))
+        items.append(("wind:inputs_id", wind_inputs_id))
+        items.append(("mask_policy", "nan+valid_mask_in_landscape"))
+        items.append(("region", _stable_json(getattr(atlas, "region", None))))
+        items.append(("chunk_policy", _stable_json(unifier.chunk_policy)))
+        items.append(("incremental_add", "landscape_add_v1"))
+        items.append((f"layer:{variable_name}:source_id", source_id))
+        items.append((f"layer:{variable_name}:fingerprint", fingerprint))
+        items.append((f"layer:{variable_name}:params_json", params_json))
 
-    # Update store attrs (reopen to ensure we have latest state)
-    root = zarr.open_group(store_path, mode="a")
-    root.attrs["inputs_id"] = new_inputs_id
-    # grid_id remains unchanged (preserved from step 8)
+        new_inputs_id = hash_inputs_id(items, method=unifier.fingerprint_method)
+
+        # Update store attrs (reopen to ensure we have latest state)
+        root = zarr.open_group(store_path, mode="a")
+        root.attrs["inputs_id"] = new_inputs_id
+        # grid_id remains unchanged (preserved from step 8)
 
     return True
 
@@ -1140,15 +1081,9 @@ def compute_air_density_correction(
 
     # 1) Require canonical stores exist
     if not wind_path.exists():
-        raise FileNotFoundError(
-            f"wind.zarr not found at {wind_path}. "
-            "Run atlas.build_canonical() first."
-        )
+        raise FileNotFoundError(f"wind.zarr not found at {wind_path}. Run atlas.build_canonical() first.")
     if not landscape_path.exists():
-        raise FileNotFoundError(
-            f"landscape.zarr not found at {landscape_path}. "
-            "Run atlas.build_canonical() first."
-        )
+        raise FileNotFoundError(f"landscape.zarr not found at {landscape_path}. Run atlas.build_canonical() first.")
 
     # 2) Open canonical stores
     chunk_y = unifier.chunk_policy.get("y", 1024)
@@ -1185,15 +1120,12 @@ def compute_air_density_correction(
         else:
             template = weibull_a
     else:
-        raise RuntimeError(
-            "wind.zarr missing 'weibull_A' variable for template grid."
-        )
+        raise RuntimeError("wind.zarr missing 'weibull_A' variable for template grid.")
 
     # 5) Get elevation from landscape store
     if "elevation" not in land.data_vars:
         raise RuntimeError(
-            "landscape.zarr missing 'elevation' variable. "
-            "Ensure landscape store was materialized with elevation."
+            "landscape.zarr missing 'elevation' variable. Ensure landscape store was materialized with elevation."
         )
     elevation = land["elevation"]
 

@@ -8,7 +8,7 @@ Verifies CONTRACT A9 compliance:
 
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from cleo.domains import WindDomain
 
@@ -38,9 +38,7 @@ class TestTimebaseRejection:
                 lifetime_a=25,
             )
 
-    def test_compute_rejects_hours_per_year_for_min_lcoe_turbine(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compute_rejects_hours_per_year_for_min_lcoe_turbine(self, tmp_path: Path) -> None:
         domain = self._make_mock_domain(tmp_path)
 
         with pytest.raises(ValueError, match="cannot be passed to compute"):
@@ -54,9 +52,7 @@ class TestTimebaseRejection:
                 lifetime_a=25,
             )
 
-    def test_compute_rejects_hours_per_year_for_optimal_power(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compute_rejects_hours_per_year_for_optimal_power(self, tmp_path: Path) -> None:
         domain = self._make_mock_domain(tmp_path)
 
         with pytest.raises(ValueError, match="cannot be passed to compute"):
@@ -70,9 +66,7 @@ class TestTimebaseRejection:
                 lifetime_a=25,
             )
 
-    def test_compute_rejects_hours_per_year_for_optimal_energy(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compute_rejects_hours_per_year_for_optimal_energy(self, tmp_path: Path) -> None:
         domain = self._make_mock_domain(tmp_path)
 
         with pytest.raises(ValueError, match="cannot be passed to compute"):
@@ -100,9 +94,7 @@ class TestTimebaseRejection:
                 lifetime_a=25,
             )
 
-    def test_compute_rejects_hours_per_year_for_physics_metric(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compute_rejects_hours_per_year_for_physics_metric(self, tmp_path: Path) -> None:
         """Even physics metrics should reject hours_per_year at the gate."""
         domain = self._make_mock_domain(tmp_path)
 
@@ -113,9 +105,7 @@ class TestTimebaseRejection:
                 hours_per_year=8760,
             )
 
-    def test_compute_rejects_hours_per_year_for_mean_wind_speed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compute_rejects_hours_per_year_for_mean_wind_speed(self, tmp_path: Path) -> None:
         domain = self._make_mock_domain(tmp_path)
 
         with pytest.raises(ValueError, match="cannot be passed to compute"):

@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 import rasterio
 import rioxarray as rxr
-import xarray as xr
 from rasterio.crs import CRS
 
 from cleo import Atlas
@@ -25,9 +24,7 @@ def _create_raster(
     nodata: float = np.nan,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], data.shape[1], data.shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], data.shape[1], data.shape[0])
     profile = {
         "driver": "GTiff",
         "dtype": "float32",

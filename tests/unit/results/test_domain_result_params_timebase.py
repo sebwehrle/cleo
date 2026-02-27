@@ -9,13 +9,10 @@ These tests verify the injection logic in WindDomain.compute() without
 requiring full store access.
 """
 
-import json
 import numpy as np
-import pytest
 import xarray as xr
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from cleo.results import DomainResult
 
@@ -79,7 +76,7 @@ class TestTimebaseInjectionInCompute:
 
     def test_economics_metric_gets_hours_per_year_injected(self) -> None:
         """Economics metrics receive hours_per_year in kwargs."""
-        from cleo.domains import WindDomain, _WIND_METRICS
+        from cleo.domains import _WIND_METRICS
 
         # Verify the injection point exists in compute()
         # by checking that economics metrics have hours_per_year in allowed set
@@ -87,9 +84,7 @@ class TestTimebaseInjectionInCompute:
 
         for metric in economics_metrics:
             spec = _WIND_METRICS[metric]
-            assert "hours_per_year" in spec["allowed"], (
-                f"{metric} must allow hours_per_year (for internal injection)"
-            )
+            assert "hours_per_year" in spec["allowed"], f"{metric} must allow hours_per_year (for internal injection)"
 
     def test_physics_metric_does_not_allow_hours_per_year(self) -> None:
         """Physics metrics should not allow hours_per_year."""
@@ -99,9 +94,7 @@ class TestTimebaseInjectionInCompute:
 
         for metric in physics_metrics:
             spec = _WIND_METRICS[metric]
-            assert "hours_per_year" not in spec["allowed"], (
-                f"{metric} must NOT allow hours_per_year"
-            )
+            assert "hours_per_year" not in spec["allowed"], f"{metric} must NOT allow hours_per_year"
 
 
 class TestTimebaseInjectionLogic:

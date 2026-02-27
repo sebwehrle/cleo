@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
-import xarray as xr
 from rasterio.crs import CRS
 
 import cleo
@@ -38,9 +37,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -145,9 +142,7 @@ class TestTimebaseIntegration:
         assert len(valid1) > 0
         assert not np.allclose(valid1, valid2, rtol=1e-6)
 
-    def test_timebase_does_not_affect_capacity_factors(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_timebase_does_not_affect_capacity_factors(self, materialized_atlas: Atlas) -> None:
         """CF values are identical regardless of timebase configuration."""
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]
@@ -164,7 +159,8 @@ class TestTimebaseIntegration:
 
         # Values should be identical
         np.testing.assert_allclose(
-            cf1.values, cf2.values,
+            cf1.values,
+            cf2.values,
             rtol=1e-10,
             equal_nan=True,
         )
@@ -186,9 +182,7 @@ class TestTimebaseIntegration:
         assert "cleo:hours_per_year" in lcoe.attrs
         assert lcoe.attrs["cleo:hours_per_year"] == Atlas.DEFAULT_HOURS_PER_YEAR
 
-    def test_capacity_factors_has_no_hours_per_year_metadata(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_capacity_factors_has_no_hours_per_year_metadata(self, materialized_atlas: Atlas) -> None:
         """CF outputs do NOT carry cleo:hours_per_year attr."""
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]
@@ -211,9 +205,7 @@ class TestTimebaseIntegration:
         assert clone.timebase_configured == {"hours_per_year": 8760.0}
         assert clone._effective_hours_per_year() == 8760.0
 
-    def test_lcoe_metadata_reflects_configured_timebase(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_lcoe_metadata_reflects_configured_timebase(self, materialized_atlas: Atlas) -> None:
         """LCOE metadata reflects the atlas-configured timebase value."""
         atlas = materialized_atlas
         tid = atlas.wind.turbines[0]

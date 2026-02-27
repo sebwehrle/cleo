@@ -73,9 +73,7 @@ class TestGetProbePoints:
         data[:, 0] = np.nan
         data[:, -1] = np.nan
 
-        template = xr.DataArray(
-            data, dims=("y", "x"), coords={"y": y, "x": x}, name="template"
-        )
+        template = xr.DataArray(data, dims=("y", "x"), coords={"y": y, "x": x}, name="template")
         ds = xr.Dataset({"template": template})
         pts = _get_probe_points(ds, n=4)
         # Should still find valid interior points
@@ -147,9 +145,7 @@ class TestProbeScalars:
 class TestValidateValues:
     """Tests for _validate_values policy-driven validation."""
 
-    def _make_ds_with_template(
-        self, shape=(10, 10), nan_edges: bool = False
-    ) -> xr.Dataset:
+    def _make_ds_with_template(self, shape=(10, 10), nan_edges: bool = False) -> xr.Dataset:
         """Create dataset with template."""
         y = np.arange(shape[0], dtype=float)
         x = np.arange(shape[1], dtype=float)
@@ -159,9 +155,7 @@ class TestValidateValues:
             data[-1, :] = np.nan
             data[:, 0] = np.nan
             data[:, -1] = np.nan
-        template = xr.DataArray(
-            data, dims=("y", "x"), coords={"y": y, "x": x}, name="template"
-        )
+        template = xr.DataArray(data, dims=("y", "x"), coords={"y": y, "x": x}, name="template")
         return xr.Dataset({"template": template})
 
     def test_validation_none_skips_checks(self):
@@ -170,14 +164,10 @@ class TestValidateValues:
         y = ds.coords["y"].values
         x = ds.coords["x"].values
         # Create DataArray with negative values (would fail check_positive)
-        da = xr.DataArray(
-            np.full((10, 10), -5.0), dims=("y", "x"), coords={"y": y, "x": x}
-        )
+        da = xr.DataArray(np.full((10, 10), -5.0), dims=("y", "x"), coords={"y": y, "x": x})
 
         # Should NOT raise even with check_positive=True
-        _validate_values(
-            da, ds, validation="none", check_positive=True, context="test"
-        )
+        _validate_values(da, ds, validation="none", check_positive=True, context="test")
 
     def test_validation_full_checks_all_values(self):
         """validation='full' checks all values in array."""
@@ -186,12 +176,8 @@ class TestValidateValues:
         x = ds.coords["x"].values
 
         # Create valid DataArray
-        da_valid = xr.DataArray(
-            np.ones((10, 10)), dims=("y", "x"), coords={"y": y, "x": x}
-        )
-        _validate_values(
-            da_valid, ds, validation="full", check_positive=True, context="test"
-        )
+        da_valid = xr.DataArray(np.ones((10, 10)), dims=("y", "x"), coords={"y": y, "x": x})
+        _validate_values(da_valid, ds, validation="full", check_positive=True, context="test")
 
         # Create DataArray with one negative value
         data = np.ones((10, 10))
@@ -199,9 +185,7 @@ class TestValidateValues:
         da_invalid = xr.DataArray(data, dims=("y", "x"), coords={"y": y, "x": x})
 
         with pytest.raises(ValueError, match="must be > 0"):
-            _validate_values(
-                da_invalid, ds, validation="full", check_positive=True, context="test"
-            )
+            _validate_values(da_invalid, ds, validation="full", check_positive=True, context="test")
 
     def test_validation_probe_checks_probe_points_only(self):
         """validation='probe' only checks values at probe points."""
@@ -220,9 +204,7 @@ class TestValidateValues:
         da = xr.DataArray(data, dims=("y", "x"), coords={"y": y, "x": x})
 
         # Should pass because probe points are valid
-        _validate_values(
-            da, ds, validation="probe", check_positive=True, context="test"
-        )
+        _validate_values(da, ds, validation="probe", check_positive=True, context="test")
 
     def test_validation_probe_detects_invalid_at_probe_point(self):
         """validation='probe' raises when probe point has invalid value."""
@@ -242,9 +224,7 @@ class TestValidateValues:
         da = xr.DataArray(data, dims=("y", "x"), coords={"y": y, "x": x})
 
         with pytest.raises(ValueError, match="must be > 0"):
-            _validate_values(
-                da, ds, validation="probe", check_positive=True, context="test"
-            )
+            _validate_values(da, ds, validation="probe", check_positive=True, context="test")
 
     def test_validation_auto_uses_probe_for_dask(self):
         """validation='auto' uses probe mode for dask-backed arrays."""
@@ -259,9 +239,7 @@ class TestValidateValues:
         da = xr.DataArray(darr, dims=("y", "x"), coords={"y": y, "x": x})
 
         # Should NOT materialize the full array
-        _validate_values(
-            da, ds, validation="auto", check_positive=True, context="test"
-        )
+        _validate_values(da, ds, validation="auto", check_positive=True, context="test")
 
         # Output should still be dask-backed (validation didn't compute it)
         assert _is_dask_backed(da)
@@ -279,9 +257,7 @@ class TestValidateValues:
 
         # Should detect invalid value (full check)
         with pytest.raises(ValueError, match="must be > 0"):
-            _validate_values(
-                da, ds, validation="auto", check_positive=True, context="test"
-            )
+            _validate_values(da, ds, validation="auto", check_positive=True, context="test")
 
     def test_template_absent_skips_probe(self):
         """When template is absent, probe mode skips value checks gracefully."""
@@ -293,9 +269,7 @@ class TestValidateValues:
         )
 
         # Should NOT raise - probe mode skips when template absent
-        _validate_values(
-            da, ds, validation="probe", check_positive=True, context="test"
-        )
+        _validate_values(da, ds, validation="probe", check_positive=True, context="test")
 
     def test_check_range_validation(self):
         """check_range validates values are within specified bounds."""
@@ -304,30 +278,18 @@ class TestValidateValues:
         x = ds.coords["x"].values
 
         # Valid range
-        da_valid = xr.DataArray(
-            np.full((5, 5), 1.0), dims=("y", "x"), coords={"y": y, "x": x}
-        )
-        _validate_values(
-            da_valid, ds, validation="full", check_range=(0.5, 2.0), context="test"
-        )
+        da_valid = xr.DataArray(np.full((5, 5), 1.0), dims=("y", "x"), coords={"y": y, "x": x})
+        _validate_values(da_valid, ds, validation="full", check_range=(0.5, 2.0), context="test")
 
         # Out of range (too high)
-        da_high = xr.DataArray(
-            np.full((5, 5), 5.0), dims=("y", "x"), coords={"y": y, "x": x}
-        )
+        da_high = xr.DataArray(np.full((5, 5), 5.0), dims=("y", "x"), coords={"y": y, "x": x})
         with pytest.raises(ValueError, match="outside expected range"):
-            _validate_values(
-                da_high, ds, validation="full", check_range=(0.5, 2.0), context="test"
-            )
+            _validate_values(da_high, ds, validation="full", check_range=(0.5, 2.0), context="test")
 
         # Out of range (too low)
-        da_low = xr.DataArray(
-            np.full((5, 5), 0.1), dims=("y", "x"), coords={"y": y, "x": x}
-        )
+        da_low = xr.DataArray(np.full((5, 5), 0.1), dims=("y", "x"), coords={"y": y, "x": x})
         with pytest.raises(ValueError, match="outside expected range"):
-            _validate_values(
-                da_low, ds, validation="full", check_range=(0.5, 2.0), context="test"
-            )
+            _validate_values(da_low, ds, validation="full", check_range=(0.5, 2.0), context="test")
 
     def test_check_nan_validation(self):
         """check_nan validates that array contains no NaN values."""
@@ -336,12 +298,8 @@ class TestValidateValues:
         x = ds.coords["x"].values
 
         # No NaN
-        da_valid = xr.DataArray(
-            np.ones((5, 5)), dims=("y", "x"), coords={"y": y, "x": x}
-        )
-        _validate_values(
-            da_valid, ds, validation="full", check_nan=True, context="test"
-        )
+        da_valid = xr.DataArray(np.ones((5, 5)), dims=("y", "x"), coords={"y": y, "x": x})
+        _validate_values(da_valid, ds, validation="full", check_nan=True, context="test")
 
         # Has NaN
         data = np.ones((5, 5))
@@ -349,9 +307,7 @@ class TestValidateValues:
         da_nan = xr.DataArray(data, dims=("y", "x"), coords={"y": y, "x": x})
 
         with pytest.raises(ValueError, match="NaN"):
-            _validate_values(
-                da_nan, ds, validation="full", check_nan=True, context="test"
-            )
+            _validate_values(da_nan, ds, validation="full", check_nan=True, context="test")
 
 
 class TestValidationWithDaskArrays:
@@ -376,9 +332,7 @@ class TestValidationWithDaskArrays:
         da = xr.DataArray(darr, dims=("y", "x"), coords={"y": y, "x": x})
 
         # Validation should use probe mode (not compute full array)
-        _validate_values(
-            da, ds, validation="auto", check_positive=True, context="test"
-        )
+        _validate_values(da, ds, validation="auto", check_positive=True, context="test")
 
         # Array should still be dask-backed
         assert _is_dask_backed(da)
@@ -410,6 +364,4 @@ class TestValidationWithDaskArrays:
         da = xr.DataArray(darr, dims=("y", "x"), coords={"y": y, "x": x})
 
         with pytest.raises(ValueError, match="must be > 0"):
-            _validate_values(
-                da, ds, validation="auto", check_positive=True, context="test"
-            )
+            _validate_values(da, ds, validation="auto", check_positive=True, context="test")

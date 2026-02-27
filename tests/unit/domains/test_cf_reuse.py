@@ -2,7 +2,6 @@
 
 import json
 import numpy as np
-import pytest
 import xarray as xr
 
 from cleo.domains import _cf_spec_matches, _resolve_cf_spec
@@ -112,7 +111,9 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 1.0
         cf.attrs["cleo:turbines_json"] = json.dumps(["T1", "T2"])
 
-        spec = _resolve_cf_spec(None)  # Defaults: mode=direct_cf_quadrature, air_density=False, rews_n=12, loss_factor=1.0
+        spec = _resolve_cf_spec(
+            None
+        )  # Defaults: mode=direct_cf_quadrature, air_density=False, rews_n=12, loss_factor=1.0
         turbines = ("T1", "T2")
 
         assert _cf_spec_matches(cf, spec, turbines)
@@ -126,12 +127,14 @@ class TestCfSpecMatches:
         cf.attrs["cleo:loss_factor"] = 0.95
         cf.attrs["cleo:turbines_json"] = json.dumps(["TurbineA"])
 
-        spec = _resolve_cf_spec({
-            "mode": "hub",
-            "air_density": True,
-            "rews_n": 24,
-            "loss_factor": 0.95,
-        })
+        spec = _resolve_cf_spec(
+            {
+                "mode": "hub",
+                "air_density": True,
+                "rews_n": 24,
+                "loss_factor": 0.95,
+            }
+        )
         turbines = ("TurbineA",)
 
         assert _cf_spec_matches(cf, spec, turbines)

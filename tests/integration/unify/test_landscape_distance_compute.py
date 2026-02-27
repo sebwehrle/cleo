@@ -99,9 +99,7 @@ def _create_gwa_raster(
         data = np.random.rand(*shape).astype(np.float32) * 10 + 1
     data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
     profile = {
         "driver": "GTiff",
         "dtype": "float32",
@@ -123,9 +121,7 @@ def _create_elevation_raster(
     bounds: tuple[float, float, float, float] = (3990000, 2590000, 4110000, 2710000),
 ) -> None:
     data = np.random.rand(*shape).astype(np.float32) * 3000
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
     profile = {
         "driver": "GTiff",
         "dtype": "float32",
@@ -156,9 +152,7 @@ def _create_binary_layer(
     else:
         raise ValueError(f"Unsupported binary layer mode: {mode!r}")
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
     profile = {
         "driver": "GTiff",
         "dtype": "float32",

@@ -1,11 +1,8 @@
 # %% imports
 import numpy as np
 import pandas as pd
-import xarray as xr
 
 from cleo.units import (
-    LEGACY_UNIT_ATTR_KEY,
-    UNIT_ATTR_KEY,
     conversion_factor,
     get_unit_attr,
     set_unit_attr,
@@ -33,9 +30,7 @@ def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
 
         unit = from_unit if from_unit is not None else get_unit_attr(data_var)
         if unit is None:
-            raise ValueError(
-                f"No from-unit given and no 'units'/'unit' attr present for variable '{var}'."
-            )
+            raise ValueError(f"No from-unit given and no 'units'/'unit' attr present for variable '{var}'.")
 
         factor = conversion_factor(unit, to_unit)
         result = data_var * factor
@@ -102,10 +97,12 @@ def flatten(
 
         if {"x", "y"} == set(data_var.dims):
             df = data_var.to_dataframe().dropna()
-            df.index = pd.MultiIndex.from_arrays([
-                np.round(df.index.get_level_values("y"), digits),
-                np.round(df.index.get_level_values("x"), digits),
-            ])
+            df.index = pd.MultiIndex.from_arrays(
+                [
+                    np.round(df.index.get_level_values("y"), digits),
+                    np.round(df.index.get_level_values("x"), digits),
+                ]
+            )
             collect_df.append(df)
 
         elif len(data_var.dims) == 3 and {"x", "y"}.issubset(set(data_var.dims)):
@@ -117,10 +114,12 @@ def flatten(
                 coord_value = coord.item() if hasattr(coord, "item") else coord.data
                 data_slice.name = f"{var_name}_{non_spatial_dim}_{coord_value}"
                 df = data_slice.to_dataframe().dropna()
-                df.index = pd.MultiIndex.from_arrays([
-                    np.round(df.index.get_level_values("y"), digits),
-                    np.round(df.index.get_level_values("x"), digits),
-                ])
+                df.index = pd.MultiIndex.from_arrays(
+                    [
+                        np.round(df.index.get_level_values("y"), digits),
+                        np.round(df.index.get_level_values("x"), digits),
+                    ]
+                )
                 collect_df.append(df)
 
         else:

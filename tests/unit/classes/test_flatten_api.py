@@ -23,14 +23,21 @@ def test_atlas_flatten_wind_domain(tmp_path) -> None:
         {
             "template": (("y", "x"), np.ones((2, 2))),
             "v2": (("y", "x"), np.array([[1.0, 2.0], [3.0, np.nan]])),
-            "v3": (("height", "y", "x"), np.array([
-                [[10.0, 11.0], [12.0, np.nan]],
-                [[20.0, 21.0], [22.0, np.nan]],
-            ])),
+            "v3": (
+                ("height", "y", "x"),
+                np.array(
+                    [
+                        [[10.0, 11.0], [12.0, np.nan]],
+                        [[20.0, 21.0], [22.0, np.nan]],
+                    ]
+                ),
+            ),
         },
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0], "height": [50, 100]},
     )
-    landscape = xr.Dataset({"valid_mask": (("y", "x"), np.ones((2, 2), dtype=bool))}, coords={"x": [0.0, 1.0], "y": [1.0, 0.0]})
+    landscape = xr.Dataset(
+        {"valid_mask": (("y", "x"), np.ones((2, 2), dtype=bool))}, coords={"x": [0.0, 1.0], "y": [1.0, 0.0]}
+    )
     atlas = _atlas_with_domain_data(tmp_path, wind_ds=wind, landscape_ds=landscape)
 
     df = atlas.flatten(domain="wind")
@@ -58,7 +65,9 @@ def test_atlas_flatten_landscape_domain(tmp_path) -> None:
 
 def test_atlas_flatten_invalid_domain_raises(tmp_path) -> None:
     wind = xr.Dataset({"dummy": (("y", "x"), np.ones((2, 2)))}, coords={"x": [0.0, 1.0], "y": [1.0, 0.0]})
-    landscape = xr.Dataset({"valid_mask": (("y", "x"), np.ones((2, 2), dtype=bool))}, coords={"x": [0.0, 1.0], "y": [1.0, 0.0]})
+    landscape = xr.Dataset(
+        {"valid_mask": (("y", "x"), np.ones((2, 2), dtype=bool))}, coords={"x": [0.0, 1.0], "y": [1.0, 0.0]}
+    )
     atlas = _atlas_with_domain_data(tmp_path, wind_ds=wind, landscape_ds=landscape)
 
     with pytest.raises(ValueError, match="Unsupported domain"):

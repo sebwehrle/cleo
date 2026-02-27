@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from tests.helpers.oracles import weibull_pdf as weibull_pdf_oracle, weibull_tail as weibull_tail_probability
+from tests.helpers.oracles import weibull_pdf as weibull_pdf_oracle
 from tests.helpers.factories import wind_speed_axis
 
 from cleo.assess import (
@@ -29,6 +29,7 @@ from cleo.assess import (
 # ============================================================================
 # Test A: Interpolation Oracle
 # ============================================================================
+
 
 def test_interpolate_weibull_log_height_linear_oracle():
     """
@@ -141,6 +142,7 @@ def test_interpolate_weibull_insufficient_heights_raises():
 # Test B: Hub-height PDF Oracle
 # ============================================================================
 
+
 def test_weibull_pdf_oracle_pointwise():
     """
     Test weibull_probability_density against closed-form oracle.
@@ -178,8 +180,11 @@ def test_weibull_pdf_oracle_pointwise():
     pdf_oracle_positive = pdf_oracle[u > 0]
 
     np.testing.assert_allclose(
-        pdf_pkg_positive, pdf_oracle_positive, rtol=1e-12, atol=1e-12,
-        err_msg="PDF values do not match oracle for u > 0"
+        pdf_pkg_positive,
+        pdf_oracle_positive,
+        rtol=1e-12,
+        atol=1e-12,
+        err_msg="PDF values do not match oracle for u > 0",
     )
 
 
@@ -208,14 +213,14 @@ def test_weibull_pdf_spatial_matches_oracle():
             pdf_oracle = weibull_pdf_oracle(u, k_cell, A_cell)
 
             np.testing.assert_allclose(
-                pdf_cell, pdf_oracle, rtol=1e-12, atol=1e-12,
-                err_msg=f"PDF mismatch at cell (y={iy}, x={ix})"
+                pdf_cell, pdf_oracle, rtol=1e-12, atol=1e-12, err_msg=f"PDF mismatch at cell (y={iy}, x={ix})"
             )
 
 
 # ============================================================================
 # Test F: Exact-height identity (interpolator returns exact slice at grid point)
 # ============================================================================
+
 
 def test_interpolate_exact_height_identity():
     """
@@ -253,18 +258,17 @@ def test_interpolate_exact_height_identity():
 
         # Must match exactly (or within floating point epsilon)
         np.testing.assert_allclose(
-            A_hub.values, A_expected, rtol=0, atol=1e-15,
-            err_msg=f"A at exact height {h} differs from slice"
+            A_hub.values, A_expected, rtol=0, atol=1e-15, err_msg=f"A at exact height {h} differs from slice"
         )
         np.testing.assert_allclose(
-            k_hub.values, k_expected, rtol=0, atol=1e-15,
-            err_msg=f"k at exact height {h} differs from slice"
+            k_hub.values, k_expected, rtol=0, atol=1e-15, err_msg=f"k at exact height {h} differs from slice"
         )
 
 
 # ============================================================================
 # Test G: PDF probability mass sanity check
 # ============================================================================
+
 
 def test_pdf_mass_close_to_one_on_grid():
     """

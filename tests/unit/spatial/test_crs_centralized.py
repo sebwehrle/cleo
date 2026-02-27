@@ -128,6 +128,7 @@ class TestReprojectRasterIfNeeded:
     def raster_4326(self):
         """Create a simple raster DataArray in EPSG:4326."""
         import rioxarray  # noqa: F401
+
         data = np.ones((3, 4), dtype=np.float32)
         da = xr.DataArray(
             data,
@@ -204,6 +205,7 @@ class TestNoUnnecessaryReprojection:
     def test_raster_same_crs_no_copy(self):
         """Raster with same CRS should not be reprojected."""
         import rioxarray  # noqa: F401
+
         data = np.ones((3, 4), dtype=np.float32)
         da = xr.DataArray(
             data,

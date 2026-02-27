@@ -11,7 +11,6 @@ from tests.helpers.optional import requires_dask
 requires_dask()
 
 import numpy as np
-import pytest
 import xarray as xr
 import dask.array as da
 

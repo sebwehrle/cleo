@@ -78,7 +78,6 @@ def mean_wind_speed_from_weibull(
     return mean_ws.rename("mean_wind_speed").assign_attrs(units="m/s")
 
 
-
 def _interp_power_curve(u_eq: xr.DataArray, u: np.ndarray, p: np.ndarray) -> xr.DataArray:
     """
     Interpolate power curve at equivalent wind speeds (dask-friendly).
@@ -110,7 +109,8 @@ def _trapz_over_wind_speed(y: xr.DataArray, x: xr.DataArray) -> xr.DataArray:
     """
     return xr.apply_ufunc(
         np.trapezoid,
-        y, x,
+        y,
+        x,
         input_core_dims=[["wind_speed"], ["wind_speed"]],
         output_core_dims=[[]],
         dask="parallelized",
@@ -144,8 +144,7 @@ def _align_pdf_to_wind_speed_exact(
     missing_labels = ~np.isin(tgt, src)
     if bool(np.any(missing_labels)):
         raise ValueError(
-            "PDF wind_speed coordinates do not exactly match integration grid. "
-            "No nearest alignment is allowed."
+            "PDF wind_speed coordinates do not exactly match integration grid. No nearest alignment is allowed."
         )
 
     return pdf.reindex(wind_speed=tgt).transpose("wind_speed", ...)
@@ -312,10 +311,7 @@ def capacity_factors_v1(
     :return: DataArray with capacity factors, dims (turbine, y, x)
     """
     if mode not in ("hub", "rews", "direct_cf_quadrature", "momentmatch_weibull"):
-        raise ValueError(
-            "mode must be 'hub', 'rews', 'direct_cf_quadrature', or "
-            f"'momentmatch_weibull', got {mode!r}"
-        )
+        raise ValueError(f"mode must be 'hub', 'rews', 'direct_cf_quadrature', or 'momentmatch_weibull', got {mode!r}")
 
     if mode in ("rews", "direct_cf_quadrature", "momentmatch_weibull") and rotor_diameters_m is None:
         raise ValueError(f"rotor_diameters_m required when mode={mode!r}")
@@ -572,7 +568,7 @@ def _momentmatch_cf_and_rews_for_turbine(
     rews = (m3_acc ** (1.0 / 3.0)).rename("rews_mps")
 
     # Moment match Weibull via r = m3 / m1^3.
-    r = m3_acc / (m1_acc ** 3)
+    r = m3_acc / (m1_acc**3)
     k_rot = _solve_k_from_moment_ratio(r)
 
     log_A_rot = np.log(m1_acc) - xr.apply_ufunc(gammaln, 1.0 + (1.0 / k_rot), dask="parallelized")
@@ -745,8 +741,7 @@ def _interp_da_to_heights_log(
     h_min, h_max = float(np.min(heights)), float(np.max(heights))
     if float(np.min(th)) < h_min or float(np.max(th)) > h_max:
         raise ValueError(
-            f"target_heights outside available height range [{h_min}, {h_max}]. "
-            "Extrapolation is not supported."
+            f"target_heights outside available height range [{h_min}, {h_max}]. Extrapolation is not supported."
         )
 
     ln_heights = np.log(heights)
@@ -774,7 +769,7 @@ def _weibull_moment(
 
     This is vectorized and dask-friendly.
     """
-    return (A ** p) * gamma(1 + (p / k))
+    return (A**p) * gamma(1 + (p / k))
 
 
 def _rews_moment_factor(
@@ -846,9 +841,8 @@ def _rews_moment_factor(
     return f
 
 
-
-
 # %% Weibull and cost functions
+
 
 def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
     """
@@ -879,11 +873,10 @@ def weibull_probability_density(u_power_curve, weibull_k, weibull_a):
         # Avoid the u==0 singular branch for k<1 (0**negative), which is later
         # explicitly set to 0 by contract.
         z_safe = xr.where(u_da == 0, 1.0, z)
-        pdf = (weibull_k / weibull_a) * (z_safe ** (weibull_k - 1)) * np.exp(-(z ** weibull_k))
+        pdf = (weibull_k / weibull_a) * (z_safe ** (weibull_k - 1)) * np.exp(-(z**weibull_k))
 
     # Exact u=0 handling (avoids inf for k<1); keep dtype float
     pdf = xr.where(u_da == 0, 0.0, pdf)
 
     pdf = pdf.transpose("wind_speed", ...)  # stable dim order
     return pdf.squeeze().rename("weibull_probability_density")
-

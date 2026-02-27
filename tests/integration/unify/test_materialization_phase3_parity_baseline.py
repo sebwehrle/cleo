@@ -59,9 +59,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
     profile = {
         "driver": "GTiff",
         "dtype": "float32",
@@ -201,12 +199,13 @@ class TestPhase3MaterializationBaseline:
         assert len(json.loads(wind.attrs.get("cleo_manifest_sources_json"))) == 30
         assert len(json.loads(wind.attrs.get("cleo_manifest_variables_json"))) == 9
 
-        assert _checksum_subset(
-            wind["weibull_A"].sel(height=100).isel(y=slice(0, 3), x=slice(0, 3))
-        ) == _GOLDEN["wind_subset_checksum"]
-        assert _checksum_subset(
-            wind["template"].isel(y=slice(0, 3), x=slice(0, 3))
-        ) == _GOLDEN["wind_template_checksum"]
+        assert (
+            _checksum_subset(wind["weibull_A"].sel(height=100).isel(y=slice(0, 3), x=slice(0, 3)))
+            == _GOLDEN["wind_subset_checksum"]
+        )
+        assert (
+            _checksum_subset(wind["template"].isel(y=slice(0, 3), x=slice(0, 3))) == _GOLDEN["wind_template_checksum"]
+        )
 
         # Landscape: stable structure/attrs plus deterministic subsets.
         assert land.attrs.get("store_state") == "complete"
@@ -219,12 +218,13 @@ class TestPhase3MaterializationBaseline:
         land_inputs_id = str(land.attrs.get("inputs_id", ""))
         assert len(land_inputs_id) == 16
 
-        assert _checksum_subset(
-            land["valid_mask"].astype(np.float64).isel(y=slice(0, 3), x=slice(0, 3))
-        ) == _GOLDEN["land_valid_mask_checksum"]
-        assert _checksum_subset(
-            land["elevation"].isel(y=slice(0, 3), x=slice(0, 3))
-        ) == _GOLDEN["land_elevation_checksum"]
+        assert (
+            _checksum_subset(land["valid_mask"].astype(np.float64).isel(y=slice(0, 3), x=slice(0, 3)))
+            == _GOLDEN["land_valid_mask_checksum"]
+        )
+        assert (
+            _checksum_subset(land["elevation"].isel(y=slice(0, 3), x=slice(0, 3))) == _GOLDEN["land_elevation_checksum"]
+        )
 
     def test_region_materialization_golden(self, phase3_baseline_atlas: Atlas) -> None:
         atlas = phase3_baseline_atlas
@@ -251,9 +251,11 @@ class TestPhase3MaterializationBaseline:
         assert [int(wind.sizes["y"]), int(wind.sizes["x"])] == [20, 20]
         assert [int(land.sizes["y"]), int(land.sizes["x"])] == [20, 20]
 
-        assert _checksum_subset(
-            wind["weibull_A"].sel(height=100).isel(y=slice(0, 3), x=slice(0, 3))
-        ) == _GOLDEN["region_wind_subset_checksum"]
-        assert _checksum_subset(
-            land["elevation"].isel(y=slice(0, 3), x=slice(0, 3))
-        ) == _GOLDEN["region_land_elevation_checksum"]
+        assert (
+            _checksum_subset(wind["weibull_A"].sel(height=100).isel(y=slice(0, 3), x=slice(0, 3)))
+            == _GOLDEN["region_wind_subset_checksum"]
+        )
+        assert (
+            _checksum_subset(land["elevation"].isel(y=slice(0, 3), x=slice(0, 3)))
+            == _GOLDEN["region_land_elevation_checksum"]
+        )

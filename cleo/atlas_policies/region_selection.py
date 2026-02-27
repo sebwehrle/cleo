@@ -30,9 +30,7 @@ def validate_nuts_level(level: int, *, valid_levels: tuple[int, ...]) -> int:
     except (TypeError, ValueError) as e:
         raise ValueError(f"NUTS level must be an integer, got {level!r}.") from e
     if level_i not in valid_levels:
-        raise ValueError(
-            f"Unsupported NUTS level {level_i!r}; expected one of {valid_levels}."
-        )
+        raise ValueError(f"Unsupported NUTS level {level_i!r}; expected one of {valid_levels}.")
     return level_i
 
 
@@ -48,9 +46,7 @@ def nuts_regions_level_names(
     level_i = validate_level(level)
     rows = [row for row in catalog_rows if int(row["level"]) == level_i]
     if not rows:
-        raise ValueError(
-            f"No NUTS level {level_i} regions found for atlas country {country!r}."
-        )
+        raise ValueError(f"No NUTS level {level_i} regions found for atlas country {country!r}.")
 
     seen = set()
     out: list[Any] = []
@@ -89,9 +85,7 @@ def resolve_region_name(
                 f"Region '{name}' is ambiguous within NUTS level {level_i}; "
                 f"matches IDs: {[str(r['nuts_id']) for r in matches_level]}."
             )
-        raise ValueError(
-            f"Region '{name}' not found in NUTS level {level_i} for country {country!r}."
-        )
+        raise ValueError(f"Region '{name}' not found in NUTS level {level_i} for country {country!r}.")
 
     matches_default = [row for row in matches if int(row["level"]) == default_level]
     if len(matches_default) == 1:
@@ -99,8 +93,7 @@ def resolve_region_name(
         return name_norm, str(row["nuts_id"]), default_level
     if len(matches_default) > 1:
         raise ValueError(
-            f"Region '{name}' is ambiguous at default NUTS level {default_level}; "
-            f"pass region_level explicitly."
+            f"Region '{name}' is ambiguous at default NUTS level {default_level}; pass region_level explicitly."
         )
 
     if len(matches) == 1:
@@ -108,10 +101,7 @@ def resolve_region_name(
         return name_norm, str(row["nuts_id"]), int(row["level"])
     if len(matches) > 1:
         levels = sorted({int(r["level"]) for r in matches})
-        raise ValueError(
-            f"Region '{name}' is ambiguous across NUTS levels {levels}; "
-            f"pass region_level explicitly."
-        )
+        raise ValueError(f"Region '{name}' is ambiguous across NUTS levels {levels}; pass region_level explicitly.")
 
     available_regions = default_regions_supplier()
     available = [str(r) for r in available_regions[:20]]

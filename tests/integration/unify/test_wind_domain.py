@@ -113,9 +113,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        *bounds, shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(*bounds, shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",

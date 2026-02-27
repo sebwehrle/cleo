@@ -11,19 +11,24 @@ import xarray as xr
 def turbine_overnight_cost(power, hub_height, rotor_diameter, year):
     """Estimate turbine overnight investment cost in EUR per kW."""
     rotor_area = np.pi * (rotor_diameter / 2) ** 2
-    spec_power = power * 10 ** 6 / rotor_area
-    cost = ((620 * np.log(hub_height)) - (1.68 * spec_power) + (182 * (2016 - year) ** 0.5) - 1005)
+    spec_power = power * 10**6 / rotor_area
+    cost = (620 * np.log(hub_height)) - (1.68 * spec_power) + (182 * (2016 - year) ** 0.5) - 1005
     return cost.astype("float")
 
 
-def grid_connect_cost(power):
+def grid_connect_cost(power, rate_eur_per_kw: float = 50.0):
     """
-    Calculate grid connection cost according to §54 (3,4) ElWOG.
+    Calculate grid connection cost.
+
+    Default rate (50 EUR/kW) is based on §54 (3,4) ElWOG:
     https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=20007045
+
     :param power: power in kW
+    :param rate_eur_per_kw: Grid connection cost rate in EUR/kW. Default is 50.0.
+        Set to 0.0 to exclude grid connection costs (e.g., for paper qLCOE).
     :return: absolute connection cost in EUR
     """
-    cost = 50 * power
+    cost = rate_eur_per_kw * power
     return cost
 
 
@@ -127,6 +132,7 @@ def lcoe_v1_from_capacity_factors(
     discount_rate: float,
     lifetime_a: int,
     hours_per_year: float = 8766.0,
+    grid_connect_cost_eur_per_kw: float = 50.0,
 ) -> xr.DataArray:
     """
     Compute LCOE from capacity factors (pure numerics, turbine-loop).
@@ -138,6 +144,9 @@ def lcoe_v1_from_capacity_factors(
             Represents location-dependent CAPEX fraction.
             0.0 = all CAPEX is turbine (location-independent).
             0.3 = 30% of CAPEX is BOS (location-dependent).
+        grid_connect_cost_eur_per_kw: Grid connection cost rate in EUR/kW.
+            Default is 50.0 (based on Austrian regulation §54 ElWOG).
+            Set to 0.0 to exclude grid connection costs (e.g., for paper qLCOE).
     """
     # bos_cost_share is the location-dependent share; turbine/location-independent is the remainder
     location_independent_share = 1.0 - float(bos_cost_share)
@@ -148,6 +157,7 @@ def lcoe_v1_from_capacity_factors(
         "om_fixed_eur_per_kw_a": float(om_fixed_eur_per_kw_a),
         "om_variable_eur_per_kwh": float(om_variable_eur_per_kwh),
         "bos_cost_share": float(bos_cost_share),
+        "grid_connect_cost_eur_per_kw": float(grid_connect_cost_eur_per_kw),
     }
 
     lcoe_list = []
@@ -159,7 +169,7 @@ def lcoe_v1_from_capacity_factors(
         oc_abs = oc_eur_per_kw * p_kw * location_independent_share
 
         # Grid connection cost (EUR, scalar).
-        gc_abs = float(grid_connect_cost(p_kw))
+        gc_abs = float(grid_connect_cost(p_kw, rate_eur_per_kw=grid_connect_cost_eur_per_kw))
 
         cf_turb = cf.sel(turbine=turbine_id)
         lc = levelized_cost(

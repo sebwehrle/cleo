@@ -17,7 +17,6 @@ from cleo.unification.raster_io import (
 )
 
 
-
 TILE_ID = "Copernicus_DSM_COG_10_N46_00_E009_00_DEM"
 ISO3 = "AUT"
 
@@ -124,8 +123,6 @@ def test_download_copdem_tile_not_found(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert "404" in str(exc_info.value)
 
 
-
-
 def test_download_copdem_tile_cleans_part(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Test that partial files are cleaned up on failure."""
     iso3 = "AUT"
@@ -144,8 +141,6 @@ def test_download_copdem_tile_cleans_part(monkeypatch: pytest.MonkeyPatch, tmp_p
     part = dest.with_suffix(".tif.part")
     # download_to_path handles cleanup, so part should not exist
     assert not part.exists()
-
-
 
 
 def test_download_copdem_tiles_for_bbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -207,8 +202,7 @@ def test_download_copdem_tiles_for_bbox(monkeypatch: pytest.MonkeyPatch, tmp_pat
         assert overwrite_arg is False
 
     expected_paths = [
-        tmp_path / "data" / "raw" / iso3 / "copdem" / tile_id / f"{tile_id}.tif"
-        for tile_id in expected_tile_ids
+        tmp_path / "data" / "raw" / iso3 / "copdem" / tile_id / f"{tile_id}.tif" for tile_id in expected_tile_ids
     ]
     assert result_paths == expected_paths
 
@@ -250,14 +244,10 @@ def test_download_copdem_tiles_for_bbox_determinism(monkeypatch: pytest.MonkeyPa
         return mock_download_copdem_tile
 
     monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tile", make_mock(calls1))
-    result1 = download_copdem_tiles_for_bbox(
-        tmp_path, "AUT", min_lon=9.2, min_lat=46.0, max_lon=11.1, max_lat=47.0
-    )
+    result1 = download_copdem_tiles_for_bbox(tmp_path, "AUT", min_lon=9.2, min_lat=46.0, max_lon=11.1, max_lat=47.0)
 
     monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tile", make_mock(calls2))
-    result2 = download_copdem_tiles_for_bbox(
-        tmp_path, "AUT", min_lon=9.2, min_lat=46.0, max_lon=11.1, max_lat=47.0
-    )
+    result2 = download_copdem_tiles_for_bbox(tmp_path, "AUT", min_lon=9.2, min_lat=46.0, max_lon=11.1, max_lat=47.0)
 
     assert calls1 == calls2, "Tile download order should be deterministic"
     assert result1 == result2, "Returned paths should be deterministic"

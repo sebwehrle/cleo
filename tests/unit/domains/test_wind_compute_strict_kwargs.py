@@ -21,9 +21,7 @@ class TestStrictKwargRejection:
         mock_atlas.landscape_data = MagicMock()
         return WindDomain(mock_atlas)
 
-    def test_compute_rejects_unknown_kwarg_for_capacity_factors(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compute_rejects_unknown_kwarg_for_capacity_factors(self, tmp_path: Path) -> None:
         domain = self._make_mock_domain(tmp_path)
 
         with pytest.raises(ValueError, match="Unknown parameter"):
@@ -33,9 +31,7 @@ class TestStrictKwargRejection:
                 bogus_param=42,
             )
 
-    def test_compute_rejects_unknown_kwarg_for_mean_wind_speed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compute_rejects_unknown_kwarg_for_mean_wind_speed(self, tmp_path: Path) -> None:
         domain = self._make_mock_domain(tmp_path)
 
         with pytest.raises(ValueError, match="Unknown parameter"):
@@ -92,9 +88,7 @@ class TestStrictKwargRejection:
         # hours_per_year should not be in the allowed list shown to user
         assert "hours_per_year" not in error_msg
 
-    def test_compute_accepts_valid_capacity_factors_params(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compute_accepts_valid_capacity_factors_params(self, tmp_path: Path) -> None:
         """Valid params should not raise unknown param error."""
         domain = self._make_mock_domain(tmp_path)
 

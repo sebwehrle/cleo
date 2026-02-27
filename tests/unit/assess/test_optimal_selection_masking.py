@@ -12,7 +12,7 @@ def _sample_lcoe() -> xr.DataArray:
     data = np.array(
         [
             [[10.0, np.nan], [5.0, 2.0]],  # turbine t0
-            [[3.0, np.nan], [7.0, 1.0]],   # turbine t1
+            [[3.0, np.nan], [7.0, 1.0]],  # turbine t1
         ],
         dtype=np.float64,
     )

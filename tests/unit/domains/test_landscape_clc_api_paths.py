@@ -57,9 +57,7 @@ def test_add_clc_category_requires_name_for_multi_code(tmp_path: Path) -> None:
         domain.add_clc_category([311, 312])
 
 
-def test_add_clc_category_multi_code_with_name_routes_to_add(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_add_clc_category_multi_code_with_name_routes_to_add(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     calls: list[dict] = []
@@ -97,9 +95,7 @@ def test_add_clc_category_raises_for_non_integer_list_entry(tmp_path: Path) -> N
         domain.add_clc_category(["not-an-int"])  # type: ignore[list-item]
 
 
-def test_add_clc_category_raises_when_default_name_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_add_clc_category_raises_when_default_name_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = make_landscape_domain_atlas_stub(tmp_path, include_build_clc=True)
     domain = LandscapeDomain(atlas)
     monkeypatch.setattr("cleo.clc.default_category_name", lambda _path, _code: None)

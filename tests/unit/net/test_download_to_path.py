@@ -1,7 +1,5 @@
 """net: download_to_path tests."""
 
-from pathlib import Path
-
 import pytest
 
 from cleo.net import download_to_path

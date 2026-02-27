@@ -114,9 +114,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -141,9 +139,7 @@ def _create_elevation_raster(
 ) -> None:
     """Create a legacy elevation GeoTIFF."""
     data = np.random.rand(*shape).astype(np.float32) * 3000
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -169,9 +165,7 @@ def _create_extra_layer_raster(
 ) -> None:
     """Create an extra layer GeoTIFF with constant values."""
     data = np.full(shape, fill_value, dtype=np.float32)
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -453,9 +447,7 @@ class TestIfExistsReplace:
         source_entry_after = next(s for s in sources_after if s["source_id"] == "land:raster:extra_layer")
         fingerprint_after = source_entry_after["fingerprint"]
 
-        assert fingerprint_before != fingerprint_after, (
-            "Fingerprint should change after replace"
-        )
+        assert fingerprint_before != fingerprint_after, "Fingerprint should change after replace"
 
 
 class TestConsolidatedReads:
@@ -634,22 +626,16 @@ class TestNoopExactMatchSemantics:
 
         # Add with pathA
         atlas.landscape.add("foo", path_a).materialize()
-        old_inputs = xr.open_zarr(
-            tmp_path / "landscape.zarr", consolidated=False
-        ).attrs["inputs_id"]
+        old_inputs = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False).attrs["inputs_id"]
 
         # Replace with pathB
         atlas.landscape.add("foo", path_b, if_exists="replace").materialize()
-        mid_inputs = xr.open_zarr(
-            tmp_path / "landscape.zarr", consolidated=False
-        ).attrs["inputs_id"]
+        mid_inputs = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False).attrs["inputs_id"]
         assert mid_inputs != old_inputs, "inputs_id should change after replace"
 
         # noop with pathB should succeed (exact match)
         atlas.landscape.add("foo", path_b, if_exists="noop").materialize()
-        after_inputs = xr.open_zarr(
-            tmp_path / "landscape.zarr", consolidated=False
-        ).attrs["inputs_id"]
+        after_inputs = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False).attrs["inputs_id"]
         assert after_inputs == mid_inputs, "inputs_id should not change after noop"
 
         # noop with pathA should raise (config mismatch)

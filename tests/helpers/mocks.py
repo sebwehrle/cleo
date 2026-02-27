@@ -8,7 +8,7 @@ from typing import Any
 
 import xarray as xr
 
-from .factories import ds_template_xy, ds_weibull_params, ds_wind_speed, power_curve_da, template_da, wind_speed_axis
+from .factories import ds_weibull_params, ds_wind_speed, power_curve_da, template_da, wind_speed_axis
 
 
 __all__ = [
@@ -69,6 +69,7 @@ class SimpleMockAtlas:
       - _set_var(name, da)
       - load_weibull_parameters(height)
     """
+
     data: xr.Dataset
     country: str = "TEST"
     crs: str = "EPSG:4326"

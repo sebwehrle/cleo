@@ -175,9 +175,7 @@ def _validate_values(
             is_invalid = da.isnull() | np.isinf(da)
             if bool(is_invalid.any()):
                 nan_count = int(is_invalid.sum())
-                raise ValueError(
-                    f"Invalid values {context}: {nan_count} NaN/Inf values found."
-                )
+                raise ValueError(f"Invalid values {context}: {nan_count} NaN/Inf values found.")
 
         # For remaining checks, work with finite values only
         finite_da = da.where(np.isfinite(da))
@@ -186,10 +184,7 @@ def _validate_values(
             min_val = finite_da.min(skipna=True)
             # min of empty array (all NaN) returns NaN
             if not np.isnan(float(min_val)) and float(min_val) <= 0:
-                raise ValueError(
-                    f"Invalid values {context}: values must be > 0. "
-                    f"Found min={float(min_val):.6g}"
-                )
+                raise ValueError(f"Invalid values {context}: values must be > 0. Found min={float(min_val):.6g}")
 
         if check_range is not None:
             median_val = finite_da.median(skipna=True)
@@ -198,8 +193,7 @@ def _validate_values(
                 lo, hi = check_range
                 if not (lo <= float(median_val) <= hi):
                     raise ValueError(
-                        f"Invalid values {context}: median={float(median_val):.6g} "
-                        f"outside expected range [{lo}, {hi}]"
+                        f"Invalid values {context}: median={float(median_val):.6g} outside expected range [{lo}, {hi}]"
                     )
 
     elif validation == "probe":
@@ -214,16 +208,13 @@ def _validate_values(
         if check_nan:
             if np.any(~np.isfinite(vals)):
                 nan_count = int(np.sum(~np.isfinite(vals)))
-                raise ValueError(
-                    f"Invalid values {context}: {nan_count}/{len(vals)} probe points are NaN/Inf."
-                )
+                raise ValueError(f"Invalid values {context}: {nan_count}/{len(vals)} probe points are NaN/Inf.")
 
         if check_positive:
             finite_vals = vals[np.isfinite(vals)]
             if finite_vals.size > 0 and np.min(finite_vals) <= 0:
                 raise ValueError(
-                    f"Invalid values {context}: probe values must be > 0. "
-                    f"Found min={np.min(finite_vals):.6g}"
+                    f"Invalid values {context}: probe values must be > 0. Found min={np.min(finite_vals):.6g}"
                 )
 
         if check_range is not None:
@@ -233,14 +224,14 @@ def _validate_values(
                 lo, hi = check_range
                 if not (lo <= median <= hi):
                     raise ValueError(
-                        f"Invalid values {context}: probe median={median:.6g} "
-                        f"outside expected range [{lo}, {hi}]"
+                        f"Invalid values {context}: probe median={median:.6g} outside expected range [{lo}, {hi}]"
                     )
 
 
 # =============================================================================
 # CRS Utilities (single chokepoint for all CRS operations)
 # =============================================================================
+
 
 def canonical_crs_str(crs_input) -> str:
     """
@@ -561,8 +552,7 @@ def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False
     except NoDataInBounds:
         # Robust fallback for tiny / borderline polygons on coarse grids
         logger.warning(
-            f"_rio_clip_robust: NoDataInBounds with all_touched={all_touched_primary}; "
-            f"retrying with all_touched=True."
+            f"_rio_clip_robust: NoDataInBounds with all_touched={all_touched_primary}; retrying with all_touched=True."
         )
         # Re-raise if still fails (let caller handle)
         return da.rio.clip(geoms, all_touched=True, drop=drop)
@@ -607,10 +597,7 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.Geo
 
     # Validate clip_shape type (primitives-only: no path handling here)
     if not isinstance(clip_shape, gpd.GeoDataFrame):
-        raise TypeError(
-            "clip_shape must be a geopandas.GeoDataFrame. "
-            "Path arguments should be handled by the caller."
-        )
+        raise TypeError("clip_shape must be a geopandas.GeoDataFrame. Path arguments should be handled by the caller.")
 
     if clip_shape.empty:
         raise ValueError("Clipping geometry is empty.")
@@ -630,6 +617,7 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.Geo
                 return None
             try:
                 from shapely.make_valid import make_valid  # shapely>=2
+
                 return make_valid(geom)
             except ImportError:
                 # buffer(0) is a common repair for self-intersections
@@ -681,9 +669,7 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.Geo
         try:
             data_clipped[var_name] = _rio_clip_robust(var, geoms, drop=True, all_touched_primary=False)
         except NoDataInBounds as e:
-            raise ValueError(
-                f"Clipping geometry does not overlap raster bounds for variable '{var_name}'."
-            ) from e
+            raise ValueError(f"Clipping geometry does not overlap raster bounds for variable '{var_name}'.") from e
         except (ValueError, TypeError, RuntimeError) as e:
             raise ValueError(f"Error clipping data variable '{var_name}'") from e
 
@@ -698,14 +684,14 @@ def bbox(self):
     :param self: an object
     :return: (xmin, ymin, xmax, ymax) as Python floats
     """
-    if hasattr(self, 'coords') and hasattr(self.coords, '__getitem__'):
+    if hasattr(self, "coords") and hasattr(self.coords, "__getitem__"):
         return (
             float(self.coords["x"].min().item()),
             float(self.coords["y"].min().item()),
             float(self.coords["x"].max().item()),
             float(self.coords["y"].max().item()),
         )
-    elif hasattr(self, 'data') and hasattr(self.data, 'coords') and hasattr(self.data.coords, '__getitem__'):
+    elif hasattr(self, "data") and hasattr(self.data, "coords") and hasattr(self.data.coords, "__getitem__"):
         return (
             float(self.data.coords["x"].min().item()),
             float(self.data.coords["y"].min().item()),
@@ -744,10 +730,10 @@ def reproject(self, new_crs: str) -> None:
         logger.info(f"Reprojection of data variables to crs {dst_crs} completed")
         self.data = data_reproj
         # Update the parent's CRS attribute as canonical string (not rasterio object)
-        if hasattr(self, 'parent') and self.parent is not None:
+        if hasattr(self, "parent") and self.parent is not None:
             self.parent.crs = dst_crs
         # Also update self.crs if it exists (for backwards compatibility)
-        if hasattr(self, 'crs'):
+        if hasattr(self, "crs"):
             self.crs = dst_crs
     except (ValueError, TypeError, RuntimeError, OSError):
         logger.error(

@@ -40,8 +40,7 @@ def get_unit_attr(da: xr.DataArray) -> str | None:
     if canonical is not None and legacy is not None:
         if canonical != legacy:
             raise ValueError(
-                f"Conflicting unit attrs: units={canonical!r}, unit={legacy!r}. "
-                "Normalize to canonical 'units' attr."
+                f"Conflicting unit attrs: units={canonical!r}, unit={legacy!r}. Normalize to canonical 'units' attr."
             )
     return canonical if canonical is not None else legacy
 
@@ -92,9 +91,7 @@ def assert_convertible(from_unit: str, to_unit: str) -> None:
     try:
         (1.0 * _UREG(from_unit)).to(to_unit)
     except Exception as e:
-        raise ValueError(
-            f"Cannot convert from {from_unit!r} to {to_unit!r}: {e}"
-        ) from e
+        raise ValueError(f"Cannot convert from {from_unit!r} to {to_unit!r}: {e}") from e
 
 
 def conversion_factor(from_unit: str, to_unit: str) -> float:
@@ -191,10 +188,7 @@ def convert_dataset_variable(
         ValueError: If variable not found, no unit source, or units incompatible
     """
     if variable not in ds:
-        raise ValueError(
-            f"Variable {variable!r} not found in Dataset. "
-            f"Available: {list(ds.data_vars)}"
-        )
+        raise ValueError(f"Variable {variable!r} not found in Dataset. Available: {list(ds.data_vars)}")
 
     da = ds[variable]
     converted = convert_dataarray(da, to_unit, from_unit=from_unit)
@@ -213,32 +207,26 @@ CANONICAL_UNITS: dict[str, str | None] = {
     "mean_wind_speed": "m/s",
     "rews_mps": "m/s",
     "capacity_factors": "1",  # dimensionless fraction
-
     # Economics metrics
     "lcoe": "EUR/MWh",
     "min_lcoe_turbine": None,  # index, no unit
     "optimal_power": "kW",
     "optimal_energy": "GWh/a",
-
     # Landscape metrics
     "elevation": "m",
-
     # Distance metrics (pattern: distance_*)
     "distance": "m",
-
     # Turbine metadata
     "turbine_capacity": "kW",
     "turbine_hub_height": "m",
     "turbine_rotor_diameter": "m",
     "turbine_commissioning_year": None,  # year, no unit
-
     # Wind physics (Weibull parameters)
     "weibull_A": "m/s",  # scale parameter
     "weibull_a": "m/s",  # lowercase variant
-    "weibull_K": "1",    # shape parameter (dimensionless)
-    "weibull_k": "1",    # lowercase variant
-    "rho": "kg/m**3",    # air density
-
+    "weibull_K": "1",  # shape parameter (dimensionless)
+    "weibull_k": "1",  # lowercase variant
+    "rho": "kg/m**3",  # air density
     # Power curve
     "power_curve": "1",  # dimensionless (capacity factor)
     "wind_speed": "m/s",  # coordinate
@@ -319,16 +307,10 @@ def validate_unit_attr(
     actual = get_unit_attr(da)
 
     if actual is None:
-        raise ValueError(
-            f"Variable {variable_name!r} missing required 'units' attr. "
-            f"Expected: {canonical!r}"
-        )
+        raise ValueError(f"Variable {variable_name!r} missing required 'units' attr. Expected: {canonical!r}")
 
     if actual != canonical:
-        raise ValueError(
-            f"Variable {variable_name!r} has non-canonical unit: {actual!r}. "
-            f"Expected: {canonical!r}"
-        )
+        raise ValueError(f"Variable {variable_name!r} has non-canonical unit: {actual!r}. Expected: {canonical!r}")
 
 
 def list_canonical_units() -> dict[str, str | None]:

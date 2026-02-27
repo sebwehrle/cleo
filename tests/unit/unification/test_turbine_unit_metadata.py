@@ -4,11 +4,8 @@ Verifies that turbine metadata variables have the canonical 'units' attr
 as defined in CONTRACT_UNIFIED_ATLAS.md section B9.2.
 """
 
-import json
-import tempfile
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from cleo.unification.turbines import _ingest_turbines_and_costs
@@ -48,6 +45,7 @@ def atlas_with_turbine(tmp_path):
     }
     with open(turbine_yaml, "w") as f:
         import yaml
+
         yaml.dump(turbine_data, f)
 
     atlas = MockAtlas(tmp_path, turbines=["Test.Turbine.1000"])

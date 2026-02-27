@@ -13,6 +13,7 @@ def test_atlas_init_creates_expected_dirs_offline(tmp_path, monkeypatch):
     Atlas.__init__ must NOT call any network functions.
     Verify expected directories are created without network access.
     """
+
     # Block all network-related functions - they should NOT be called during __init__
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted during Atlas.__init__")
@@ -39,6 +40,7 @@ def test_atlas_init_does_not_modify_root_logger(tmp_path, monkeypatch):
     Atlas.__init__ must not add handlers to the root logger.
     Only the 'cleo' logger namespace should be configured.
     """
+
     # Block network
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted")
@@ -68,6 +70,7 @@ def test_atlas_build_deferred(tmp_path, monkeypatch):
     Atlas.build() is where data loading happens.
     Without calling build(), wind/landscape should not be available.
     """
+
     # Block network during init
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted during __init__")
@@ -88,7 +91,6 @@ def test_atlas_build_deferred(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError, match="Landscape store missing"):
         _ = atlas.landscape.data
-
 
 
 class MockParent:
@@ -127,6 +129,7 @@ def test_load_gwa_never_downloads_elevation(tmp_path, monkeypatch):
         return Path(fpath)
 
     import cleo.loaders
+
     monkeypatch.setattr(cleo.loaders, "download_to_path", mock_download_to_path)
 
     parent = MockParent(path=tmp_path, country="AUT")
@@ -137,9 +140,7 @@ def test_load_gwa_never_downloads_elevation(tmp_path, monkeypatch):
 
     # Oracle: no URL should contain "elevation_w_bathymetry"
     elevation_urls = [u for u in recorded_urls if "elevation_w_bathymetry" in u]
-    assert len(elevation_urls) == 0, (
-        f"download_file was called with elevation_w_bathymetry URL(s): {elevation_urls}"
-    )
+    assert len(elevation_urls) == 0, f"download_file was called with elevation_w_bathymetry URL(s): {elevation_urls}"
 
 
 def test_load_gwa_skips_elevation_even_with_legacy_file(tmp_path, monkeypatch):
@@ -166,6 +167,7 @@ def test_load_gwa_skips_elevation_even_with_legacy_file(tmp_path, monkeypatch):
         return Path(fpath)
 
     import cleo.loaders
+
     monkeypatch.setattr(cleo.loaders, "download_to_path", mock_download_to_path)
 
     parent = MockParent(path=tmp_path, country="AUT")
@@ -176,6 +178,4 @@ def test_load_gwa_skips_elevation_even_with_legacy_file(tmp_path, monkeypatch):
 
     # Oracle: no URL should contain "elevation_w_bathymetry"
     elevation_urls = [u for u in recorded_urls if "elevation_w_bathymetry" in u]
-    assert len(elevation_urls) == 0, (
-        f"download_file was called with elevation_w_bathymetry URL(s): {elevation_urls}"
-    )
+    assert len(elevation_urls) == 0, f"download_file was called with elevation_w_bathymetry URL(s): {elevation_urls}"

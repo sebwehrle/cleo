@@ -94,9 +94,7 @@ def _ingest_turbines_and_costs(
             if not (resources_dir / f"{turbine_id}.yml").exists()
         ]
         if missing_configured:
-            raise FileNotFoundError(
-                "Configured turbine YAML files not found:\n" + "\n".join(missing_configured)
-            )
+            raise FileNotFoundError("Configured turbine YAML files not found:\n" + "\n".join(missing_configured))
     else:
         turbine_names = _default_turbines_from_resources(resources_dir)
         if not turbine_names:
@@ -127,14 +125,16 @@ def _ingest_turbines_and_costs(
         data = _load_turbine_yaml(yaml_path)
 
         # Register source
-        sources.append({
-            "source_id": f"turbine:{turbine_id}",
-            "name": turbine_id,
-            "kind": "yaml",
-            "path": str(yaml_path),
-            "params_json": json.dumps({"turbine_id": turbine_id}),
-            "fingerprint": fingerprint_file(yaml_path, fingerprint_method),
-        })
+        sources.append(
+            {
+                "source_id": f"turbine:{turbine_id}",
+                "name": turbine_id,
+                "kind": "yaml",
+                "path": str(yaml_path),
+                "params_json": json.dumps({"turbine_id": turbine_id}),
+                "fingerprint": fingerprint_file(yaml_path, fingerprint_method),
+            }
+        )
 
         # Extract data
         manufacturer = str(data["manufacturer"])
@@ -173,18 +173,18 @@ def _ingest_turbines_and_costs(
     if turbine_ids:
         # Create turbines bundle source
         turbine_source_ids = [f"turbine:{tid}" for tid in turbine_ids]
-        bundle_fingerprint = hashlib.sha256(
-            json.dumps(turbine_source_ids, sort_keys=True).encode()
-        ).hexdigest()[:16]
+        bundle_fingerprint = hashlib.sha256(json.dumps(turbine_source_ids, sort_keys=True).encode()).hexdigest()[:16]
 
-        sources.append({
-            "source_id": "turbines:bundle",
-            "name": "turbines_bundle",
-            "kind": "bundle",
-            "path": "",
-            "params_json": json.dumps({"source_ids": turbine_source_ids}),
-            "fingerprint": bundle_fingerprint,
-        })
+        sources.append(
+            {
+                "source_id": "turbines:bundle",
+                "name": "turbines_bundle",
+                "kind": "bundle",
+                "path": "",
+                "params_json": json.dumps({"source_ids": turbine_source_ids}),
+                "fingerprint": bundle_fingerprint,
+            }
+        )
 
         # Power curve array: (turbine, wind_speed)
         # Use integer indices for turbine dim; store string metadata in attrs JSON
@@ -203,21 +203,25 @@ def _ingest_turbines_and_costs(
         # This avoids Zarr v3 string dtype warnings
         turbines_meta = []
         for i, tid in enumerate(turbine_ids):
-            turbines_meta.append({
-                "id": tid,
-                "manufacturer": meta_manufacturer[i],
-                "model": meta_model[i],
-                "model_key": meta_model_key[i],
-            })
+            turbines_meta.append(
+                {
+                    "id": tid,
+                    "manufacturer": meta_manufacturer[i],
+                    "model": meta_model[i],
+                    "model_key": meta_model_key[i],
+                }
+            )
 
         # Only numeric arrays stored in dataset (no string dtype)
-        ds = xr.Dataset({
-            "power_curve": power_curve_da,
-            "turbine_capacity": ("turbine", np.array(meta_capacity, dtype=np.float64)),
-            "turbine_hub_height": ("turbine", np.array(meta_hub_height, dtype=np.float64)),
-            "turbine_rotor_diameter": ("turbine", np.array(meta_rotor_diameter, dtype=np.float64)),
-            "turbine_commissioning_year": ("turbine", np.array(meta_commissioning_year, dtype=np.int64)),
-        })
+        ds = xr.Dataset(
+            {
+                "power_curve": power_curve_da,
+                "turbine_capacity": ("turbine", np.array(meta_capacity, dtype=np.float64)),
+                "turbine_hub_height": ("turbine", np.array(meta_hub_height, dtype=np.float64)),
+                "turbine_rotor_diameter": ("turbine", np.array(meta_rotor_diameter, dtype=np.float64)),
+                "turbine_commissioning_year": ("turbine", np.array(meta_commissioning_year, dtype=np.int64)),
+            }
+        )
         ds = ds.assign_coords(turbine=turbine_indices)
 
         # Stamp canonical units on turbine metadata variables
@@ -228,19 +232,19 @@ def _ingest_turbines_and_costs(
         # turbine_commissioning_year has no unit (it's a year number, not a duration)
 
         # Store turbine metadata as JSON in attrs (avoids string arrays)
-        ds.attrs["cleo_turbines_json"] = json.dumps(
-            turbines_meta, separators=(",", ":"), ensure_ascii=False
-        )
+        ds.attrs["cleo_turbines_json"] = json.dumps(turbines_meta, separators=(",", ":"), ensure_ascii=False)
 
         # Register variables (only the numeric ones we're storing)
         for var_name in ds.data_vars:
-            variables.append({
-                "variable_name": var_name,
-                "source_id": "turbines:bundle",
-                "resampling_method": "none",
-                "nodata_policy": "none",
-                "dtype": str(ds[var_name].dtype),
-            })
+            variables.append(
+                {
+                    "variable_name": var_name,
+                    "source_id": "turbines:bundle",
+                    "resampling_method": "none",
+                    "nodata_policy": "none",
+                    "dtype": str(ds[var_name].dtype),
+                }
+            )
     else:
         ds = xr.Dataset()
         ds = ds.assign_coords(wind_speed=wind_speed)
@@ -248,14 +252,16 @@ def _ingest_turbines_and_costs(
     # Load cost assumptions if available
     cost_path = resources_dir / "cost_assumptions.yml"
     if cost_path.exists():
-        sources.append({
-            "source_id": "costs:default",
-            "name": "cost_assumptions",
-            "kind": "yaml",
-            "path": str(cost_path),
-            "params_json": "{}",
-            "fingerprint": fingerprint_file(cost_path, fingerprint_method),
-        })
+        sources.append(
+            {
+                "source_id": "costs:default",
+                "name": "cost_assumptions",
+                "kind": "yaml",
+                "path": str(cost_path),
+                "params_json": "{}",
+                "fingerprint": fingerprint_file(cost_path, fingerprint_method),
+            }
+        )
 
     return ds, sources, variables
 
@@ -278,9 +284,7 @@ def _normalize_power_curve_for_policy(
         return u, p
 
     if tail_policy == "strict_zero_tail":
-        raise ValueError(
-            f"Turbine {turbine_id!r} power curve must end at zero for strict_zero_tail."
-        )
+        raise ValueError(f"Turbine {turbine_id!r} power curve must end at zero for strict_zero_tail.")
     if tail_policy != "auto_append_zero_at_cutout":
         raise ValueError(f"Unsupported power_curve_tail_policy: {tail_policy!r}")
 
@@ -348,6 +352,4 @@ def _validate_power_curve_knots(*, turbine_id: str, u: np.ndarray, p: np.ndarray
     if np.any(p < 0.0):
         raise ValueError(f"Turbine {turbine_id!r} power curve has negative power values.")
     if np.any(p > 1.0):
-        raise ValueError(
-            f"Turbine {turbine_id!r} power curve has values above rated fraction 1.0."
-        )
+        raise ValueError(f"Turbine {turbine_id!r} power curve has values above rated fraction 1.0.")

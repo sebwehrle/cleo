@@ -91,6 +91,7 @@ atlas.configure_economics(
     om_fixed_eur_per_kw_a=20.0,
     om_variable_eur_per_kwh=0.008,
     bos_cost_share=0.0,
+    grid_connect_cost_eur_per_kw=50.0,  # or 0.0 for paper qLCOE
 )
 ```
 
@@ -101,6 +102,7 @@ Normative:
 - LCOE-family metrics resolve economics via: baseline config + per-call `economics={...}` overrides.
 - Required economics fields (`discount_rate`, `lifetime_a`, `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`) must be present in effective resolution; missing fields raise explicit error.
 - `bos_cost_share` defaults to `0.0` when not specified (all CAPEX is turbine/location-independent).
+- `grid_connect_cost_eur_per_kw` defaults to `50.0` when not specified (Austrian regulation §54 ElWOG). Set to `0.0` to exclude grid connection costs (e.g., for paper qLCOE without grid costs).
 
 ---
 
@@ -396,6 +398,49 @@ Normative:
 
 ---
 
+## A12. Consolidated Analysis Export
+
+```python
+atlas.export_analysis_dataset_zarr(
+    path,
+    domain="both",           # "wind" | "landscape" | "both"
+    include_only=None,       # optional: list of variables to export
+    prefix=True,             # prefix vars with "wind__" / "landscape__" for domain="both"
+    exclude_template=True,   # exclude template variables
+    compute=True,            # compute dask arrays before writing
+)
+```
+
+Normative:
+- Creates a schema-versioned Zarr store with provenance tracking at `path`.
+- `path` must end with `.zarr`.
+- Raises `FileExistsError` if the export store already exists.
+- Raises `ValueError` if stores are not ready (call `atlas.build()` first).
+- When `domain="both"`:
+  - If `prefix=True`, variables are prefixed with `wind__` / `landscape__`.
+  - If `prefix=False`, raises `ValueError` on variable name collisions.
+  - `include_only` with prefixed names (e.g., `["wind__capacity_factors", "landscape__valid_mask"]`).
+- When `domain="wind"` or `domain="landscape"`:
+  - `prefix` parameter is ignored.
+  - `include_only` uses raw variable names.
+- `exclude_template=True` removes `template` variables from the export.
+- `compute=True` (default) forces dask computation before write for reliability.
+- Returns `Path` to the created Zarr store.
+
+Store attributes:
+- `store_state`: `"complete"` on successful write
+- `schema_version`: integer from `cleo.contracts.ANALYSIS_EXPORT_SCHEMA_VERSION`
+- `created_at`: ISO 8601 timestamp
+- `cleo:package_version`: cleo version string
+- `export_spec_json`: JSON encoding of export parameters
+- `upstream_provenance_json`: JSON encoding of upstream store provenance (grid_id, inputs_id, etc.)
+
+Validation:
+- Pre-write: `validate_dataset(ds, kind="export")` before write
+- Post-write: `validate_store(path, kind="export")` after atomic write
+
+---
+
 # B. Architecture and invariants
 
 ## B1. On-disk store layout (normative)
@@ -495,6 +540,7 @@ Landscape materialization must source elevation deterministically using:
 
 - `cleo/unification/**` is the canonical location for raw geospatial/base-store/region-store I/O.
 - `cleo/results.py` is the canonical location for results-store persistence/open/export internals.
+- `cleo/exports.py` is the canonical location for consolidated analysis export I/O (schema-versioned Zarr exports).
 - `cleo/atlas_policies/**` is policy-only and must not perform direct raw/store/filesystem I/O.
 - `cleo/atlas.py` is orchestration/control-plane only and should delegate storage operations to dedicated I/O helpers.
 - `cleo/domains.py` should access stores through storage helper functions (not direct raw-I/O call sites).
@@ -508,3 +554,319 @@ The repository must provide a contract check that:
 - validates store schemas and required variables,
 - validates identity/manifest invariants,
 - exercises the v1 happy-path workflow end-to-end offline.
+
+---
+
+## B9. Unit Metadata Contract (normative)
+
+### B9.1 Canonical Attr Key
+
+- The canonical unit metadata attr key is `units` (plural).
+- Legacy attr key `unit` (singular) is supported for reads during migration.
+- Writing unit metadata must use `units` only.
+- If both `unit` and `units` exist on the same DataArray and differ, operations must raise `ValueError`.
+
+### B9.2 Canonical Units for Public Variables
+
+| Variable | Canonical Unit | Notes |
+|----------|----------------|-------|
+| `mean_wind_speed` | `m/s` | Height-specific |
+| `rews_mps` | `m/s` | Rotor-equivalent wind speed |
+| `capacity_factors` | `1` | Dimensionless fraction |
+| `lcoe` | `EUR/MWh` | Levelized cost of electricity |
+| `min_lcoe_turbine` | *(none)* | Index, dimensionless |
+| `optimal_power` | `kW` | Rated power of optimal turbine |
+| `optimal_energy` | `GWh/a` | Annual energy output |
+| `distance_*` | `m` | Euclidean distance |
+| `elevation` | `m` | Above sea level |
+| `turbine_capacity` | `kW` | Rated power |
+| `turbine_hub_height` | `m` | Above ground |
+| `turbine_rotor_diameter` | `m` | Rotor diameter |
+| `weibull_A` / `weibull_a` | `m/s` | Scale parameter |
+| `weibull_K` / `weibull_k` | `1` | Shape parameter (dimensionless) |
+| `rho` | `kg/m³` | Air density |
+
+### B9.3 Conversion Invariants
+
+- Unit conversions must be multiplicative (no affine transforms like °C ↔ K).
+- Conversion must preserve dask laziness (scalar factor multiplication only).
+- Conversion must preserve all non-unit attrs.
+- The canonical unit utilities are in `cleo/units.py`.
+
+### B9.4 Storage Policy
+
+- Variables with defined canonical units should be stored in those units.
+- Users may convert after loading if different units are needed for analysis.
+
+---
+
+# C. QA and Operability Addendum (Normative)
+
+This section codifies quality assurance expectations, scope boundaries, and export contracts.
+
+---
+
+## C1. Scope Boundary
+
+CLEO prepares analysis-ready wind/landscape rasters and tabular exports for subsequent analysis workflows.
+
+**In scope:**
+- Wind resource metrics: mean wind speed, capacity factors, REWS, and derived energy/power metrics
+- Economics metrics: LCOE, optimal turbine selection, optimal power/energy
+- Landscape processing: rasterization, distance transforms, CLC category extraction
+- Data export: `flatten()` for tabular handoff, `persist()` for result storage, NetCDF export
+
+**Out of scope:**
+- Econometric regression/estimation (logit, probit, GLM, spatial regression, etc.)
+- Coefficient-derived outputs or statistical inference
+- Model fitting or parameter estimation beyond what is required for wind resource assessment
+
+The package outputs (capacity factors, LCOE, flattened rasters) are designed as inputs to downstream econometric or optimization workflows, not as substitutes for them.
+
+---
+
+## C2. Supported Environment
+
+### C2.1 Python Version
+
+- **Minimum**: Python 3.10
+- **Tested**: Python 3.10, 3.11, 3.12 (CI matrix when available)
+
+### C2.2 Operating System
+
+- **Primary**: Linux (Ubuntu LTS)
+- **Secondary**: macOS (development/testing)
+- **Windows**: Not actively tested; may work but not guaranteed
+
+### C2.3 System Dependencies
+
+CLEO relies on geospatial libraries that require system-level dependencies:
+
+- **GDAL/PROJ**: Required by `rasterio`, `pyproj`, `geopandas`
+- **HDF5/NetCDF**: Required by `netcdf4`, `h5py`
+
+These are typically installed via conda/mamba environments or system package managers. The `environment.yaml` file provides a tested environment specification.
+
+---
+
+## C3. Dependency Constraint Policy
+
+### C3.1 Version Bounds
+
+Dependencies in `pyproject.toml` must specify:
+
+- **Lower bounds**: Minimum versions known to work (based on CI/testing)
+- **Upper bounds**: Protective caps for ecosystem components with known breaking changes (xarray, dask, zarr, geopandas)
+
+### C3.2 Rationale Documentation
+
+Significant version constraints should include inline comments explaining the rationale (e.g., API changes, dtype handling, deprecation cycles).
+
+### C3.3 Lock Files
+
+- `constraints-ci.txt` (optional): Fully pinned versions for CI reproducibility
+- Production installs should use version ranges from `pyproject.toml`
+
+---
+
+## C4. CI Gates (Normative)
+
+Continuous integration must enforce:
+
+1. **Linting**: `ruff check` and `ruff format --check`
+2. **Unit tests**: `pytest tests/unit`
+3. **Integration tests**: `pytest tests/integration`
+4. **Smoke tests**: `pytest tests/smoke`
+5. **Build verification**: Package builds and imports successfully
+
+CI failures block merge.
+
+---
+
+## C5. Export Contracts
+
+### C5.1 Tabular Export: `flatten()`
+
+`Atlas.flatten(domain, ...)` is the primary tabular handoff API for downstream analysis.
+
+**Contract:**
+- Returns a `pandas.DataFrame` with one row per valid grid cell
+- Column naming follows `{domain}__{variable}` convention when `include_domain_prefix=True`
+- Schema is deterministic given the same inputs and parameters
+- `Atlas.validate_flatten_schema(df, required_columns)` validates presence of required columns
+
+**Schema stability:**
+- Column names for a given variable/domain remain stable across patch versions
+- New columns may be added in minor versions
+- Column removal or renaming requires major version bump
+
+### C5.2 Result Persistence: `persist()` and `export_result_netcdf()`
+
+`DomainResult.persist(...)` and `Atlas.export_result_netcdf(...)` handle result storage and export.
+
+**Contract:**
+- Persisted results are Zarr stores with `store_state="complete"` marker
+- Results include provenance attrs: `created_at`, `cleo:package_version`, metric-specific parameters
+- NetCDF export produces CF-compliant files where feasible
+
+### C5.3 Consolidated Analysis Export: `export_analysis_dataset_zarr()`
+
+`Atlas.export_analysis_dataset_zarr(...)` provides schema-versioned xarray exports with provenance tracking.
+
+See **A12** for full API documentation.
+
+**Contract:**
+- Schema-versioned exports with `schema_version` attr (see `cleo.contracts.ANALYSIS_EXPORT_SCHEMA_VERSION`)
+- `store_state="complete"` marker on successful write
+- Provenance attrs: `created_at`, `cleo:package_version`, `export_spec_json`, `upstream_provenance_json`
+- Domain prefixing for combined wind/landscape exports (`wind__`, `landscape__`)
+- Collision detection when prefixing is disabled
+- Pre-write validation via `validate_dataset(kind="export")`
+- Post-write validation via `validate_store(kind="export")`
+
+---
+
+## C6. Determinism and Reproducibility
+
+### C6.1 Deterministic Outputs
+
+The following are **bitwise deterministic** given identical inputs:
+- Store skeleton attrs and metadata
+- Content hashes (`inputs_id`, `grid_id`)
+- Manifest JSON serialization
+
+### C6.2 Tolerance-Deterministic Outputs
+
+Floating-point reductions (capacity factors, LCOE, etc.) are deterministic within tolerance:
+- Results may vary at machine epsilon level across runs
+- Results may vary with dask chunking at floating-point tolerance level
+- Tests assert `allclose` with explicit tolerances (typically `rtol=1e-10`, `atol=1e-10`)
+
+### C6.3 Chunk Sensitivity
+
+Dask chunking may affect floating-point reduction order. Tests verify:
+- Results are within tolerance across different chunk configurations
+- No silent precision degradation from chunking choices
+
+---
+
+## C7. Schema Versioning (Normative)
+
+### C7.1 Scope
+
+Schema versioning applies ONLY to external-facing exports with promised schema stability:
+- Consolidated analysis xarray exports (future `export_analysis_dataset_zarr` or equivalent)
+- Flatten tabular exports with sidecar manifests (future `export_flatten` with parquet/csv)
+
+Schema versioning does NOT apply to internal canonical stores:
+- `wind.zarr` and `landscape.zarr` use `inputs_id` / `grid_id` / `unify_version` for content+code identity
+- Internal stores do not promise read-compatibility across versions
+
+### C7.2 Version Constants
+
+Schema version constants are defined in `cleo/contracts.py`:
+
+```python
+ANALYSIS_EXPORT_SCHEMA_VERSION = 1  # xarray exports (zarr/netcdf)
+FLATTEN_EXPORT_SCHEMA_VERSION = 1   # tabular exports (parquet/csv)
+```
+
+### C7.3 Semantic Definition
+
+A schema version represents a **layout/interpretation contract** for exported data. The version guarantees that downstream parsers can rely on:
+- Variable/column presence and naming
+- Coordinate semantics (dimensions, ordering)
+- Data types and units
+- Required attribute presence and semantics
+
+### C7.4 Schema-Breaking Changes (Require Version Bump)
+
+The schema version MUST be incremented when any of the following changes occur:
+
+1. **Removal or renaming** of an existing variable or column
+2. **Dtype changes** that affect interpretation (e.g., `float64` -> `float32`, `int64` -> `int32`)
+3. **Coordinate semantic changes** (e.g., cell-center vs. cell-edge interpretation)
+4. **Unit changes** without backward-compatible conversion path
+5. **Attribute semantic changes** that downstream parsers rely on
+6. **Structural layout changes** (e.g., new required dimensions, changed dimension order)
+
+### C7.5 Non-Breaking Changes (No Version Bump Required)
+
+The schema version should NOT be bumped for:
+
+1. **Addition of new optional** variables, columns, or attributes
+2. **Internal refactoring** that preserves output byte-for-byte
+3. **Performance optimizations** with identical output
+4. **Documentation or metadata clarifications** that don't affect parsing
+5. **New optional parameters** to export APIs
+
+### C7.6 Export Attribute Requirements
+
+Exports with schema versioning must include these root attributes:
+- `schema_version`: integer matching the relevant constant from `cleo/contracts.py`
+- `store_state`: `"complete"` on successful write (existing contract)
+- `created_at`: ISO 8601 timestamp
+- `cleo:package_version`: version string of cleo that produced the export
+
+---
+
+## C8. Store and Dataset Validation (Normative)
+
+### C8.1 Validation Module
+
+Centralized validation is provided by `cleo/validation.py`:
+
+```python
+from cleo.validation import validate_dataset, validate_store, ValidationError
+```
+
+### C8.2 `validate_dataset(ds, *, kind, deep=False)`
+
+Validates an xarray Dataset against store schema expectations.
+
+**Parameters:**
+- `ds`: The xarray Dataset to validate
+- `kind`: `"wind"` | `"landscape"` | `"export"` | `"result"` | `"generic"`
+- `deep`: If `True`, perform additional coordinate/data checks (default `False`)
+
+**Contract:**
+- `deep=False` (default) checks only attrs, dims, coords, and variable presence
+- `deep=False` MUST NOT trigger compute on dask-backed arrays
+- `deep=True` may check coordinate monotonicity and sample data validity
+- Raises `ValidationError` on validation failure
+
+### C8.3 `validate_store(path, *, kind, allow_incomplete=False)`
+
+Validates a Zarr store at the given path.
+
+**Parameters:**
+- `path`: Path to the Zarr store directory
+- `kind`: `"wind"` | `"landscape"` | `"export"` | `"result"` | `"generic"`
+- `allow_incomplete`: If `True`, allow stores with `store_state != "complete"`
+
+**Contract:**
+- Opens only store metadata via zarr (lightweight)
+- Raises `FileNotFoundError` if store does not exist
+- Raises `ValidationError` on validation failure
+
+### C8.4 Required Schema by Store Kind
+
+**Wind stores** require:
+- Attrs: `store_state`, `grid_id`, `inputs_id`, `cleo_turbines_json`
+- Variables: `weibull_A`, `weibull_k`, `power_curve`
+- Dimensions: `y`, `x`, `turbine`, `height`
+
+**Landscape stores** require:
+- Attrs: `store_state`, `grid_id`, `inputs_id`
+- Variables: `valid_mask`
+- Dimensions: `y`, `x`
+
+**Export stores** require:
+- Attrs: `store_state`, `schema_version`, `created_at`
+
+**Result stores** require:
+- Attrs: `store_state`, `run_id`, `metric_name`, `created_at`
+
+### C8.5 Integration Points
+
+Domain store access (`WindDomain._store_data()`, `LandscapeDomain._store_data()`) uses `validate_dataset()` to provide centralized validation on store load.

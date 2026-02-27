@@ -8,7 +8,6 @@ Verifies:
 """
 
 import shutil
-import tempfile
 import time
 from pathlib import Path
 
@@ -48,9 +47,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -120,9 +117,7 @@ class TestUnitMetadataSurvivesRoundTrip:
         atlas.wind.select(turbines=["Enercon.E40.500"])
         return atlas
 
-    def test_capacity_factors_has_units_after_materialize(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_capacity_factors_has_units_after_materialize(self, materialized_atlas: Atlas) -> None:
         """Capacity factors have units attr after materialization."""
         atlas = materialized_atlas
 
@@ -134,9 +129,7 @@ class TestUnitMetadataSurvivesRoundTrip:
         assert "units" in cf.attrs
         assert cf.attrs["units"] == "1"
 
-    def test_rews_mps_has_units_after_materialize(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_rews_mps_has_units_after_materialize(self, materialized_atlas: Atlas) -> None:
         """REWS has units attr after materialization."""
         atlas = materialized_atlas
 
@@ -147,9 +140,7 @@ class TestUnitMetadataSurvivesRoundTrip:
         assert "units" in rews.attrs
         assert rews.attrs["units"] == "m/s"
 
-    def test_mean_wind_speed_has_units_after_compute(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_mean_wind_speed_has_units_after_compute(self, materialized_atlas: Atlas) -> None:
         """Mean wind speed has units attr after compute."""
         atlas = materialized_atlas
 
@@ -261,9 +252,7 @@ class TestDomainConvertUnitsEndToEnd:
         atlas.wind.select(turbines=["Enercon.E40.500"])
         return atlas
 
-    def test_wind_convert_units_inplace_end_to_end(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_wind_convert_units_inplace_end_to_end(self, materialized_atlas: Atlas) -> None:
         """Wind domain convert_units with inplace=True works end-to-end."""
         atlas = materialized_atlas
 
@@ -277,9 +266,7 @@ class TestDomainConvertUnitsEndToEnd:
         mws = atlas.wind.data["mean_wind_speed"]
         assert mws.attrs["units"] == "km/h"
 
-    def test_wind_convert_units_returns_converted(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_wind_convert_units_returns_converted(self, materialized_atlas: Atlas) -> None:
         """Wind domain convert_units returns converted DataArray."""
         atlas = materialized_atlas
 
@@ -407,9 +394,7 @@ class TestCanonicalUnitsEnforced:
         atlas.wind.select(turbines=["Enercon.E40.500"])
         return atlas
 
-    def test_turbine_metadata_has_canonical_units(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_turbine_metadata_has_canonical_units(self, materialized_atlas: Atlas) -> None:
         """Turbine metadata has canonical units attr."""
         atlas = materialized_atlas
         ds = atlas.wind.data
@@ -420,9 +405,7 @@ class TestCanonicalUnitsEnforced:
         assert ds["turbine_rotor_diameter"].attrs.get("units") == "m"
         assert ds["power_curve"].attrs.get("units") == "1"
 
-    def test_computed_metrics_use_canonical_key(
-        self, materialized_atlas: Atlas
-    ) -> None:
+    def test_computed_metrics_use_canonical_key(self, materialized_atlas: Atlas) -> None:
         """Computed metrics use canonical 'units' key, not legacy 'unit'."""
         atlas = materialized_atlas
 

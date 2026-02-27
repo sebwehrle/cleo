@@ -40,9 +40,7 @@ def _create_gwa_raster(
     if add_nodata_region:
         data[:3, :3] = np.nan
 
-    transform = rasterio.transform.from_bounds(
-        bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0]
-    )
+    transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
     profile = {
         "driver": "GTiff",
@@ -91,10 +89,7 @@ def _get_expected_turbine_ids(resources_dir: Path) -> tuple[str, ...]:
     excluding non-turbine config files (clc_codes.yml, cost_assumptions.yml).
     """
     non_turbine_files = {"clc_codes.yml", "cost_assumptions.yml"}
-    return tuple(sorted(
-        p.stem for p in resources_dir.glob("*.yml")
-        if p.name not in non_turbine_files
-    ))
+    return tuple(sorted(p.stem for p in resources_dir.glob("*.yml") if p.name not in non_turbine_files))
 
 
 @pytest.fixture
@@ -214,20 +209,14 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     # === Guard 3: Default turbine discovery (contract v1.3) ===
     # Verify that without configure_turbines(), default discovery finds ALL turbines in resources/
     # Per contract A3: "If not configured, all available turbines are materialized."
-    assert atlas.turbines_configured is None, (
-        "Fixture should NOT call configure_turbines() - testing default discovery"
-    )
-    assert "turbine" in wind_ds.dims, (
-        "wind.zarr must have turbine dimension after default discovery"
-    )
+    assert atlas.turbines_configured is None, "Fixture should NOT call configure_turbines() - testing default discovery"
+    assert "turbine" in wind_ds.dims, "wind.zarr must have turbine dimension after default discovery"
     # Build expected turbine IDs from the resources dir used by this atlas instance
     resources_dir = atlas.path / "resources"
     expected_turbines = _get_expected_turbine_ids(resources_dir)
     actual_turbines = tuple(sorted(atlas.wind.turbines))
     assert actual_turbines == expected_turbines, (
-        f"Default discovery mismatch:\n"
-        f"  actual:   {actual_turbines}\n"
-        f"  expected: {expected_turbines}"
+        f"Default discovery mismatch:\n  actual:   {actual_turbines}\n  expected: {expected_turbines}"
     )
     assert len(actual_turbines) > 0, "At least one turbine YAML must exist in resources/"
 
@@ -239,9 +228,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     # Persistent selection: select() mutates selection state on Atlas
     result = atlas.wind.select(turbines=[tid])
     assert result is None, "select() should return None (in-place command)"
-    assert atlas.wind.selected_turbines == (tid,), (
-        "Selection must persist on Atlas, not ephemeral WindDomain instance"
-    )
+    assert atlas.wind.selected_turbines == (tid,), "Selection must persist on Atlas, not ephemeral WindDomain instance"
 
     # === Compute capacity factors (result wrapper API) ===
     # compute() returns DomainResult with .data and .materialize()
@@ -273,9 +260,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     assert "capacity_factors" in atlas.wind.data, (
         "materialize() must write metric into wind.zarr and surface in atlas.wind.data"
     )
-    assert atlas.wind.selected_turbines == (tid,), (
-        "Selection must remain persistent after compute/materialize"
-    )
+    assert atlas.wind.selected_turbines == (tid,), "Selection must remain persistent after compute/materialize"
 
     # === Persist ===
     run_id = atlas.new_run_id(prefix="api")

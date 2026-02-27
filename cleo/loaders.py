@@ -114,9 +114,7 @@ def load_elevation(base_dir, iso3, reference_da):
             )
 
         if reference_da.rio.crs is None:
-            raise ValueError(
-                f"Reference DataArray has no CRS and air-density file also lacks CRS: {air_density_path}"
-            )
+            raise ValueError(f"Reference DataArray has no CRS and air-density file also lacks CRS: {air_density_path}")
 
     # Try local GeoTIFF first (but always align to reference grid)
     if local_path.exists():
@@ -266,16 +264,12 @@ def get_turbine_attribute(self, turbine_id, attribute_name):
 
     # Read turbine metadata from cleo_turbines_json attr
     if "cleo_turbines_json" not in self.data.attrs:
-        raise ValueError(
-            "Dataset missing cleo_turbines_json attr; re-run build_canonical()."
-        )
+        raise ValueError("Dataset missing cleo_turbines_json attr; re-run build_canonical().")
     turbines_meta = json.loads(self.data.attrs["cleo_turbines_json"])
     turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
 
     if turbine_id not in turbine_id_to_idx:
-        raise ValueError(
-            f"Turbine ID {turbine_id!r} not found in dataset. Available: {list(turbine_id_to_idx.keys())}"
-        )
+        raise ValueError(f"Turbine ID {turbine_id!r} not found in dataset. Available: {list(turbine_id_to_idx.keys())}")
 
     turbine_idx = turbine_id_to_idx[turbine_id]
     turbine_meta = turbines_meta[turbine_idx]
@@ -329,9 +323,7 @@ def load_weibull_parameters(self, height):
 
     missing = [str(p) for p in [a_path, k_path] if not p.is_file()]
     if missing:
-        raise FileNotFoundError(
-            f"Missing Weibull parameter raster(s) for height={height}: {missing}"
-        )
+        raise FileNotFoundError(f"Missing Weibull parameter raster(s) for height={height}: {missing}")
 
     try:
         a = _maybe_chunk_auto(rxr.open_rasterio(a_path))

@@ -305,12 +305,61 @@ Atlas(
   - conversion is dask-friendly (lazy arrays stay lazy).
 - `atlas.build_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
   - prepares CLC cache aligned to wind/GWA grid.
-  - with `url=None`, CLC2018 auto-download uses an official EEA ArcGIS raster export URL derived from atlas wind-grid bounds.
+  - with `url=None`, CLC2018 auto-download uses the CLMS API prepackaged-download workflow and expects CLMS auth via
+    `CLEO_CLMS_ACCESS_TOKEN` or service key envs (`CLEO_CLMS_SERVICE_KEY_JSON`, `CLEO_CLMS_SERVICE_KEY_PATH`, `CLMS_API_SERVICE_KEY`).
+  - multiband rendered inputs (for example RGB/RGBA imagery) are rejected; CLEO expects single-band categorical CLC class rasters.
 - `atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error")`
   - `categories="all"`: full categorical layer (`land_cover` default name).
   - `categories=int`: single binary CLC-code mask.
   - `categories=list[int]`: combined binary mask (requires `name`).
   - returns `LandscapeAddResult`.
+
+#### CLC Authentication Setup (CLMS)
+
+When `atlas.build_clc(url=None)` needs to download CLC automatically, CLEO authenticates against the CLMS API.
+
+Get credentials (service key) from CLMS:
+
+1. Sign in at the Copernicus Land Monitoring Service portal (`https://land.copernicus.eu`).
+2. Open your profile/settings page and create an API token/service key.
+3. Save the downloaded JSON key file (or copy its JSON payload).
+
+Inject credentials into CLEO (choose one method):
+
+- Method 1: pass an existing bearer token (short-lived)
+
+```bash
+export CLEO_CLMS_ACCESS_TOKEN="<access-token>"
+```
+
+- Method 2: point CLEO to a service-key JSON file
+
+```bash
+export CLEO_CLMS_SERVICE_KEY_PATH="/absolute/path/to/clms_service_key.json"
+# equivalent alias also supported:
+export CLMS_API_SERVICE_KEY="/absolute/path/to/clms_service_key.json"
+```
+
+- Method 3: provide service-key JSON inline (for ephemeral environments/CI)
+
+```bash
+export CLEO_CLMS_SERVICE_KEY_JSON='{"service_name":"...","secret":"...","username":"..."}'
+```
+
+Then run:
+
+```python
+atlas.build_clc(source="clc2018")
+```
+
+Notes:
+
+- If both are set, `CLEO_CLMS_ACCESS_TOKEN` is used first.
+- Direct service-key login in CLEO expects JSON fields `service_name`, `secret`, and `username`.
+- If your CLMS key uses another schema (for example `client_id`/`private_key`), mint a bearer token externally and set `CLEO_CLMS_ACCESS_TOKEN`.
+- If no CLMS credential env var is set and `url=None`, `build_clc` raises an explicit authentication error.
+- You can always bypass CLMS auth by passing an explicit `url=...` to `build_clc`.
+- CLMS references: `https://land.copernicus.eu/en/how-to-guides/how-to-download-spatial-data/how-to-download-m2m` and `https://eea.github.io/clms-api-docs/authentication.html`.
 
 `LandscapeAddResult`:
 

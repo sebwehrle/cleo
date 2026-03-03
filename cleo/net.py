@@ -61,6 +61,41 @@ def http_get(
     )
 
 
+def http_post(
+    url: str,
+    *,
+    headers: dict | None = None,
+    json_body: dict | list | None = None,
+    timeout: tuple[int, int] | int = (10, 60),
+    stream: bool = True,
+    proxies: dict | None = None,
+    auth: HTTPProxyAuth | None = None,
+) -> "Response":
+    """Make an HTTP POST request.
+
+    This is the central entry point for all HTTP POST requests in Cleo.
+
+    :param url: URL to post to.
+    :param headers: Optional HTTP headers dictionary.
+    :param json_body: Optional JSON request payload.
+    :param timeout: Connection/read timeout as ``(connect, read)`` tuple or single int.
+    :param stream: If ``True``, stream response body.
+    :param proxies: Optional proxy mapping (for example ``{"http": ..., "https": ...}``).
+    :param auth: Optional proxy authentication object.
+    :returns: ``requests.Response`` object.
+    :raises requests.RequestException: On network errors.
+    """
+    return requests.post(
+        url,
+        headers=headers,
+        json=json_body,
+        timeout=timeout,
+        stream=stream,
+        proxies=proxies,
+        auth=auth,
+    )
+
+
 def download_to_path(
     url: str,
     dest: Path,

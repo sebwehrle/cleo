@@ -305,6 +305,7 @@ Atlas(
   - conversion is dask-friendly (lazy arrays stay lazy).
 - `atlas.build_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
   - prepares CLC cache aligned to wind/GWA grid.
+  - with `url=None`, CLC2018 auto-download uses an official EEA ArcGIS raster export URL derived from atlas wind-grid bounds.
 - `atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error")`
   - `categories="all"`: full categorical layer (`land_cover` default name).
   - `categories=int`: single binary CLC-code mask.

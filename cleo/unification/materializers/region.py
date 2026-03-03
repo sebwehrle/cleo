@@ -13,7 +13,7 @@ from rasterio import features
 from rasterio.transform import Affine
 from shapely.geometry import mapping
 
-from cleo.store import single_writer_lock
+from cleo.store import single_writer_lock, zarr_store_lock_dir
 from cleo.unification.store_io import open_zarr_dataset
 from cleo.unification.fingerprint import hash_inputs_id
 from cleo.unification.materializers.shared import _stable_json
@@ -283,7 +283,7 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
         var.encoding.pop("chunks", None)
 
     # Write wind region store (compute to materialize) with single-writer lock
-    with single_writer_lock(wind_region_path):
+    with single_writer_lock(zarr_store_lock_dir(wind_region_path)):
         if wind_region_path.exists():
             shutil.rmtree(wind_region_path)
 
@@ -313,7 +313,7 @@ def materialize_region(unifier, atlas, region_id: str) -> None:
         var.encoding.pop("chunks", None)
 
     # Write landscape region store with single-writer lock
-    with single_writer_lock(land_region_path):
+    with single_writer_lock(zarr_store_lock_dir(land_region_path)):
         if land_region_path.exists():
             shutil.rmtree(land_region_path)
 

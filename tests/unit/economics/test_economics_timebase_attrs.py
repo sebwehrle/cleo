@@ -10,6 +10,8 @@ Covered metrics:
 - optimal_energy
 """
 
+import warnings
+
 import numpy as np
 import xarray as xr
 
@@ -183,3 +185,47 @@ class TestTimebaseValuesPropagate:
         # Attrs should reflect the different values
         assert lcoe1.attrs["cleo:hours_per_year"] == 8766.0
         assert lcoe2.attrs["cleo:hours_per_year"] == 8760.0
+
+
+def test_lcoe_concat_has_no_futurewarning_for_coords_default_change():
+    """lcoe_v1_from_capacity_factors should not emit xarray concat coords FutureWarning."""
+    cf, turbine_ids = _make_minimal_cf()
+    power_kw = np.array([3000.0, 3500.0], dtype=np.float64)
+    overnight_cost = np.array([1300.0, 1400.0], dtype=np.float64)
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        _ = lcoe_v1_from_capacity_factors(
+            cf=cf,
+            turbine_ids=turbine_ids,
+            power_kw=power_kw,
+            overnight_cost_eur_per_kw=overnight_cost,
+            **_lcoe_params(),
+        )
+
+    matching = [
+        w
+        for w in rec
+        if issubclass(w.category, FutureWarning)
+        and "default value for coords will change" in str(w.message)
+    ]
+    assert not matching
+
+
+def test_lcoe_concat_handles_aux_turbine_id_coord() -> None:
+    """LCOE concat tolerates auxiliary turbine coords carried on CF input."""
+    cf, turbine_ids = _make_minimal_cf()
+    cf = cf.assign_coords(turbine_id=("turbine", np.array([0, 1], dtype=np.int64)))
+    power_kw = np.array([3000.0, 3500.0], dtype=np.float64)
+    overnight_cost = np.array([1300.0, 1400.0], dtype=np.float64)
+
+    out = lcoe_v1_from_capacity_factors(
+        cf=cf,
+        turbine_ids=turbine_ids,
+        power_kw=power_kw,
+        overnight_cost_eur_per_kw=overnight_cost,
+        **_lcoe_params(),
+    )
+
+    assert out.dims == ("turbine", "y", "x")
+    assert out.sizes["turbine"] == 2

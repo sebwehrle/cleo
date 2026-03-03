@@ -156,6 +156,26 @@ class TestRequiredGwaFiles:
 class TestMaterializeWind:
     """Integration tests for Unifier.materialize_wind."""
 
+    def test_auto_downloads_missing_required_files(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Missing required files are auto-downloaded before wind materialization."""
+        atlas = MockAtlas(tmp_path)
+        calls: list[tuple[str, Path]] = []
+
+        def _fake_download(url: str, dest: Path, **kwargs) -> Path:  # noqa: ANN003
+            path = Path(dest)
+            _create_test_raster(path)
+            calls.append((url, path))
+            return path
+
+        monkeypatch.setattr("cleo.unification.gwa_io.cleo.net.download_to_path", _fake_download)
+
+        unifier = Unifier()
+        unifier.materialize_wind(atlas)
+
+        assert len(calls) == 15
+        assert all(path.exists() for _url, path in calls)
+        assert (tmp_path / "wind.zarr").exists()
+
     def test_creates_wind_zarr(self, tmp_path: Path) -> None:
         """materialize_wind creates wind.zarr directory."""
         atlas = MockAtlas(tmp_path)

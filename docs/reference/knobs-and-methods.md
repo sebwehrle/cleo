@@ -56,7 +56,7 @@ CLEO is designed around a single mutable `Atlas` workspace object.
 
 | Metric | Required knobs | Optional knobs | Output location semantics |
 |---|---|---|---|
-| `mean_wind_speed` | `height` | none | Staged in `atlas.wind.data["mean_wind_speed"]`; `materialize()` writes to active wind store. |
+| `mean_wind_speed` | `height` | none | Staged in `atlas.wind.data["mean_wind_speed"]`; `materialize()` writes/updates height slices in active wind store. |
 | `capacity_factors` | turbines (via persistent selection or `turbines=`) | `mode`, `air_density`, `loss_factor`, `rews_n` | Same staging/materialization semantics. |
 | `rews_mps` | turbines (via persistent selection or `turbines=`) | `air_density`, `rews_n` | Same staging/materialization semantics. |
 | `lcoe` | turbines + grouped specs | `cf={...}`, `economics={...}` | Same staging/materialization semantics; economics/timebase attrs added. |
@@ -108,7 +108,9 @@ Algorithm:
 Output:
 
 - Units: `m/s`
-- Dims: spatial only (`y`, `x`)
+- Dims: `("height", "y", "x")` with singleton requested height from `compute(...)`
+- `materialize()` aggregates repeated calls across heights into one
+  `mean_wind_speed(height,y,x)` variable.
 
 ### `capacity_factors`
 

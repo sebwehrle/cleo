@@ -62,9 +62,9 @@ def test_domain_result_materialize_uses_atlas_compute_backend(monkeypatch, tmp_p
         np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64),
         dims=("y", "x"),
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
-        name="mean_wind_speed",
+        name="dummy_metric",
     )
-    result = DomainResult(domain, "mean_wind_speed", da, {})
+    result = DomainResult(domain, "dummy_metric", da, {})
 
     result.materialize()
 
@@ -91,9 +91,9 @@ def test_domain_result_materialize_defaults_to_serial_backend(monkeypatch, tmp_p
         np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64),
         dims=("y", "x"),
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
-        name="mean_wind_speed",
+        name="dummy_metric",
     )
-    result = DomainResult(domain, "mean_wind_speed", da, {})
+    result = DomainResult(domain, "dummy_metric", da, {})
 
     result.materialize()
 
@@ -127,9 +127,9 @@ def test_domain_result_materialize_prefers_atlas_evaluate_for_io(monkeypatch, tm
         np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64),
         dims=("y", "x"),
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
-        name="mean_wind_speed",
+        name="dummy_metric",
     )
-    result = DomainResult(domain, "mean_wind_speed", da, {})
+    result = DomainResult(domain, "dummy_metric", da, {})
 
     result.materialize()
 
@@ -148,9 +148,9 @@ def test_domain_result_exposes_materialize_not_cache(tmp_path) -> None:
         np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64),
         dims=("y", "x"),
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
-        name="mean_wind_speed",
+        name="dummy_metric",
     )
-    result = DomainResult(domain, "mean_wind_speed", da, {})
+    result = DomainResult(domain, "dummy_metric", da, {})
 
     assert hasattr(result, "materialize")
     assert not hasattr(result, "cache")

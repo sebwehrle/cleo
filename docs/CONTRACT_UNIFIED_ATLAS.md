@@ -137,6 +137,11 @@ Normative:
   - `wind.zarr` (country-wide wind inputs, incl. turbine metadata needed for hub-height computations),
   - `landscape.zarr` (country-wide landscape inputs, incl. `valid_mask`).
 - Must be **idempotent**.
+- When required GWA wind rasters are missing, build must attempt deterministic
+  download of the required file set for the configured country before failing.
+- When region-aware build paths require NUTS boundaries and local NUTS files
+  are missing, build must attempt deterministic NUTS download/extract before
+  failing.
 - Must be offline-safe if local raw inputs are present (and may use CopDEM tile download if configured/required by contract B).
 
 ---
@@ -279,6 +284,14 @@ Parameters:
 Normative:
 - Must not require turbine selection.
 - Must operate on the current region selection if set (A4).
+- Output must carry an explicit ``height`` dimension with dims
+  ``("height", "y", "x")``.
+- `compute(..., height=<h>)` returns a singleton height slice (`height=[h]`).
+- `materialize()` stores/updates `mean_wind_speed` by height slice so repeated
+  materializations at different heights aggregate into one
+  `mean_wind_speed(height,y,x)` variable.
+- If an existing store contains legacy 2D `mean_wind_speed(y,x)`,
+  materialization must fail with an explicit migration error.
 
 ### Additional wind metrics (implemented)
 

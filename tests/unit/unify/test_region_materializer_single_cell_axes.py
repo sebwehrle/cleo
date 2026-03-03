@@ -28,6 +28,17 @@ class _UnifierStub:
 
 
 def _write_base_stores(root: Path) -> None:
+    """Write tiny canonical base stores with chunking aligned to test policy.
+
+    This fixture intentionally writes ``y/x`` chunks of size ``2`` so opening
+    with ``chunk_policy={"y": 2, "x": 2}`` does not trigger xarray
+    split-chunk performance warnings during region materializer tests.
+
+    :param root: Temporary atlas root directory.
+    :type root: pathlib.Path
+    :returns: ``None``.
+    :rtype: None
+    """
     y = np.array([30.0, 20.0, 10.0], dtype=np.float64)
     x = np.array([0.0, 10.0, 20.0], dtype=np.float64)
 
@@ -60,6 +71,9 @@ def _write_base_stores(root: Path) -> None:
             "grid_id": "base-grid-id",
         },
     )
+
+    wind_base = wind_base.chunk({"height": 1, "y": 2, "x": 2})
+    land_base = land_base.chunk({"y": 2, "x": 2})
 
     wind_base.to_zarr(root / "wind.zarr", mode="w", consolidated=False)
     land_base.to_zarr(root / "landscape.zarr", mode="w", consolidated=False)

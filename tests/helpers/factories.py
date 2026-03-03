@@ -302,7 +302,7 @@ def power_curve_da(
     name: str = "power_curve",
 ) -> xr.DataArray:
     """
-    Create a 'power_curve' DataArray with dims ('turbine','wind_speed'), matching cleo usage.
+    Create a 'power_curve' DataArray with dims ('turbine','wind_speed'), matching cleo examples.
     """
     if u is None:
         u = wind_speed_axis()

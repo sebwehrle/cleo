@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from cleo.domains import WindDomain
 
 from cleo.dask_utils import compute as dask_compute
-from cleo.store import single_writer_lock
+from cleo.store import single_writer_lock, zarr_store_lock_dir
 from cleo.unification.store_io import turbine_ids_from_json
 
 logger = logging.getLogger(__name__)
@@ -302,7 +302,20 @@ def normalize_metric_for_active_wind_store(
     da: xr.DataArray,
     existing_ds: xr.Dataset,
 ) -> xr.DataArray:
-    """Normalize a computed metric to the active wind-store schema contract."""
+    """Normalize a computed metric to active wind-store schema expectations.
+
+    :param metric: Metric variable name targeted for wind-store materialization.
+    :type metric: str
+    :param da: Computed metric data array.
+    :type da: xarray.DataArray
+    :param existing_ds: Active wind-store dataset used as the schema reference.
+    :type existing_ds: xarray.Dataset
+    :returns: Normalized data array aligned to active-store coordinates.
+    :rtype: xarray.DataArray
+    :raises RuntimeError: If required schema coordinates are missing.
+    :raises ValueError: If computed coordinates are incompatible with store
+        coordinates.
+    """
     out = da.copy()
 
     if "turbine" in out.dims:
@@ -329,6 +342,21 @@ def normalize_metric_for_active_wind_store(
         computed_labels = [full_turbine_labels[i] for i in computed_indices]
         out = out.assign_coords(turbine=computed_labels)
         out = out.reindex(turbine=full_turbine_labels, fill_value=np.nan)
+
+    if metric == "mean_wind_speed":
+        if "height" not in out.dims:
+            raise RuntimeError("mean_wind_speed materialization requires a 'height' dimension in computed output.")
+        if "height" not in existing_ds.coords:
+            raise RuntimeError("Wind store missing 'height' coordinate; cannot align mean_wind_speed.")
+        full_heights = existing_ds.coords["height"].values.tolist()
+        out_heights = out.coords["height"].values.tolist()
+        missing_heights = [h for h in out_heights if h not in full_heights]
+        if missing_heights:
+            raise ValueError(
+                f"Computed mean_wind_speed includes unsupported height(s) {missing_heights!r}; "
+                f"available store heights: {sorted(full_heights)!r}."
+            )
+        out = out.reindex(height=full_heights, fill_value=np.nan)
 
     existing_dims = set(existing_ds.sizes.keys())
     coords_to_drop = [
@@ -421,11 +449,15 @@ class DomainResult:
         immediately as atlas.wind.data[metric_name].
 
         :param overwrite: If ``True`` (default), overwrite existing variable.
+            For ``mean_wind_speed``, this applies per requested ``height`` slice.
         :param allow_mode_change: If ``True``, allow changing ``capacity_factors`` mode.
         :returns: Cached DataArray.
         :raises ValueError: If variable exists and ``overwrite=False``.
+            For ``mean_wind_speed``, this is evaluated per requested ``height``.
         :raises ValueError: If ``capacity_factors`` mode would change without
             ``allow_mode_change=True``.
+        :raises RuntimeError: If materializing ``mean_wind_speed`` into a legacy
+            2D variable (missing ``height`` dimension) in an existing store.
         """
         atlas = self._domain._atlas
         # Route to active store (region or base) per contract B1
@@ -433,13 +465,63 @@ class DomainResult:
 
         # Open existing store to check and align
         existing_ds = xr.open_zarr(store_path, consolidated=False)
+        var_exists = self._metric in existing_ds.data_vars
+        is_height_aggregated_metric = self._metric == "mean_wind_speed"
 
-        if self._metric in existing_ds.data_vars and not overwrite:
+        evaluator = getattr(atlas, "_evaluate_for_io", None)
+        backend = getattr(atlas, "compute_backend", "serial")
+        workers = getattr(atlas, "compute_workers", None)
+
+        requested_height = None
+        target_height_value = None
+        store_height_values: list[object] = []
+        if is_height_aggregated_metric:
+            requested_height = self._params.get("height")
+            if requested_height is None:
+                existing_ds.close()
+                raise RuntimeError("mean_wind_speed materialization requires params['height'] from compute(...).")
+            if "height" not in existing_ds.coords:
+                existing_ds.close()
+                raise RuntimeError("Wind store missing 'height' coordinate; cannot materialize mean_wind_speed.")
+            store_height_values = existing_ds.coords["height"].values.tolist()
+            for h in store_height_values:
+                if h == requested_height:
+                    target_height_value = h
+                    break
+            if target_height_value is None:
+                existing_ds.close()
+                raise ValueError(
+                    f"Requested height={requested_height!r} not present in active wind store heights: "
+                    f"{sorted(store_height_values)!r}"
+                )
+
+        if var_exists and not overwrite and not is_height_aggregated_metric:
             existing_ds.close()
             raise ValueError(f"Variable {self._metric!r} already exists in wind.zarr; use overwrite=True to replace.")
 
+        if is_height_aggregated_metric and var_exists:
+            existing_var = existing_ds[self._metric]
+            if "height" not in existing_var.dims:
+                existing_ds.close()
+                raise RuntimeError(
+                    "Existing mean_wind_speed in active wind store is legacy 2D (missing 'height'). "
+                    "Delete the variable or rebuild the store before materializing height-aware mean_wind_speed."
+                )
+            existing_slice_any = existing_var.sel(height=target_height_value).notnull().any()
+            if callable(evaluator):
+                existing_slice_any = evaluator(existing_slice_any)
+            else:
+                existing_slice_any = dask_compute(existing_slice_any, backend=backend, num_workers=workers)
+            has_existing_height_data = bool(np.asarray(existing_slice_any).item())
+            if has_existing_height_data and not overwrite:
+                existing_ds.close()
+                raise ValueError(
+                    f"mean_wind_speed at height={target_height_value!r} already exists in wind.zarr; "
+                    "use overwrite=True to replace that height slice."
+                )
+
         # Mode-guard for capacity_factors: prevent silent mode flips
-        if self._metric == "capacity_factors" and self._metric in existing_ds.data_vars:
+        if self._metric == "capacity_factors" and var_exists:
             existing_var = existing_ds[self._metric]
             old_mode = existing_var.attrs.get("cleo:cf_mode")
             new_mode = self._data.attrs.get("cleo:cf_mode")
@@ -455,35 +537,54 @@ class DomainResult:
             da=self._data,
             existing_ds=existing_ds,
         )
-        evaluator = getattr(atlas, "_evaluate_for_io", None)
         if callable(evaluator):
             da = evaluator(da)
         else:
-            backend = getattr(atlas, "compute_backend", "serial")
-            workers = getattr(atlas, "compute_workers", None)
             da = dask_compute(da, backend=backend, num_workers=workers)
 
         # Preserve existing store attributes before writing
         existing_attrs = dict(existing_ds.attrs)
-        var_exists = self._metric in existing_ds.data_vars
+        store_sizes = dict(existing_ds.sizes)
         existing_ds.close()
 
         # Acquire single-writer lock for all write operations
-        with single_writer_lock(store_path):
-            # If overwriting, delete the existing variable first to ensure full replacement
-            # (mode="a" with zarr can lead to partial overwrites if shape/coords differ)
-            if var_exists and overwrite:
-                root = zarr.open_group(store_path, mode="a")
-                if self._metric in root:
-                    del root[self._metric]
+        with single_writer_lock(zarr_store_lock_dir(store_path)):
+            if is_height_aggregated_metric and var_exists:
+                assert target_height_value is not None  # guarded above
+                assert requested_height is not None  # guarded above
+                try:
+                    height_index = store_height_values.index(target_height_value)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"Resolved height {target_height_value!r} not found in active store coordinate list."
+                    ) from exc
 
-            # Write metric to wind.zarr (append mode to preserve existing vars)
-            ds_to_write = xr.Dataset({self._metric: da})
-            ds_to_write.to_zarr(
-                store_path,
-                mode="a",  # Append to existing store
-                consolidated=False,
-            )
+                ds_to_write = xr.Dataset({self._metric: da.sel(height=[target_height_value])})
+                ds_to_write.to_zarr(
+                    store_path,
+                    mode="r+",
+                    consolidated=False,
+                    region={
+                        "height": slice(height_index, height_index + 1),
+                        "y": slice(0, int(store_sizes["y"])),
+                        "x": slice(0, int(store_sizes["x"])),
+                    },
+                )
+            else:
+                # If overwriting, delete the existing variable first to ensure full replacement
+                # (mode="a" with zarr can lead to partial overwrites if shape/coords differ)
+                if var_exists and overwrite:
+                    root = zarr.open_group(store_path, mode="a")
+                    if self._metric in root:
+                        del root[self._metric]
+
+                # Write metric to wind.zarr (append mode to preserve existing vars)
+                ds_to_write = xr.Dataset({self._metric: da})
+                ds_to_write.to_zarr(
+                    store_path,
+                    mode="a",  # Append to existing store
+                    consolidated=False,
+                )
 
             # Restore preserved attributes (to_zarr may overwrite them)
             root = zarr.open_group(store_path, mode="a")

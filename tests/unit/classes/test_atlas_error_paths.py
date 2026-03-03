@@ -34,6 +34,10 @@ def test_load_nuts_region_catalog_falls_back_when_catalog_json_is_invalid(
     fallback_catalog = [
         {"name": "Wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2},
     ]
+    monkeypatch.setattr(
+        "cleo.atlas.Atlas._ensure_nuts_shapefile",
+        lambda self, *, auto_download=True: tmp_path / "data" / "nuts" / "dummy.shp",
+    )
     monkeypatch.setattr("cleo.atlas._read_nuts_region_catalog", lambda _path, _country: fallback_catalog)
 
     rows = atlas._load_nuts_region_catalog()
@@ -63,6 +67,49 @@ def test_clean_results_falls_back_to_mtime_when_store_attrs_unreadable(
     deleted = atlas.clean_results(older_than="2021-01-01")
     assert deleted == 1
     assert not store.exists()
+
+
+def test_ensure_nuts_shapefile_downloads_when_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    atlas = Atlas(tmp_path, "AUT", "epsg:3035")
+    calls = {"count": 0}
+
+    def _fake_load_nuts(_atlas, **_kwargs):  # noqa: ANN001
+        calls["count"] += 1
+        shp = tmp_path / "data" / "nuts" / "NUTS_RG_03M_2021_4326.shp"
+        shp.parent.mkdir(parents=True, exist_ok=True)
+        shp.write_text("dummy", encoding="utf-8")
+
+    monkeypatch.setattr("cleo.loaders.load_nuts", _fake_load_nuts)
+
+    shp = atlas._ensure_nuts_shapefile(auto_download=True)
+    assert calls["count"] == 1
+    assert shp.exists()
+
+
+def test_build_with_pending_region_ensures_nuts_before_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    atlas = Atlas(tmp_path, "AUT", "epsg:3035", region="Wien")
+    calls = {"count": 0}
+
+    def _fake_load_nuts(_atlas, **_kwargs):  # noqa: ANN001
+        calls["count"] += 1
+        shp = tmp_path / "data" / "nuts" / "NUTS_RG_03M_2021_4326.shp"
+        shp.parent.mkdir(parents=True, exist_ok=True)
+        shp.write_text("dummy", encoding="utf-8")
+
+    def _fake_select(self, *, region=None, region_level=None, inplace=False):  # noqa: ANN001, ARG001
+        self._region_name = region
+        self._region_id = "AT13"
+        return None
+
+    monkeypatch.setattr("cleo.loaders.load_nuts", _fake_load_nuts)
+    monkeypatch.setattr("cleo.atlas.Atlas.build_canonical", lambda self: setattr(self, "_canonical_ready", True))
+    monkeypatch.setattr("cleo.atlas.Atlas.select", _fake_select)
+    monkeypatch.setattr("cleo.atlas.Atlas._ensure_region_stores", lambda self: None)
+
+    atlas.build()
+    assert calls["count"] == 1
 
 
 def test_clean_regions_treats_unreadable_store_state_as_incomplete(

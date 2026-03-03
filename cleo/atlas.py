@@ -175,6 +175,10 @@ class Atlas:
 
         Must be called before accessing wind/landscape data.
         """
+        # Region-aware build paths require NUTS boundaries.
+        if self.region is not None:
+            self._ensure_nuts_shapefile(auto_download=True)
+
         # Always ensure base stores exist
         if not self._canonical_ready:
             self.build_canonical()
@@ -391,12 +395,16 @@ class Atlas:
                 exc_info=True,
             )
 
+        def _read_raw_catalog() -> list[dict]:
+            self._ensure_nuts_shapefile(auto_download=True)
+            return _read_nuts_region_catalog(self.path, self.country)
+
         catalog, cache = load_nuts_region_catalog_policy(
             cached_rows=self._nuts_region_catalog_cache,
             landscape_store_path=self.landscape_store_path,
             valid_levels=self._VALID_NUTS_LEVELS,
             read_store_attrs=read_zarr_group_attrs,
-            read_raw_catalog=lambda: _read_nuts_region_catalog(self.path, self.country),
+            read_raw_catalog=_read_raw_catalog,
             log_debug=_log_debug,
         )
         self._nuts_region_catalog_cache = cache
@@ -596,7 +604,7 @@ class Atlas:
         - wind.zarr: Complete canonical wind store with GWA data
         - landscape.zarr: Complete canonical landscape store with valid_mask and elevation
 
-        Requires that all GWA data files are present.
+        Missing required GWA rasters are auto-downloaded before failing.
         """
         from cleo.unification import Unifier
 
@@ -1353,6 +1361,60 @@ class Atlas:
             if not path.is_dir():
                 path.mkdir(parents=True)
 
+    def _ensure_nuts_shapefile(self, *, auto_download: bool = True) -> Path:
+        """Ensure a NUTS shapefile is available under ``<atlas.path>/data/nuts``.
+
+        :param auto_download: If ``True`` (default), attempt NUTS
+            download/extract when no local shapefile exists.
+        :type auto_download: bool
+        :returns: Path to a discovered NUTS shapefile.
+        :rtype: pathlib.Path
+        :raises FileNotFoundError: If no shapefile is available after optional
+            auto-download.
+        """
+
+        def _first_nuts_shapefile() -> Path | None:
+            nuts_dir_local = self.path / "data" / "nuts"
+            shp_files = sorted(nuts_dir_local.rglob("*.shp")) if nuts_dir_local.exists() else []
+            return shp_files[0] if shp_files else None
+
+        nuts_dir = self.path / "data" / "nuts"
+        existing = _first_nuts_shapefile()
+        if existing is not None:
+            return existing
+
+        download_error: Exception | None = None
+        if auto_download:
+            logger.info(
+                "NUTS shapefile missing; attempting automatic download/extract.",
+                extra={"country": self.country, "nuts_dir": str(nuts_dir)},
+            )
+            from cleo import loaders as loaders_module
+
+            try:
+                loaders_module.load_nuts(self)
+            except Exception as e:  # pragma: no cover - exact exception type depends on network/fs failures
+                download_error = e
+                logger.warning(
+                    "Automatic NUTS download/extract failed.",
+                    extra={"country": self.country, "nuts_dir": str(nuts_dir)},
+                    exc_info=True,
+                )
+
+        existing = _first_nuts_shapefile()
+        if existing is not None:
+            return existing
+
+        message = f"NUTS shapefile not found under {nuts_dir}."
+        if auto_download:
+            message += " Automatic NUTS download/extract was attempted but no shapefile is available."
+            if download_error is not None:
+                message += f" Last error: {download_error}"
+            message += " Check network access and retry, or run cleo.loaders.load_nuts manually."
+        else:
+            message += " Run NUTS download/extract first (e.g. via cleo.loaders.load_nuts)."
+        raise FileNotFoundError(message)
+
     def get_nuts_region(self, region, merged_name=None, to_atlascrs=True):
         """Return dissolved NUTS geometry for one or more regions.
 
@@ -1370,14 +1432,7 @@ class Atlas:
         :raises TypeError: If ``region`` is neither ``str`` nor ``list[str]``.
         :raises ValueError: If any requested region is not valid for the atlas country.
         """
-        nuts_dir = self.path / "data" / "nuts"
-        shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
-        if not shp_files:
-            raise FileNotFoundError(
-                f"NUTS shapefile not found under {nuts_dir}. "
-                "Run NUTS download/extract first (e.g. via cleo.loaders.load_nuts)."
-            )
-        nuts_shape = shp_files[0]
+        nuts_shape = self._ensure_nuts_shapefile(auto_download=True)
         # Read vector via centralized helper
         nuts = _read_vector_file(nuts_shape)
 
@@ -1431,14 +1486,7 @@ class Atlas:
         :rtype: geopandas.GeoDataFrame
         :raises FileNotFoundError: If no NUTS shapefile is available.
         """
-        nuts_dir = self.path / "data" / "nuts"
-        shp_files = sorted(nuts_dir.rglob("*.shp")) if nuts_dir.exists() else []
-        if not shp_files:
-            raise FileNotFoundError(
-                f"NUTS shapefile not found under {nuts_dir}. "
-                "Run NUTS download/extract first (e.g. via cleo.loaders.load_nuts)."
-            )
-        nuts_shape = shp_files[0]
+        nuts_shape = self._ensure_nuts_shapefile(auto_download=True)
         # Read vector via centralized helper
         nuts = _read_vector_file(nuts_shape)
         alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2

@@ -16,6 +16,13 @@ import cleo.net
 logger = logging.getLogger(__name__)
 
 GWA_HEIGHTS = [10, 50, 100, 150, 200]
+GWA_GIS_API_BASE_URL = "https://globalwindatlas.info/api/gis/country"
+
+_GWA_LAYER_NAME_BY_INTERNAL = {
+    "weibull_A": "combined-Weibull-A",
+    "weibull_k": "combined-Weibull-k",
+    "rho": "air-density",
+}
 
 
 def fetch_gwa_crs(iso3: str) -> str:
@@ -166,6 +173,90 @@ def _assert_all_required_gwa_present(atlas) -> list[tuple[str, Path]]:
     if missing:
         raise FileNotFoundError("Missing required GWA files:\n" + "\n".join(missing))
 
+    return req
+
+
+def _missing_required_gwa_files(atlas) -> list[tuple[str, Path]]:
+    """Return required GWA source entries that are missing on disk.
+
+    :param atlas: Atlas-like object with ``path`` and ``country`` attributes.
+    :type atlas: object
+    :returns: Missing ``(source_id, file_path)`` entries.
+    :rtype: list[tuple[str, pathlib.Path]]
+    """
+    return [(sid, path) for sid, path in _required_gwa_files(atlas) if not path.exists()]
+
+
+def _download_url_for_required_source(*, country: str, source_id: str) -> str:
+    """Build Global Wind Atlas GIS download URL for a required source ID.
+
+    :param country: ISO3 country code.
+    :type country: str
+    :param source_id: Required source identifier in ``gwa:file:<layer>:<height>`` format.
+    :type source_id: str
+    :returns: Download URL for the requested GWA layer/height.
+    :rtype: str
+    :raises ValueError: If source ID format or layer key is invalid.
+    """
+    parts = source_id.split(":")
+    if len(parts) != 4 or parts[0] != "gwa" or parts[1] != "file":
+        raise ValueError(f"Invalid required GWA source_id format: {source_id!r}")
+
+    layer_key = parts[2]
+    height = parts[3]
+    layer_name = _GWA_LAYER_NAME_BY_INTERNAL.get(layer_key)
+    if layer_name is None:
+        raise ValueError(f"Unknown required GWA layer key {layer_key!r} in source_id={source_id!r}")
+
+    return f"{GWA_GIS_API_BASE_URL}/{country}/{layer_name}/{height}"
+
+
+def ensure_required_gwa_files(atlas, *, auto_download: bool = True) -> list[tuple[str, Path]]:
+    """Ensure all required GWA rasters are present for wind materialization.
+
+    This helper supports the canonical build flow:
+    - if required files already exist, return immediately,
+    - otherwise optionally attempt to download missing files from GWA GIS API,
+    - finally fail fast with a complete missing-file list if still incomplete.
+
+    :param atlas: Atlas-like object with ``path`` and ``country`` attributes.
+    :type atlas: object
+    :param auto_download: If ``True`` (default), attempt downloading missing
+        files before raising an error.
+    :type auto_download: bool
+    :returns: Full required source list when all files are present.
+    :rtype: list[tuple[str, pathlib.Path]]
+    :raises FileNotFoundError: If required files remain missing after optional
+        download attempts.
+    """
+    req = _required_gwa_files(atlas)
+    missing = _missing_required_gwa_files(atlas)
+
+    if missing and auto_download:
+        logger.info(
+            "Required GWA files are missing; attempting automatic download.",
+            extra={"country": atlas.country, "missing_count": len(missing)},
+        )
+        downloaded = 0
+        for source_id, path in missing:
+            url = _download_url_for_required_source(country=atlas.country, source_id=source_id)
+            try:
+                cleo.net.download_to_path(url, path, overwrite=False)
+                downloaded += 1
+            except Exception:
+                logger.warning(
+                    "Failed to auto-download required GWA file.",
+                    extra={"source_id": source_id, "path": str(path), "url": url},
+                    exc_info=True,
+                )
+        logger.info(
+            "Finished GWA auto-download attempt.",
+            extra={"country": atlas.country, "downloaded_count": downloaded, "attempted_count": len(missing)},
+        )
+
+    remaining = [str(path) for _sid, path in req if not path.exists()]
+    if remaining:
+        raise FileNotFoundError("Missing required GWA files:\n" + "\n".join(remaining))
     return req
 
 

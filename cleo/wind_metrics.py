@@ -95,16 +95,22 @@ def _wind_metric_mean_wind_speed(
     *,
     height: int,
 ) -> xr.DataArray:
-    """
-    Compute mean wind speed from canonical wind store at specified height.
+    """Compute mean wind speed from canonical wind Weibull parameters.
 
-    Args:
-        wind: Canonical wind dataset (must have weibull_A and weibull_k).
-        land: Canonical landscape dataset (optional, for valid_mask).
-        height: Height level to compute (must exist in wind coords).
-
-    Returns:
-        DataArray with mean wind speed (m/s).
+    :param wind: Canonical wind dataset with ``weibull_A``/``weibull_k`` and
+        a ``height`` coordinate in meters.
+    :type wind: xarray.Dataset
+    :param land: Optional landscape dataset. When provided with
+        ``valid_mask(y,x)``, invalid pixels are masked to ``NaN``.
+    :type land: xarray.Dataset | None
+    :param height: Query height in meters above ground.
+    :type height: int
+    :returns: Mean wind speed data array with dims ``("height", "y", "x")``.
+        The returned ``height`` axis is a singleton containing the requested
+        level, preserving explicit height semantics for downstream aggregation.
+    :rtype: xarray.DataArray
+    :raises ValueError: If requested height is not available in wind-store
+        Weibull parameter coordinates.
     """
     # Get weibull params (canonical store uses weibull_A)
     var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
@@ -120,8 +126,8 @@ def _wind_metric_mean_wind_speed(
     if height not in available:
         raise ValueError(f"height={height} not in wind store; available: {sorted(available)}")
 
-    # Compute mean wind speed
-    da = mean_wind_speed_from_weibull(A=A.sel(height=height), k=k.sel(height=height))
+    # Keep height as an explicit singleton axis for downstream aggregation.
+    da = mean_wind_speed_from_weibull(A=A.sel(height=[height]), k=k.sel(height=[height]))
 
     # Apply valid_mask if available
     if land is not None and "valid_mask" in land:

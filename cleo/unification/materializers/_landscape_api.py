@@ -19,7 +19,7 @@ import zarr
 from rasterio.enums import Resampling
 
 from cleo.spatial import to_crs_if_needed
-from cleo.store import single_writer_lock
+from cleo.store import single_writer_lock, zarr_store_lock_dir
 from cleo.unification.fingerprint import fingerprint_path_mtime_size, hash_inputs_id
 from cleo.unification.manifest import _read_manifest, _write_manifest_atomic
 from cleo.unification.raster_io import _atomic_replace_variable_dir
@@ -245,7 +245,7 @@ def materialize_landscape_computed_variables(
     skipped: list[str] = []
 
     # Acquire single-writer lock for the duration of all write operations
-    with single_writer_lock(store_path):
+    with single_writer_lock(zarr_store_lock_dir(store_path)):
         for name in names:
             da = variables[name]
             exists = name in existing_vars
@@ -420,7 +420,7 @@ def materialize_landscape_variable(
     preserve_attrs = dict(land_root.attrs)
 
     # Acquire single-writer lock for all write operations
-    with single_writer_lock(store_path):
+    with single_writer_lock(zarr_store_lock_dir(store_path)):
         # Handle replace if needed (inside lock to prevent race conditions)
         if do_replace:
             _atomic_replace_variable_dir(store_path, variable_name)

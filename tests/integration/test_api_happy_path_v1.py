@@ -245,7 +245,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     )
 
     # === Contract v1: compute().materialize() pattern ===
-    # Test the canonical usage: select + compute + materialize writes to wind.zarr
+    # Test the canonical examples: select + compute + materialize writes to wind.zarr
     atlas.wind.clear_selection()
     assert atlas.wind.selected_turbines is None, "clear_selection() must clear"
 

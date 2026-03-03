@@ -3,7 +3,7 @@
 Contracts:
 - setup_logging must not mutate the root logger (level/handlers).
 - setup_logging must configure the "cleo" logger with at least one handler.
-- logging.config must be importable (regression: missing import usage must not crash).
+- logging.config must be importable (regression: missing import examples must not crash).
 """
 
 from __future__ import annotations

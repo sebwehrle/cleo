@@ -134,19 +134,35 @@ def lcoe_v1_from_capacity_factors(
     hours_per_year: float = 8766.0,
     grid_connect_cost_eur_per_kw: float = 50.0,
 ) -> xr.DataArray:
-    """
-    Compute LCOE from capacity factors (pure numerics, turbine-loop).
+    """Compute LCOE from capacity factors (pure numerics, turbine-loop).
 
     Contract: no I/O, stays lazy/dask-friendly.
 
-    Args:
-        bos_cost_share: Balance-of-system cost share (0.0 to 1.0).
-            Represents location-dependent CAPEX fraction.
-            0.0 = all CAPEX is turbine (location-independent).
-            0.3 = 30% of CAPEX is BOS (location-dependent).
-        grid_connect_cost_eur_per_kw: Grid connection cost rate in EUR/kW.
-            Default is 50.0 (based on Austrian regulation §54 ElWOG).
-            Set to 0.0 to exclude grid connection costs (e.g., for paper qLCOE).
+    :param cf: Capacity factors with dims ``("turbine","y","x")``.
+    :type cf: xarray.DataArray
+    :param turbine_ids: Ordered turbine IDs matching ``cf.turbine``.
+    :type turbine_ids: tuple[str, ...]
+    :param power_kw: Rated turbine powers in kW.
+    :type power_kw: numpy.ndarray
+    :param overnight_cost_eur_per_kw: Overnight cost rates in EUR/kW.
+    :type overnight_cost_eur_per_kw: numpy.ndarray
+    :param bos_cost_share: Balance-of-system cost share (0.0 to 1.0).
+        Represents location-dependent CAPEX fraction.
+    :type bos_cost_share: float
+    :param om_fixed_eur_per_kw_a: Fixed O&M in EUR/kW/a.
+    :type om_fixed_eur_per_kw_a: float
+    :param om_variable_eur_per_kwh: Variable O&M in EUR/kWh.
+    :type om_variable_eur_per_kwh: float
+    :param discount_rate: Discount rate (fraction).
+    :type discount_rate: float
+    :param lifetime_a: Economic lifetime in years.
+    :type lifetime_a: int
+    :param hours_per_year: Annual hours assumption.
+    :type hours_per_year: float
+    :param grid_connect_cost_eur_per_kw: Grid connection cost rate in EUR/kW.
+    :type grid_connect_cost_eur_per_kw: float
+    :returns: LCOE in ``EUR/MWh`` with dims ``("turbine","y","x")``.
+    :rtype: xarray.DataArray
     """
     # bos_cost_share is the location-dependent share; turbine/location-independent is the remainder
     location_independent_share = 1.0 - float(bos_cost_share)
@@ -171,7 +187,9 @@ def lcoe_v1_from_capacity_factors(
         # Grid connection cost (EUR, scalar).
         gc_abs = float(grid_connect_cost(p_kw, rate_eur_per_kw=grid_connect_cost_eur_per_kw))
 
-        cf_turb = cf.sel(turbine=turbine_id)
+        # drop=True avoids scalar turbine-related coords (e.g. turbine_id)
+        # that otherwise conflict during concat across turbines.
+        cf_turb = cf.sel(turbine=turbine_id, drop=True)
         lc = levelized_cost(
             power=p_kw,
             capacity_factors=cf_turb,
@@ -187,7 +205,7 @@ def lcoe_v1_from_capacity_factors(
         lc = lc.expand_dims(turbine=[turbine_id])
         lcoe_list.append(lc)
 
-    out = xr.concat(lcoe_list, dim="turbine").rename("lcoe")
+    out = xr.concat(lcoe_list, dim="turbine", coords="minimal").rename("lcoe")
     out.attrs["units"] = "EUR/MWh"
     out.attrs["cleo:cf_mode"] = cf.attrs.get("cleo:cf_mode")
     out.attrs["cleo:hours_per_year"] = float(hours_per_year)
@@ -204,6 +222,33 @@ def lcoe_v1_from_capacity_factors(
     out.attrs["cleo:algo"] = "lcoe_v1"
     out.attrs["cleo:algo_version"] = "3"  # v3: added cf_spec_json
     return out
+
+
+def _select_turbine_by_index(*, values: xr.DataArray, idx: xr.DataArray, name: str) -> xr.DataArray:
+    """Select per-pixel turbine values using integer index field (dask-safe).
+
+    :param values: Input array containing a ``turbine`` dimension.
+    :type values: xarray.DataArray
+    :param idx: Integer turbine index field over non-turbine dimensions.
+    :type idx: xarray.DataArray
+    :param name: Output variable name.
+    :type name: str
+    :returns: Selected values with ``turbine`` removed.
+    :rtype: xarray.DataArray
+    :raises ValueError: If ``values`` does not contain a ``turbine`` dimension.
+    """
+    if "turbine" not in values.dims:
+        raise ValueError("values must contain 'turbine' dimension")
+
+    turbine_index = xr.DataArray(
+        np.arange(values.sizes["turbine"], dtype=np.int32),
+        dims=("turbine",),
+        coords={"turbine": values.coords["turbine"]},
+    )
+    selector = turbine_index == idx
+    # Avoid fancy indexing with chunked indexers; this stays lazy for dask arrays.
+    selected = xr.where(selector, values, 0).sum(dim="turbine", skipna=False).rename(name)
+    return selected
 
 
 def min_lcoe_turbine_idx(
@@ -237,10 +282,14 @@ def optimal_power_kw(
     lcoe: xr.DataArray,
     power_kw: np.ndarray,
 ) -> xr.DataArray:
-    """
-    Get rated power of minimum-LCOE turbine at each pixel (pure numerics).
+    """Get rated power of the minimum-LCOE turbine at each pixel.
 
-    Uses argmin index selection (avoids float equality comparison).
+    :param lcoe: LCOE array with dims ``("turbine","y","x")``.
+    :type lcoe: xarray.DataArray
+    :param power_kw: Rated turbine powers in kW.
+    :type power_kw: numpy.ndarray
+    :returns: Optimal power in ``kW`` over ``("y","x")``.
+    :rtype: xarray.DataArray
     """
     idx = lcoe.fillna(np.inf).argmin(dim="turbine")
     all_invalid = lcoe.isnull().all(dim="turbine")
@@ -250,7 +299,7 @@ def optimal_power_kw(
         dims=("turbine",),
         coords={"turbine": lcoe.coords["turbine"]},
     )
-    p_sel = p_da.isel(turbine=idx).rename("optimal_power")
+    p_sel = _select_turbine_by_index(values=p_da, idx=idx, name="optimal_power")
     p_sel = p_sel.where(~all_invalid)
     p_sel.attrs["units"] = "kW"
     p_sel.attrs["cleo:cf_mode"] = lcoe.attrs.get("cleo:cf_mode")
@@ -272,22 +321,32 @@ def optimal_energy_gwh_a(
     power_kw: np.ndarray,
     hours_per_year: float = 8766.0,
 ) -> xr.DataArray:
-    """
-    Get annual energy output of minimum-LCOE turbine at each pixel (pure numerics).
+    """Get annual energy output of the minimum-LCOE turbine at each pixel.
 
-    Uses argmin index selection (avoids float equality comparison).
+    :param lcoe: LCOE array with dims ``("turbine","y","x")``.
+    :type lcoe: xarray.DataArray
+    :param cf: Capacity factors with dims ``("turbine","y","x")``.
+    :type cf: xarray.DataArray
+    :param power_kw: Rated turbine powers in kW.
+    :type power_kw: numpy.ndarray
+    :param hours_per_year: Annual hours assumption.
+    :type hours_per_year: float
+    :returns: Optimal annual energy in ``GWh/a`` over ``("y","x")``.
+    :rtype: xarray.DataArray
     """
     idx = lcoe.fillna(np.inf).argmin(dim="turbine")
+    all_invalid = lcoe.isnull().all(dim="turbine")
 
-    cf_sel = cf.isel(turbine=idx)
+    cf_sel = _select_turbine_by_index(values=cf, idx=idx, name="selected_cf")
     p_da = xr.DataArray(
         power_kw.astype(np.float64),
         dims=("turbine",),
         coords={"turbine": lcoe.coords["turbine"]},
     )
-    p_sel_kw = p_da.isel(turbine=idx)
+    p_sel_kw = _select_turbine_by_index(values=p_da, idx=idx, name="selected_power_kw")
 
     energy = (cf_sel * p_sel_kw * float(hours_per_year) / 1e6).rename("optimal_energy")
+    energy = energy.where(~all_invalid)
     energy.attrs["units"] = "GWh/a"
     energy.attrs["cleo:cf_mode"] = lcoe.attrs.get("cleo:cf_mode")
     energy.attrs["cleo:hours_per_year"] = float(hours_per_year)

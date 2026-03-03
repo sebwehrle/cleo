@@ -18,6 +18,10 @@ def test_load_nuts_region_catalog_uses_cache_and_returns_defensive_copies(tmp_pa
         calls["count"] += 1
         return [dict(row) for row in fallback_catalog]
 
+    monkeypatch.setattr(
+        "cleo.atlas.Atlas._ensure_nuts_shapefile",
+        lambda self, *, auto_download=True: tmp_path / "data" / "nuts" / "dummy.shp",
+    )
     monkeypatch.setattr("cleo.atlas._read_nuts_region_catalog", _fake_read_raw)
 
     first = atlas._load_nuts_region_catalog()

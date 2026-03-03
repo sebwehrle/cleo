@@ -65,6 +65,18 @@ def _write_lock_file(lock_path: Path, target_dir: Path) -> None:
         os.close(fd)
 
 
+def zarr_store_lock_dir(store_dir: str | Path) -> Path:
+    """Return a sibling lock directory path for a Zarr store.
+
+    :param store_dir: Path to the ``*.zarr`` store directory being protected.
+    :type store_dir: str | pathlib.Path
+    :returns: Sibling lock directory path (for example ``.wind.zarr.lock``).
+    :rtype: pathlib.Path
+    """
+    store_path = Path(store_dir)
+    return store_path.parent / f".{store_path.name}.lock"
+
+
 @contextmanager
 def single_writer_lock(
     target_dir: str | Path,
@@ -77,8 +89,12 @@ def single_writer_lock(
     file contains JSON metadata: created_at, pid, hostname, target_dir.
 
     Usage:
-        with single_writer_lock(Path("/path/to/store.zarr")) as store_path:
-            # Write to store_path safely
+        with single_writer_lock(Path("/path/to/some_dir")) as lock_dir:
+            # Write resources protected by this lock
+            ...
+
+        with single_writer_lock(zarr_store_lock_dir(Path("/path/to/wind.zarr"))) as lock_dir:
+            # Write to the wind.zarr store safely
             ...
         # Lock is released on exit
 
@@ -105,6 +121,10 @@ def single_writer_lock(
     Notes
     -----
     - Lock files are named `.cleo_write_lock` inside target_dir.
+    - For Zarr writes, prefer locking a sibling directory (for example
+      ``.wind.zarr.lock``) via ``zarr_store_lock_dir(...)``. This keeps the
+      lock file out of the ``*.zarr`` hierarchy and avoids non-component
+      warnings from Zarr/xarray tree discovery.
     - The lock is advisory; it only works if all writers use this mechanism.
     - No automatic stale-lock cleanup: use force=True if you're certain no
       other writer is active.
@@ -125,7 +145,7 @@ def single_writer_lock(
                 f"Lock metadata:\n{meta_str}\n\n"
                 f"Another process may be writing to this store.\n"
                 f"If you're certain no other writer is active, either:\n"
-                f"  1. Delete the lock file: rm {lock_path}\n"
+                f"  1. Delete the lock file shown above: rm {lock_path}\n"
                 f"  2. Use force=True to override the lock",
                 lock_path=lock_path,
                 lock_metadata=lock_meta,

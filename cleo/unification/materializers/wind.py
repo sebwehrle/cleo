@@ -16,7 +16,7 @@ from cleo.unification.fingerprint import (
     hash_grid_id,
     hash_inputs_id,
 )
-from cleo.unification.gwa_io import _assert_all_required_gwa_present, _open_gwa_raster
+from cleo.unification.gwa_io import ensure_required_gwa_files, _open_gwa_raster
 from cleo.unification.manifest import init_manifest, write_manifest_sources, write_manifest_variables
 from cleo.unification.materializers.shared import _get_clip_geometry, _stable_json
 from cleo.unification.turbines import _default_turbines_from_resources, _ingest_turbines_and_costs
@@ -37,7 +37,7 @@ def materialize_wind(unifier, atlas) -> None:
     mask_policy = "nan+valid_mask_in_landscape"
     vertical_policy_snapshot = policy_snapshot(getattr(atlas, "vertical_policy", None))
 
-    req_files = _assert_all_required_gwa_present(atlas)
+    req_files = ensure_required_gwa_files(atlas, auto_download=True)
     clip_geom = _get_clip_geometry(atlas)
 
     ref_height = 100

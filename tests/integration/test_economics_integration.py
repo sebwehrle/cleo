@@ -3,7 +3,7 @@
 Verifies:
 - configure_economics() + compute("lcoe", ...) end-to-end
 - Baseline + override resolution
-- Grouped spec usage
+- Grouped spec examples
 - Error paths (missing required fields)
 - Economics preserved across clone
 """
@@ -470,7 +470,6 @@ class TestLcoeFamilyMetricsIntegration:
         valid_mask = result.values >= 0
         assert np.all(result.values[valid_mask] == 0)
 
-    @pytest.mark.skip(reason="optimal_power has dask fancy indexing limitation with chunked arrays")
     def test_optimal_power_integration(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """optimal_power computes successfully end-to-end."""
         atlas = materialized_atlas
@@ -488,7 +487,6 @@ class TestLcoeFamilyMetricsIntegration:
         assert len(valid) > 0
         assert np.all(valid > 0)
 
-    @pytest.mark.skip(reason="optimal_energy has dask fancy indexing limitation with chunked arrays")
     def test_optimal_energy_integration(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """optimal_energy computes successfully end-to-end."""
         atlas = materialized_atlas

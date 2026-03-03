@@ -20,6 +20,7 @@ from cleo.unification.gwa_io import (
     _assert_all_required_gwa_present,
     _load_or_fetch_gwa_crs,
     _open_gwa_raster,
+    ensure_required_gwa_files,
 )
 
 
@@ -103,6 +104,51 @@ def test_assert_all_required_gwa_present_lists_missing_files(tmp_path: Path) -> 
     atlas = SimpleNamespace(path=tmp_path, country="AUT")
     with pytest.raises(FileNotFoundError, match="Missing required GWA files"):
         _assert_all_required_gwa_present(atlas)
+
+
+def test_ensure_required_gwa_files_downloads_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Auto-download path creates all missing required GWA files."""
+    atlas = SimpleNamespace(path=tmp_path, country="AUT")
+    calls: list[tuple[str, Path]] = []
+
+    def _fake_download(url: str, dest: Path, **kwargs) -> Path:  # noqa: ANN003
+        path = Path(dest)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_tif(path, np.ones((2, 2), dtype=np.float32))
+        calls.append((url, path))
+        return path
+
+    monkeypatch.setattr("cleo.unification.gwa_io.cleo.net.download_to_path", _fake_download)
+
+    req = ensure_required_gwa_files(atlas, auto_download=True)
+
+    assert len(req) == 15
+    assert len(calls) == 15
+    assert all(path.exists() for _sid, path in req)
+    assert all(url.startswith("https://globalwindatlas.info/api/gis/country/AUT/") for url, _path in calls)
+
+
+def test_ensure_required_gwa_files_raises_when_download_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Auto-download path still fails fast with complete missing-file list."""
+    atlas = SimpleNamespace(path=tmp_path, country="AUT")
+    calls: list[tuple[str, Path]] = []
+
+    def _fail_download(url: str, dest: Path, **kwargs) -> None:  # noqa: ANN003
+        calls.append((url, Path(dest)))
+        raise RuntimeError("network unavailable")
+
+    monkeypatch.setattr("cleo.unification.gwa_io.cleo.net.download_to_path", _fail_download)
+
+    with pytest.raises(FileNotFoundError, match="Missing required GWA files"):
+        ensure_required_gwa_files(atlas, auto_download=True)
+
+    assert len(calls) == 15
 
 
 def test_open_gwa_raster_converts_nodata_to_nan(tmp_path: Path) -> None:

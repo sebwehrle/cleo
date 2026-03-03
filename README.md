@@ -87,6 +87,7 @@ atlas.wind.compute("capacity_factors", mode="direct_cf_quadrature", air_density=
 
 # Compute another metric (lazy result)
 mean_ws = atlas.wind.compute("mean_wind_speed", height=100).data
+# mean_ws dims: ("height","y","x") with a singleton height=[100]
 ```
 
 ## Workspace Layout
@@ -142,6 +143,12 @@ Atlas(
 
 - `atlas.build()`
   - Ensures base stores and, when a region is selected, region stores.
+  - If required GWA wind rasters are missing under
+    `<workdir>/data/raw/<ISO3>/`, attempts automatic download of the required
+    GWA layers/heights before failing.
+  - If region-aware paths require NUTS boundaries and no local NUTS shapefile
+    exists under `<workdir>/data/nuts/`, attempts automatic NUTS
+    download/extract before failing.
 - `atlas.build_canonical()`
   - Ensures base stores only (`wind.zarr`, `landscape.zarr`).
 - `atlas.select(region=..., region_level=None, inplace=False)`
@@ -214,6 +221,12 @@ Atlas(
 - `.materialize(overwrite=True, allow_mode_change=False)`
   - writes metric to active wind store and reloads surfaced domain state.
   - `allow_mode_change` is required to replace existing `capacity_factors` with a different `cleo:cf_mode`.
+  - `mean_wind_speed` is materialized per requested height slice into one
+    aggregated `mean_wind_speed(height,y,x)` variable.
+  - `overwrite=False` for `mean_wind_speed` blocks only if that requested
+    height slice already has data; other heights can still be added.
+  - existing legacy `mean_wind_speed(y,x)` variables fail with an explicit
+    migration error.
 - `.persist(run_id=None, params=None, metric_name=None)`
   - writes standalone result artifact under `results_root`.
 
@@ -221,6 +234,9 @@ Atlas(
 
 - `mean_wind_speed`
   - Required: `height` (int)
+  - Output dims: `("height","y","x")` (singleton height from `compute(...)`)
+  - Repeated `.materialize()` calls at different heights aggregate into one
+    `mean_wind_speed(height,y,x)` variable in active wind store.
 - `capacity_factors`
   - Requires turbines via selection or `turbines=[...]`
   - Options: `mode="direct_cf_quadrature"|"momentmatch_weibull"|"hub"|"rews"`, `rews_n`, `air_density`, `loss_factor`

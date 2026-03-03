@@ -462,6 +462,10 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
     inner ZIP for the selected resolution/year/CRS, then safely extracts
     shapefile contents into ``<atlas.path>/data/nuts``.
 
+    Accepts either:
+    - a legacy loader wrapper exposing ``.parent`` (with ``path``/``country``), or
+    - an Atlas-like object directly exposing ``path``/``country``.
+
     :param resolution: NUTS geometry resolution (``"01M"``, ``"03M"``,
         ``"10M"``, ``"20M"``, ``"60M"``).
     :param year: NUTS reference year.
@@ -484,7 +488,11 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
     if crs not in CRS:
         raise ValueError(f"Invalid crs: {crs}")
 
-    nuts_path = Path(self.parent.path) / "data" / "nuts"
+    atlas_like = getattr(self, "parent", self)
+    if not hasattr(atlas_like, "path"):
+        raise TypeError("load_nuts expects an Atlas-like object or wrapper exposing .parent with .path.")
+
+    nuts_path = Path(atlas_like.path) / "data" / "nuts"
     nuts_path.mkdir(parents=True, exist_ok=True)
 
     url = "https://gisco-services.ec.europa.eu/distribution/v2/nuts/download/"

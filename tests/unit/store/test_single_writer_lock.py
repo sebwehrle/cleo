@@ -2,10 +2,19 @@
 
 import json
 import os
-import pytest
+import warnings
 from pathlib import Path
 
-from cleo.store import single_writer_lock, StoreLockError, _LOCK_FILE_NAME
+import numpy as np
+import pytest
+import xarray as xr
+
+from cleo.store import (
+    single_writer_lock,
+    StoreLockError,
+    _LOCK_FILE_NAME,
+    zarr_store_lock_dir,
+)
 
 
 class TestSingleWriterLock:
@@ -201,3 +210,37 @@ class TestAtomicDirWithLock:
             (tmp / "data.txt").write_text("content")
 
         assert (target / "data.txt").read_text() == "content"
+
+
+class TestZarrStoreLockDir:
+    """Tests for sibling lock-directory policy used for Zarr stores."""
+
+    def test_lock_file_lives_in_sibling_lock_dir(self, tmp_path: Path) -> None:
+        """Zarr lock helper places lock file outside the .zarr hierarchy."""
+        store_path = tmp_path / "wind.zarr"
+        store_path.mkdir()
+        lock_dir = zarr_store_lock_dir(store_path)
+
+        with single_writer_lock(lock_dir):
+            assert (lock_dir / _LOCK_FILE_NAME).exists()
+            assert not (store_path / _LOCK_FILE_NAME).exists()
+
+    def test_xarray_open_zarr_emits_no_hierarchy_warning_under_lock(self, tmp_path: Path) -> None:
+        """Sibling lock directory avoids Zarr hierarchy warnings during store scans."""
+        store_path = tmp_path / "wind.zarr"
+        lock_dir = zarr_store_lock_dir(store_path)
+        ds = xr.Dataset(
+            {"a": (("y", "x"), np.ones((2, 2), dtype=np.float32))},
+            coords={"y": np.array([0.0, 1.0]), "x": np.array([0.0, 1.0])},
+        )
+        ds.to_zarr(store_path, mode="w", consolidated=False)
+        ds.close()
+
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter("always")
+            with single_writer_lock(lock_dir):
+                opened = xr.open_zarr(store_path, consolidated=False)
+                opened.close()
+
+        warning_messages = [str(item.message) for item in seen]
+        assert all("not recognized as a component of a Zarr hierarchy" not in msg for msg in warning_messages)

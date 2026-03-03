@@ -79,8 +79,11 @@ def test_mean_wind_speed_invalid_height_raises() -> None:
 def test_mean_wind_speed_applies_valid_mask() -> None:
     wind, land = _make_wind_land()
     out = _wind_metric_mean_wind_speed(wind, land, height=100)
-    assert np.isnan(out.values[0, 1])
-    assert np.isfinite(out.values[0, 0])
+    assert out.dims == ("height", "y", "x")
+    assert out.sizes["height"] == 1
+    assert float(out.coords["height"].values[0]) == 100.0
+    assert np.isnan(out.values[0, 0, 1])
+    assert np.isfinite(out.values[0, 0, 0])
 
 
 def test_capacity_factors_missing_required_vars_raise() -> None:

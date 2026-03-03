@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from cleo.economics import min_lcoe_turbine_idx, optimal_energy_gwh_a, optimal_power_kw
@@ -89,3 +90,29 @@ def test_optimal_energy_gwh_a_uses_selected_turbine_cf_and_power() -> None:
     assert got.attrs["units"] == "GWh/a"
     assert got.attrs["cleo:selection_basis"] == "min_lcoe_turbine_idx"
     assert "cleo:economics_json" in got.attrs
+
+
+def test_optimal_selection_is_dask_safe_with_chunked_argmin_indexer() -> None:
+    dask_array = pytest.importorskip("dask.array")
+
+    lcoe = _sample_lcoe().chunk({"y": 1, "x": 1})
+    cf = _sample_cf().chunk({"y": 1, "x": 1})
+    power_kw = np.array([1000.0, 2000.0], dtype=np.float64)
+
+    got_power = optimal_power_kw(lcoe=lcoe, power_kw=power_kw)
+    got_energy = optimal_energy_gwh_a(lcoe=lcoe, cf=cf, power_kw=power_kw, hours_per_year=8766.0)
+
+    assert isinstance(got_power.data, dask_array.Array)
+    assert isinstance(got_energy.data, dask_array.Array)
+
+    expected_power = np.array([[2000.0, np.nan], [1000.0, 2000.0]], dtype=np.float64)
+    np.testing.assert_allclose(got_power.compute().values, expected_power, rtol=0.0, atol=0.0, equal_nan=True)
+
+    expected_energy = np.array(
+        [
+            [0.35 * 2000.0 * 8766.0 / 1e6, np.nan],
+            [0.3 * 1000.0 * 8766.0 / 1e6, 0.4 * 2000.0 * 8766.0 / 1e6],
+        ],
+        dtype=np.float64,
+    )
+    np.testing.assert_allclose(got_energy.compute().values, expected_energy, rtol=0.0, atol=1e-12, equal_nan=True)

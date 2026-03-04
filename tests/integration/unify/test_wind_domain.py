@@ -270,33 +270,33 @@ class TestMeanWindSpeedComputation:
         var_A = "weibull_A"
         assert var_A in wind.data_vars, f"wind store must have {var_A}"
         weibull_A_100 = wind[var_A].sel(height=100)
-        assert bool(weibull_A_100.notnull().any().compute()) is True, (
-            "Fixture must have at least one valid weibull_A cell at height=100"
-        )
+        assert (
+            bool(weibull_A_100.notnull().any().compute()) is True
+        ), "Fixture must have at least one valid weibull_A cell at height=100"
 
         # Verify weibull_k also has valid cells
         var_k = "weibull_k"
         assert var_k in wind.data_vars, f"wind store must have {var_k}"
         weibull_k_100 = wind[var_k].sel(height=100)
-        assert bool(weibull_k_100.notnull().any().compute()) is True, (
-            "Fixture must have at least one valid weibull_k cell at height=100"
-        )
+        assert (
+            bool(weibull_k_100.notnull().any().compute()) is True
+        ), "Fixture must have at least one valid weibull_k cell at height=100"
 
         # Verify landscape has valid_mask with some valid cells
         landscape = xr.open_zarr(atlas.landscape_store_path, consolidated=False)
         assert "valid_mask" in landscape.data_vars
-        assert bool(landscape["valid_mask"].any().compute()) is True, (
-            "Fixture must have at least one valid cell in landscape valid_mask"
-        )
+        assert (
+            bool(landscape["valid_mask"].any().compute()) is True
+        ), "Fixture must have at least one valid cell in landscape valid_mask"
 
         # Compute mean wind speed using pure formula (canonical-only, no raw I/O)
         # Formula: mean_wind_speed = weibull_A * gamma(1 / weibull_k + 1)
         mean_wind_speed = weibull_A_100 * gamma(1 / weibull_k_100 + 1)
 
         # Assert NOT all NaN (some values should be valid)
-        assert bool(mean_wind_speed.notnull().any().compute()) is True, (
-            "Mean wind speed should have at least one valid (non-NaN) value"
-        )
+        assert (
+            bool(mean_wind_speed.notnull().any().compute()) is True
+        ), "Mean wind speed should have at least one valid (non-NaN) value"
 
         # Sanity check: valid values should be positive (wind speed > 0)
         valid_values = mean_wind_speed.values[~np.isnan(mean_wind_speed.values)]

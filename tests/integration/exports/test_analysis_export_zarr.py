@@ -394,7 +394,9 @@ class TestExportAnalysisDatasetZarr:
                 domain="wind",
             )
 
-    def test_export_schema_version_matches_constant(self, atlas_with_stores: MockAtlasForExport, tmp_path: Path) -> None:
+    def test_export_schema_version_matches_constant(
+        self, atlas_with_stores: MockAtlasForExport, tmp_path: Path
+    ) -> None:
         """Exported schema_version matches ANALYSIS_EXPORT_SCHEMA_VERSION."""
         from cleo.exports import export_analysis_dataset_zarr
 

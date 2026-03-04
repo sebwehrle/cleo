@@ -206,8 +206,7 @@ def test_lcoe_concat_has_no_futurewarning_for_coords_default_change():
     matching = [
         w
         for w in rec
-        if issubclass(w.category, FutureWarning)
-        and "default value for coords will change" in str(w.message)
+        if issubclass(w.category, FutureWarning) and "default value for coords will change" in str(w.message)
     ]
     assert not matching
 

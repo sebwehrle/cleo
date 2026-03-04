@@ -326,9 +326,9 @@ class TestIfExistsNoop:
             original_values,
             err_msg="Variable should not be modified with if_exists='noop'",
         )
-        assert landscape_after.attrs["inputs_id"] == original_inputs_id, (
-            "inputs_id should not change with if_exists='noop'"
-        )
+        assert (
+            landscape_after.attrs["inputs_id"] == original_inputs_id
+        ), "inputs_id should not change with if_exists='noop'"
 
 
 class TestIfExistsReplace:

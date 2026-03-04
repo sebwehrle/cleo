@@ -16,10 +16,12 @@ class TestValidateStoreWind:
         """Create a minimal valid wind zarr store."""
         store_path.mkdir(parents=True, exist_ok=True)
 
-        turbines_json = json.dumps([
-            {"id": "T1", "capacity": 1000, "hub_height": 80, "rotor_diameter": 50},
-            {"id": "T2", "capacity": 2000, "hub_height": 100, "rotor_diameter": 80},
-        ])
+        turbines_json = json.dumps(
+            [
+                {"id": "T1", "capacity": 1000, "hub_height": 80, "rotor_diameter": 50},
+                {"id": "T2", "capacity": 2000, "hub_height": 100, "rotor_diameter": 80},
+            ]
+        )
 
         root = zarr.open_group(store_path, mode="w")
         root.attrs["store_state"] = "complete"

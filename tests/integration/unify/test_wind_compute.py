@@ -266,9 +266,9 @@ class TestWindDomainCompute:
         da = atlas.wind.compute("mean_wind_speed", height=100).data
 
         # Assert not all NaN
-        assert bool(da.notnull().any().compute()) is True, (
-            "mean_wind_speed should have at least one valid (non-NaN) value"
-        )
+        assert (
+            bool(da.notnull().any().compute()) is True
+        ), "mean_wind_speed should have at least one valid (non-NaN) value"
 
 
 class TestCapacityFactorsEnforcement:
@@ -381,9 +381,9 @@ class TestCapacityFactorsEnforcement:
         da = atlas.wind.compute("capacity_factors", turbines=tids).data
 
         # Assert not all NaN
-        assert bool(da.notnull().any().compute()) is True, (
-            "capacity_factors should have at least one valid (non-NaN) value"
-        )
+        assert (
+            bool(da.notnull().any().compute()) is True
+        ), "capacity_factors should have at least one valid (non-NaN) value"
 
     def test_capacity_factors_with_air_density(self, tmp_path: Path) -> None:
         """capacity_factors with air_density=True computes valid values."""
@@ -405,9 +405,9 @@ class TestCapacityFactorsEnforcement:
         da = atlas.wind.compute("capacity_factors", turbines=tids, air_density=True).data
 
         # Assert not all NaN
-        assert bool(da.notnull().any().compute()) is True, (
-            "capacity_factors with air_density should have at least one valid value"
-        )
+        assert (
+            bool(da.notnull().any().compute()) is True
+        ), "capacity_factors with air_density should have at least one valid value"
 
     def test_capacity_factors_uses_selected_turbines(self, tmp_path: Path) -> None:
         """capacity_factors uses selected_turbines when turbines kwarg not provided."""

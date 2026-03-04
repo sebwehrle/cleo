@@ -19,10 +19,12 @@ class TestValidateDatasetWind:
         turbine = np.arange(2)
         wind_speed = np.linspace(0, 25, 26)
 
-        turbines_json = json.dumps([
-            {"id": "T1", "capacity": 1000, "hub_height": 80, "rotor_diameter": 50},
-            {"id": "T2", "capacity": 2000, "hub_height": 100, "rotor_diameter": 80},
-        ])
+        turbines_json = json.dumps(
+            [
+                {"id": "T1", "capacity": 1000, "hub_height": 80, "rotor_diameter": 50},
+                {"id": "T2", "capacity": 2000, "hub_height": 100, "rotor_diameter": 80},
+            ]
+        )
 
         ds = xr.Dataset(
             {
@@ -187,10 +189,12 @@ class TestValidateDatasetDeep:
         turbine = np.arange(2)
         wind_speed = np.linspace(0, 25, 26)
 
-        turbines_json = json.dumps([
-            {"id": "T1", "capacity": 1000, "hub_height": 80, "rotor_diameter": 50},
-            {"id": "T2", "capacity": 2000, "hub_height": 100, "rotor_diameter": 80},
-        ])
+        turbines_json = json.dumps(
+            [
+                {"id": "T1", "capacity": 1000, "hub_height": 80, "rotor_diameter": 50},
+                {"id": "T2", "capacity": 2000, "hub_height": 100, "rotor_diameter": 80},
+            ]
+        )
 
         ds = xr.Dataset(
             {
@@ -273,10 +277,12 @@ class TestValidateDatasetNoCompute:
         weibull_k_data = da.ones((3, 100, 100), chunks=(1, 50, 50)) * 2
         power_curve_data = da.ones((2, 26), chunks=(1, 26))
 
-        turbines_json = json.dumps([
-            {"id": "T1", "capacity": 1000, "hub_height": 80, "rotor_diameter": 50},
-            {"id": "T2", "capacity": 2000, "hub_height": 100, "rotor_diameter": 80},
-        ])
+        turbines_json = json.dumps(
+            [
+                {"id": "T1", "capacity": 1000, "hub_height": 80, "rotor_diameter": 50},
+                {"id": "T2", "capacity": 2000, "hub_height": 100, "rotor_diameter": 80},
+            ]
+        )
 
         ds = xr.Dataset(
             {

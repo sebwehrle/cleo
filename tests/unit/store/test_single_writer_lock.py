@@ -78,12 +78,16 @@ class TestSingleWriterLock:
 
         # Create a stale lock
         target.mkdir(parents=True, exist_ok=True)
-        lock_path.write_text(json.dumps({
-            "created_at": "2020-01-01T00:00:00Z",
-            "pid": 99999,
-            "hostname": "stale-host",
-            "target_dir": str(target),
-        }))
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "created_at": "2020-01-01T00:00:00Z",
+                    "pid": 99999,
+                    "hostname": "stale-host",
+                    "target_dir": str(target),
+                }
+            )
+        )
 
         # force=True should succeed
         with single_writer_lock(target, force=True):

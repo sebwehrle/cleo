@@ -105,6 +105,259 @@ def _distance_spec_matches(da: xr.DataArray, expected_spec_json: str) -> bool:
     return normalized == expected_spec_json
 
 
+# =============================================================================
+# Shared compute validation helpers
+# =============================================================================
+
+
+def _reject_inplace_kwarg(kwargs: dict, method_name: str) -> None:
+    """Reject inplace kwarg in compute methods."""
+    if "inplace" in kwargs:
+        raise ValueError(
+            f"{method_name}(...) does not accept inplace. "
+            f"Use atlas.wind.{method_name}(...).materialize(...) to write into the active wind store."
+        )
+
+
+def _reject_materialize_only_kwargs(kwargs: dict) -> None:
+    """Reject kwargs that belong to materialize(), not compute()."""
+    materialize_only = tuple(key for key in ("overwrite", "allow_mode_change") if key in kwargs)
+    if materialize_only:
+        keys_text = ", ".join(repr(key) for key in materialize_only)
+        raise ValueError(
+            f"materialize-only parameter(s) {keys_text} were passed to compute(...); "
+            "pass them to .materialize(...), e.g. "
+            "atlas.wind.compute(...).materialize(overwrite=True, allow_mode_change=True)."
+        )
+
+
+def _reject_timebase_kwargs(kwargs: dict) -> None:
+    """Reject timebase kwargs that must be set via atlas.configure_timebase()."""
+    timebase_kwargs = tuple(key for key in ("hours_per_year",) if key in kwargs)
+    if timebase_kwargs:
+        keys_text = ", ".join(repr(key) for key in timebase_kwargs)
+        raise ValueError(
+            f"Timebase parameter(s) {keys_text} cannot be passed to compute(...). "
+            f"Use atlas.configure_timebase(hours_per_year=...) to set timebase assumptions."
+        )
+
+
+def _validate_unknown_kwargs(kwargs: dict, allowed: set | None, metric: str) -> None:
+    """Check for unknown kwargs (strict enforcement)."""
+    if allowed is None:
+        return
+    unknown = set(kwargs.keys()) - allowed
+    if unknown:
+        internal_params = {"hours_per_year"}
+        user_allowed = sorted(allowed - internal_params)
+        raise ValueError(f"Unknown parameter(s) for metric {metric!r}: {sorted(unknown)}. Allowed: {user_allowed}")
+
+
+# =============================================================================
+# WindDomain compute helpers
+# =============================================================================
+
+
+def _validate_wind_compute_kwargs(kwargs: dict, metric: str, spec: dict) -> None:
+    """Validate kwargs for wind compute."""
+    _reject_inplace_kwarg(kwargs, "compute")
+    _reject_materialize_only_kwargs(kwargs)
+    _reject_timebase_kwargs(kwargs)
+
+    # Check required kwargs
+    required = spec["required"]
+    missing = required - kwargs.keys()
+    if missing:
+        raise ValueError(f"Missing required parameters for {metric}: {sorted(missing)}")
+
+    _validate_unknown_kwargs(kwargs, spec["allowed"], metric)
+
+
+def _resolve_composed_metric_kwargs(
+    kwargs: dict,
+    metric: str,
+    spec: dict,
+    atlas,
+) -> dict:
+    """Resolve grouped cf={} and economics={} specs for composed metrics.
+
+    Returns resolved_cf dict for CF reuse checking.
+    """
+    if not spec["composed"]:
+        return {}
+
+    # Reject flat CF/economics kwargs - must use grouped specs
+    flat_cf_present = set(kwargs.keys()) & flat_cf_kwargs()
+    if flat_cf_present:
+        raise ValueError(
+            f"For {metric!r}, CF parameters must be passed via cf={{...}}, "
+            f"not as flat kwargs. Found: {sorted(flat_cf_present)}. "
+            f'Use: compute({metric!r}, cf={{"mode": ..., "air_density": ...}}, ...)'
+        )
+
+    flat_econ_present = set(kwargs.keys()) & flat_economics_kwargs()
+    if flat_econ_present:
+        raise ValueError(
+            f"For {metric!r}, economics parameters must be passed via economics={{...}}, "
+            f"not as flat kwargs. Found: {sorted(flat_econ_present)}. "
+            f'Use: compute({metric!r}, economics={{"discount_rate": ..., ...}}, ...)'
+        )
+
+    # Extract grouped specs
+    cf_spec = kwargs.pop("cf", None)
+    economics_override = kwargs.pop("economics", None)
+
+    # Resolve CF spec with defaults
+    resolved_cf = resolve_cf_spec(cf_spec)
+
+    # Resolve economics via atlas baseline + per-call overrides
+    effective_economics = atlas._effective_economics(economics_override)
+
+    # Validate required economics fields
+    missing_econ = required_economics_fields() - set(effective_economics.keys())
+    if missing_econ:
+        raise ValueError(
+            f"Missing required economics parameters for {metric!r}: {sorted(missing_econ)}. "
+            f"Configure via atlas.configure_economics(...) or pass economics={{...}}."
+        )
+
+    # Unpack grouped specs into flat kwargs for underlying metric function
+    kwargs.update(resolved_cf)
+    kwargs.update(effective_economics)
+
+    return resolved_cf
+
+
+def _resolve_turbines_for_metric(
+    kwargs: dict,
+    domain: "WindDomain",
+) -> None:
+    """Resolve turbines for metrics that require them."""
+    turbines = kwargs.get("turbines", None)
+    if turbines is None:
+        if domain.selected_turbines is not None:
+            turbines = domain.selected_turbines
+        else:
+            raise ValueError("turbines required; use atlas.wind.select(...) or pass turbines=.")
+    else:
+        if len(turbines) == 0:
+            raise ValueError("turbines must be non-empty; see atlas.wind.turbines")
+        turbines = domain._validate_turbines(list(turbines))
+    kwargs["turbines"] = turbines
+
+
+def _inject_economics_params_and_cf_reuse(
+    kwargs: dict,
+    metric: str,
+    spec: dict,
+    resolved_cf: dict,
+    domain: "WindDomain",
+) -> None:
+    """Inject timebase and check for CF reuse in economics metrics."""
+    _ECONOMICS_METRICS = {"lcoe", "min_lcoe_turbine", "optimal_power", "optimal_energy"}
+
+    if metric in _ECONOMICS_METRICS:
+        kwargs["hours_per_year"] = domain._atlas._effective_hours_per_year()
+
+    # CF reuse check for LCOE-family metrics
+    if spec["composed"] and metric in _ECONOMICS_METRICS:
+        turbines = kwargs["turbines"]
+        store_ds = domain._store_data()
+        if "capacity_factors" in store_ds.data_vars:
+            candidate_cf = store_ds["capacity_factors"]
+            if _cf_spec_matches(candidate_cf, resolved_cf, turbines):
+                kwargs["_precomputed_cf"] = candidate_cf
+
+
+# =============================================================================
+# LandscapeDomain compute helpers
+# =============================================================================
+
+
+def _validate_landscape_compute_kwargs(kwargs: dict, metric: str) -> None:
+    """Validate kwargs for landscape compute."""
+    _reject_inplace_kwarg(kwargs, "compute")
+
+    allowed = {"source", "name", "if_exists"}
+    unknown = sorted(set(kwargs.keys()) - allowed)
+    if unknown:
+        raise ValueError(
+            f"Unknown parameter(s) for landscape metric {metric!r}: {unknown!r}. Supported keys: {sorted(allowed)!r}"
+        )
+
+    if "source" not in kwargs:
+        raise ValueError(f"Missing required parameters for {metric}: ['source']")
+
+
+def _validate_distance_sources(sources: list[str], store_ds: xr.Dataset) -> None:
+    """Validate that all distance sources exist in store."""
+    for src in sources:
+        if src not in store_ds.data_vars:
+            raise ValueError(
+                f"Unknown distance source variable {src!r}. "
+                f"Distance sources must exist in active landscape store data vars: {sorted(store_ds.data_vars)!r}"
+            )
+
+
+def _check_distance_conflicts(
+    names: list[str],
+    if_exists: str,
+    staged_overlays: dict,
+    store_ds: xr.Dataset,
+) -> None:
+    """Check for conflicts when if_exists='error'."""
+    if if_exists != "error":
+        return
+    conflicts = [nm for nm in names if nm in staged_overlays or nm in store_ds.data_vars]
+    if conflicts:
+        raise ValueError(
+            f"distance compute would overwrite existing variable(s): {conflicts!r}. "
+            "Use if_exists='replace' to overwrite or if_exists='noop' to skip."
+        )
+
+
+def _compute_single_distance(
+    src: str,
+    nm: str,
+    if_exists: str,
+    expected_spec: str,
+    staged_overlays: dict,
+    store_ds: xr.Dataset,
+    valid_mask: xr.DataArray,
+) -> tuple[xr.DataArray, bool]:
+    """Compute distance for a single source, handling noop cases.
+
+    Returns (data, should_stage) tuple. should_stage=False when using existing data.
+    """
+    staged_exists = nm in staged_overlays
+    store_exists = nm in store_ds.data_vars
+
+    if if_exists == "noop":
+        if staged_exists:
+            staged_da = staged_overlays[nm]
+            if not _distance_spec_matches(staged_da, expected_spec):
+                raise ValueError(
+                    f"Variable {nm!r} already staged with different distance spec. "
+                    "Use if_exists='replace' to overwrite."
+                )
+            return staged_da, False
+        if store_exists:
+            existing_da = store_ds[nm]
+            if not _distance_spec_matches(existing_da, expected_spec):
+                raise ValueError(
+                    f"Variable {nm!r} already exists in active landscape store with different distance spec. "
+                    "Use if_exists='replace' to overwrite."
+                )
+            return existing_da, False
+
+    dist = distance_to_positive_mask(store_ds[src], valid_mask).rename(nm)
+    dist = dist.reset_coords(drop=True)
+    dist.attrs["cleo:metric"] = "distance"
+    dist.attrs["cleo:distance_source"] = src
+    dist.attrs["cleo:distance_spec_json"] = expected_spec
+    return dist, True
+
+
 class WindDomain:
     """
     Domain object for wind data access.
@@ -459,137 +712,34 @@ class WindDomain:
         :raises ValueError: For LCOE-family metrics, if flat CF/economics kwargs
             are passed instead of grouped specs.
         """
-        if "inplace" in kwargs:
-            raise ValueError(
-                "compute(...) does not accept inplace. "
-                "Use atlas.wind.compute(...).materialize(...) to write into the active wind store."
-            )
-
-        materialize_only_kwargs = tuple(key for key in ("overwrite", "allow_mode_change") if key in kwargs)
-        if materialize_only_kwargs:
-            keys_text = ", ".join(repr(key) for key in materialize_only_kwargs)
-            raise ValueError(
-                f"materialize-only parameter(s) {keys_text} were passed to compute(...); "
-                "pass them to .materialize(...), e.g. "
-                "atlas.wind.compute(...).materialize(overwrite=True, allow_mode_change=True)."
-            )
-
-        # Reject timebase kwargs - must use atlas.configure_timebase()
-        timebase_kwargs = tuple(key for key in ("hours_per_year",) if key in kwargs)
-        if timebase_kwargs:
-            keys_text = ", ".join(repr(key) for key in timebase_kwargs)
-            raise ValueError(
-                f"Timebase parameter(s) {keys_text} cannot be passed to compute(...). "
-                f"Use atlas.configure_timebase(hours_per_year=...) to set timebase assumptions."
-            )
-
+        # Validate metric exists
         available_metrics = list_wind_metrics()
         if metric not in available_metrics:
             raise ValueError(f"Unknown metric {metric!r}. Supported: {list(available_metrics)}")
 
         spec = get_wind_metric_spec(metric)
-        fn = spec["fn"]
-        required = spec["required"]
-        requires_turbines = spec["requires_turbines"]
-        allowed = spec["allowed"]
 
-        # Check required kwargs
-        missing = required - kwargs.keys()
-        if missing:
-            raise ValueError(f"Missing required parameters for {metric}: {sorted(missing)}")
+        # Validate kwargs
+        _validate_wind_compute_kwargs(kwargs, metric, spec)
 
-        # Check for unknown kwargs (strict enforcement)
-        if allowed is not None:
-            unknown = set(kwargs.keys()) - allowed
-            if unknown:
-                # Filter out internal params for user-facing error message
-                internal_params = {"hours_per_year"}
-                user_allowed = sorted(allowed - internal_params)
-                raise ValueError(
-                    f"Unknown parameter(s) for metric {metric!r}: {sorted(unknown)}. Allowed: {user_allowed}"
-                )
+        # Resolve composed metric specs (LCOE-family)
+        resolved_cf = _resolve_composed_metric_kwargs(kwargs, metric, spec, self._atlas)
 
-        # Handle composed metrics (LCOE-family): grouped cf={} and economics={} specs
-        is_composed = spec["composed"]
-        if is_composed:
-            # Reject flat CF/economics kwargs - must use grouped specs
-            flat_cf_present = set(kwargs.keys()) & flat_cf_kwargs()
-            if flat_cf_present:
-                raise ValueError(
-                    f"For {metric!r}, CF parameters must be passed via cf={{...}}, "
-                    f"not as flat kwargs. Found: {sorted(flat_cf_present)}. "
-                    f'Use: compute({metric!r}, cf={{"mode": ..., "air_density": ...}}, ...)'
-                )
+        # Resolve turbines if required
+        if spec["requires_turbines"]:
+            _resolve_turbines_for_metric(kwargs, self)
 
-            flat_econ_present = set(kwargs.keys()) & flat_economics_kwargs()
-            if flat_econ_present:
-                raise ValueError(
-                    f"For {metric!r}, economics parameters must be passed via economics={{...}}, "
-                    f"not as flat kwargs. Found: {sorted(flat_econ_present)}. "
-                    f'Use: compute({metric!r}, economics={{"discount_rate": ..., ...}}, ...)'
-                )
+        # Inject economics params and check CF reuse
+        _inject_economics_params_and_cf_reuse(kwargs, metric, spec, resolved_cf, self)
 
-            # Extract grouped specs
-            cf_spec = kwargs.pop("cf", None)
-            economics_override = kwargs.pop("economics", None)
-
-            # Resolve CF spec with defaults
-            resolved_cf = resolve_cf_spec(cf_spec)
-
-            # Resolve economics via atlas baseline + per-call overrides
-            effective_economics = self._atlas._effective_economics(economics_override)
-
-            # Validate required economics fields
-            missing_econ = required_economics_fields() - set(effective_economics.keys())
-            if missing_econ:
-                raise ValueError(
-                    f"Missing required economics parameters for {metric!r}: {sorted(missing_econ)}. "
-                    f"Configure via atlas.configure_economics(...) or pass economics={{...}}."
-                )
-
-            # Unpack grouped specs into flat kwargs for underlying metric function
-            kwargs.update(resolved_cf)
-            kwargs.update(effective_economics)
-
-        # Turbine enforcement: inject from persistent selection if not provided
-        if requires_turbines:
-            turbines = kwargs.get("turbines", None)
-            if turbines is None:
-                # Check if Atlas has persistent selection
-                if self.selected_turbines is not None:
-                    turbines = self.selected_turbines
-                else:
-                    raise ValueError("turbines required; use atlas.wind.select(...) or pass turbines=.")
-            else:
-                # Validate provided turbines (explicit override for this call only)
-                if len(turbines) == 0:
-                    raise ValueError("turbines must be non-empty; see atlas.wind.turbines")
-                turbines = self._validate_turbines(list(turbines))
-            kwargs["turbines"] = turbines
-
-        # Inject resolved timebase for economics metrics
-        _ECONOMICS_METRICS = {"lcoe", "min_lcoe_turbine", "optimal_power", "optimal_energy"}
-        if metric in _ECONOMICS_METRICS:
-            kwargs["hours_per_year"] = self._atlas._effective_hours_per_year()
-
-        # CF reuse: check if materialized store has matching CF for LCOE-family metrics
-        if is_composed and metric in _ECONOMICS_METRICS:
-            turbines = kwargs["turbines"]
-            store_ds = self._store_data()
-            if "capacity_factors" in store_ds.data_vars:
-                candidate_cf = store_ds["capacity_factors"]
-                if _cf_spec_matches(candidate_cf, resolved_cf, turbines):
-                    kwargs["_precomputed_cf"] = candidate_cf
-
-        # Prepare canonical inputs
+        # Prepare canonical inputs and compute
         wind = self._atlas.wind_data
         try:
             land = self._atlas.landscape_data
         except (FileNotFoundError, RuntimeError):
             land = None
 
-        # Compute the metric
-        da = fn(wind, land, **kwargs)
+        da = spec["fn"](wind, land, **kwargs)
         staged = normalize_metric_for_active_wind_store(
             metric=metric,
             da=da,
@@ -597,10 +747,7 @@ class WindDomain:
         )
         self._computed_overlays[metric] = staged
 
-        # Build params dict for DomainResult (exclude turbines from kwargs copy)
-        params = {k: v for k, v in kwargs.items()}
-
-        return DomainResult(self, metric, da, params)
+        return DomainResult(self, metric, da, dict(kwargs))
 
 
 class LandscapeAddResult:
@@ -1001,82 +1148,35 @@ class LandscapeDomain:
         if metric != "distance":
             raise ValueError(f"Unknown metric {metric!r}. Supported: {['distance']}")
 
-        if "inplace" in kwargs:
-            raise ValueError(
-                "compute(...) does not accept inplace. "
-                "Use atlas.landscape.compute(...).materialize(...) to write into the active landscape store."
-            )
-
-        allowed = {"source", "name", "if_exists"}
-        unknown = sorted(set(kwargs.keys()) - allowed)
-        if unknown:
-            raise ValueError(
-                f"Unknown parameter(s) for landscape metric 'distance': {unknown!r}. "
-                f"Supported keys: {sorted(allowed)!r}"
-            )
-        if "source" not in kwargs:
-            raise ValueError("Missing required parameters for distance: ['source']")
+        _validate_landscape_compute_kwargs(kwargs, metric)
 
         source = kwargs["source"]
         name = kwargs.get("name")
         if_exists = kwargs.get("if_exists", "error")
         self._validate_if_exists(if_exists)
 
-        sources, names = self._normalize_distance_sources_and_names(
-            source=source,
-            name=name,
-        )
-
+        sources, names = self._normalize_distance_sources_and_names(source=source, name=name)
         store_ds = self._store_data()
-        for src in sources:
-            if src not in store_ds.data_vars:
-                raise ValueError(
-                    f"Unknown distance source variable {src!r}. "
-                    f"Distance sources must exist in active landscape store data vars: {sorted(store_ds.data_vars)!r}"
-                )
 
-        if if_exists == "error":
-            conflicts = [nm for nm in names if nm in self._staged_overlays or nm in store_ds.data_vars]
-            if conflicts:
-                raise ValueError(
-                    f"distance compute would overwrite existing variable(s): {conflicts!r}. "
-                    "Use if_exists='replace' to overwrite or if_exists='noop' to skip."
-                )
+        _validate_distance_sources(sources, store_ds)
+        _check_distance_conflicts(names, if_exists, self._staged_overlays, store_ds)
 
         result_vars: dict[str, xr.DataArray] = {}
         valid_mask = store_ds["valid_mask"]
 
         for src, nm in zip(sources, names, strict=True):
             expected_spec = self._distance_spec_json(src)
-            staged_exists = nm in self._staged_overlays
-            store_exists = nm in store_ds.data_vars
-
-            if if_exists == "noop":
-                if staged_exists:
-                    staged_da = self._staged_overlays[nm]
-                    if not self._distance_spec_matches(staged_da, expected_spec):
-                        raise ValueError(
-                            f"Variable {nm!r} already staged with different distance spec. "
-                            "Use if_exists='replace' to overwrite."
-                        )
-                    result_vars[nm] = staged_da
-                    continue
-                if store_exists:
-                    existing_da = store_ds[nm]
-                    if not self._distance_spec_matches(existing_da, expected_spec):
-                        raise ValueError(
-                            f"Variable {nm!r} already exists in active landscape store with different distance spec. "
-                            "Use if_exists='replace' to overwrite."
-                        )
-                    result_vars[nm] = existing_da
-                    continue
-
-            dist = distance_to_positive_mask(store_ds[src], valid_mask).rename(nm)
-            dist = dist.reset_coords(drop=True)
-            dist.attrs["cleo:metric"] = "distance"
-            dist.attrs["cleo:distance_source"] = src
-            dist.attrs["cleo:distance_spec_json"] = expected_spec
-            self._staged_overlays[nm] = dist
+            dist, should_stage = _compute_single_distance(
+                src,
+                nm,
+                if_exists,
+                expected_spec,
+                self._staged_overlays,
+                store_ds,
+                valid_mask,
+            )
+            if should_stage:
+                self._staged_overlays[nm] = dist
             result_vars[nm] = dist
 
         out_ds = xr.Dataset({nm: result_vars[nm] for nm in names})

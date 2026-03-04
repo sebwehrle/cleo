@@ -413,9 +413,7 @@ def test_materialize_clc_cached_non_georef_source_is_inferred_as_ref_grid(
     np.testing.assert_allclose(prepared.values, np.array([[231.0, 232.0], [311.0, 312.0]], dtype=np.float32))
 
 
-def test_materialize_clc_force_prepare_rebuilds_not_cached(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_materialize_clc_force_prepare_rebuilds_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepared = prepared_country_path(tmp_path, "AUT", "clc2018")
     prepared.parent.mkdir(parents=True, exist_ok=True)
     prepared.write_text("cached", encoding="utf-8")
@@ -525,9 +523,7 @@ def test_materialize_clc_refreshes_cached_multiband_source(tmp_path: Path, monke
     assert calls["downloaded"] == 1
 
 
-def test_materialize_clc_raises_for_multiband_rendered_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_materialize_clc_raises_for_multiband_rendered_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = SimpleNamespace(
         path=tmp_path,
         country="AUT",

@@ -440,9 +440,10 @@ class TestZarrV3Compatibility:
 
         # Verify turbine coordinate is integer-indexed
         if "turbine" in ds.coords:
-            assert ds.coords["turbine"].dtype.kind in ("i", "u"), (
-                f"turbine coordinate must be integer, got {ds.coords['turbine'].dtype}"
-            )
+            assert ds.coords["turbine"].dtype.kind in (
+                "i",
+                "u",
+            ), f"turbine coordinate must be integer, got {ds.coords['turbine'].dtype}"
 
     def test_wind_store_no_consolidated_metadata(self, tmp_path: Path) -> None:
         """wind.zarr must be readable with consolidated=False.

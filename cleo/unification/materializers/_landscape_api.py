@@ -23,7 +23,11 @@ from cleo.store import single_writer_lock, zarr_store_lock_dir
 from cleo.unification.fingerprint import fingerprint_path_mtime_size, hash_inputs_id
 from cleo.unification.manifest import _read_manifest, _write_manifest_atomic
 from cleo.unification.raster_io import _atomic_replace_variable_dir
-from cleo.unification.store_io import open_zarr_dataset, resolve_active_landscape_store_path
+from cleo.unification.store_io import (
+    open_zarr_dataset,
+    resolve_active_landscape_store_path,
+    resolve_active_wind_store_path,
+)
 from cleo.unification.materializers.shared import _aoi_geom_or_none, _stable_json
 from cleo.unification.materializers._landscape_vector import _canonical_vector_source_artifact
 from cleo.unification.materializers._landscape_sources import (
@@ -31,6 +35,10 @@ from cleo.unification.materializers._landscape_sources import (
     _prepare_vector_landscape_variable_data,
     _register_landscape_source_entry,
     _resolve_landscape_source_for_variable,
+)
+from cleo.unification.materializers._helpers import (
+    get_wind_reference,
+    validate_if_exists_param,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,9 +104,18 @@ def prepare_landscape_variable_data(
     atlas,
     variable_name: str,
 ) -> xr.DataArray:
-    """Prepare a landscape variable DataArray from a registered source without writing."""
-    store_path = Path(atlas.path) / "landscape.zarr"
-    wind_path = Path(atlas.path) / "wind.zarr"
+    """Prepare a landscape variable DataArray from a registered source.
+
+    Reads/writes are scoped to the active store routing (base or selected region).
+
+    :param unifier: Unifier instance providing chunk policy and helpers.
+    :param atlas: Atlas-like object with store routing context.
+    :param variable_name: Target landscape variable name.
+    :returns: Prepared DataArray aligned to active wind/landscape grids.
+    :rtype: xarray.DataArray
+    """
+    store_path = resolve_active_landscape_store_path(atlas)
+    wind_path = resolve_active_wind_store_path(atlas)
 
     wind = open_zarr_dataset(wind_path, chunk_policy=unifier.chunk_policy)
     if wind.attrs.get("store_state") != "complete":
@@ -294,43 +311,66 @@ def materialize_landscape_variable(
     *,
     if_exists: str = "error",
 ) -> bool:
-    """Materialize a single landscape variable from a registered source."""
-    valid_if_exists = {"error", "replace", "noop"}
-    if if_exists not in valid_if_exists:
-        raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
-    store_path = Path(atlas.path) / "landscape.zarr"
-    wind_path = Path(atlas.path) / "wind.zarr"
+    """Materialize a single landscape variable from a registered source.
 
-    # 1) Open wind canonical store to get wind_ref
-    wind = open_zarr_dataset(wind_path, chunk_policy=unifier.chunk_policy)
+    Reads/writes are scoped to the active store routing (base or selected region).
 
-    if wind.attrs.get("store_state") != "complete":
-        raise RuntimeError("wind.zarr is not complete; run Unifier.materialize_wind(atlas) first.")
+    :param unifier: Unifier instance providing chunk policy and helpers.
+    :param atlas: Atlas-like object with store routing context.
+    :param variable_name: Target landscape variable name.
+    :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+    :returns: ``True`` when written, ``False`` when a validated noop is applied.
+    :rtype: bool
+    """
+    validate_if_exists_param(if_exists)
 
-    wind_grid_id = wind.attrs.get("grid_id") or ""
-    wind_inputs_id = wind.attrs.get("inputs_id") or ""
+    store_path = resolve_active_landscape_store_path(atlas)
+    wind_path = resolve_active_wind_store_path(atlas)
 
-    # Get wind_ref for alignment
-    wind_ref = wind["weibull_A"].isel(height=0)
-    if "height" in wind["weibull_A"].dims:
-        height_values = wind["weibull_A"]["height"].values
-        if 100 in height_values:
-            wind_ref = wind["weibull_A"].sel(height=100)
+    # Get wind reference for grid alignment
+    wind_ref = get_wind_reference(wind_path, atlas.crs, chunk_policy=unifier.chunk_policy)
 
-    # Ensure wind_ref has CRS
-    if wind_ref.rio.crs is None:
-        if "template" in wind and wind["template"].rio.crs is not None:
-            wind_ref = wind_ref.rio.write_crs(wind["template"].rio.crs)
-        else:
-            wind_ref = wind_ref.rio.write_crs(atlas.crs)
-
-    if wind_ref.rio.transform() is None:
-        wind_ref = wind_ref.rio.write_transform(wind_ref.rio.transform(recalc=True))
-
-    # 2) Open landscape canonical store
+    # Open and validate landscape store
     land = open_zarr_dataset(store_path, chunk_policy=unifier.chunk_policy)
-
     land_root = zarr.open_group(store_path, mode="r")
+
+    _validate_landscape_store_state(land_root, wind_ref.grid_id)
+
+    if "valid_mask" not in land:
+        raise RuntimeError("landscape.zarr missing valid_mask")
+
+    # Resolve source and check if_exists
+    source_ctx = _resolve_source_context(store_path, atlas, variable_name)
+
+    # Apply if_exists semantics
+    do_replace, should_skip = _check_variable_exists(variable_name, land, source_ctx, if_exists)
+    if should_skip:
+        return False
+
+    # Prepare data
+    params = json.loads(source_ctx["params_json"]) if source_ctx["params_json"] else {}
+    categorical = bool(params.get("categorical", False))
+    da = prepare_landscape_variable_data(unifier, atlas, variable_name)
+
+    # Write to store
+    _write_landscape_variable(
+        store_path=store_path,
+        variable_name=variable_name,
+        da=da,
+        source_ctx=source_ctx,
+        wind_ref=wind_ref,
+        unifier=unifier,
+        atlas=atlas,
+        do_replace=do_replace,
+        categorical=categorical,
+        preserve_attrs=dict(land_root.attrs),
+    )
+
+    return True
+
+
+def _validate_landscape_store_state(land_root: zarr.Group, wind_grid_id: str) -> None:
+    """Validate landscape store is complete and grid matches wind."""
     if land_root.attrs.get("store_state") != "complete":
         raise RuntimeError("landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first.")
 
@@ -338,22 +378,21 @@ def materialize_landscape_variable(
     if land_grid_id != wind_grid_id:
         raise RuntimeError(f"landscape.zarr grid_id mismatch: {land_grid_id!r} != wind grid_id {wind_grid_id!r}")
 
-    if "valid_mask" not in land:
-        raise RuntimeError("landscape.zarr missing valid_mask")
 
-    # 3) Ensure source is registered (do this BEFORE if_exists check for noop validation)
+def _resolve_source_context(store_path: Path, atlas, variable_name: str) -> dict[str, Any]:
+    """Resolve source from manifest and compute current fingerprint."""
     manifest = _read_manifest(store_path)
     source_id, source_entry = _resolve_landscape_source_for_variable(
         manifest=manifest,
         variable_name=variable_name,
     )
+
     source_path = Path(source_entry.get("path", ""))
     params_json = source_entry.get("params_json", "")
     stored_fingerprint = source_entry.get("fingerprint", "")
     stored_kind = source_entry.get("kind", "")
     params = json.loads(params_json) if params_json else {}
 
-    # Compute current fingerprint for noop validation
     current_fingerprint = _current_landscape_source_fingerprint(
         atlas=atlas,
         kind=stored_kind,
@@ -361,126 +400,162 @@ def materialize_landscape_variable(
         params=params,
     )
 
-    # 2b) Check if variable already exists - apply if_exists semantics
-    if variable_name in land.data_vars:
-        if if_exists == "noop":
-            # Verify existing materialization exactly matches current source registration
-            # Check variables table has expected linkage
-            variables = manifest.get("variables", [])
-            var_by_name = {v["variable_name"]: v for v in variables}
+    return {
+        "source_id": source_id,
+        "source_path": source_path,
+        "params_json": params_json,
+        "stored_fingerprint": stored_fingerprint,
+        "current_fingerprint": current_fingerprint,
+        "manifest": manifest,
+    }
 
-            if variable_name not in var_by_name:
-                raise ValueError(
-                    f"Variable {variable_name!r} exists in store but not in manifest.\n"
-                    "  Use if_exists='replace' to fix."
-                )
 
-            stored_source_id = var_by_name[variable_name].get("source_id", "")
+def _check_variable_exists(
+    variable_name: str,
+    land: xr.Dataset,
+    source_ctx: dict[str, Any],
+    if_exists: str,
+) -> tuple[bool, bool]:
+    """Check if variable exists and apply if_exists semantics.
 
-            if stored_source_id != source_id:
-                raise ValueError(
-                    f"Variable {variable_name!r} exists with different source_id.\n"
-                    f"  Existing: source_id={stored_source_id!r}\n"
-                    f"  Expected: source_id={source_id!r}\n"
-                    "  Use if_exists='replace' to overwrite."
-                )
+    :returns: (do_replace, should_skip) tuple.
+    """
+    if variable_name not in land.data_vars:
+        return False, False
 
-            # Verify fingerprint matches (source file unchanged since registration)
-            if stored_fingerprint != current_fingerprint:
-                raise ValueError(
-                    f"Variable {variable_name!r} exists but source file has changed.\n"
-                    f"  Stored fingerprint: {stored_fingerprint!r}\n"
-                    f"  Current fingerprint: {current_fingerprint!r}\n"
-                    "  Use if_exists='replace' to re-materialize."
-                )
+    if if_exists == "noop":
+        _validate_noop_match(variable_name, source_ctx)
+        return False, True  # Skip without changes
 
-            # All checks passed - exact match, skip without changes
-            return False
+    if if_exists == "error":
+        raise ValueError(
+            f"Variable {variable_name!r} already exists in landscape.zarr.\n"
+            f"  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
+        )
 
-        elif if_exists == "error":
-            raise ValueError(
-                f"Variable {variable_name!r} already exists in landscape.zarr.\n"
-                f"  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
-            )
-        elif if_exists == "replace":
-            do_replace = True
-        else:
-            do_replace = False
-    else:
-        do_replace = False
+    # if_exists == "replace"
+    return True, False
 
-    # Use stored fingerprint for inputs_id (consistent with registration)
-    fingerprint = stored_fingerprint
 
-    # Reuse the same preparation path as staged overlays for parity.
-    categorical = bool(params.get("categorical", False))
-    da = prepare_landscape_variable_data(unifier, atlas, variable_name)
+def _validate_noop_match(variable_name: str, source_ctx: dict[str, Any]) -> None:
+    """Validate that existing variable matches current source for noop."""
+    manifest = source_ctx["manifest"]
+    variables = manifest.get("variables", [])
+    var_by_name = {v["variable_name"]: v for v in variables}
 
-    # 6) Preserve existing attrs before appending (to_zarr may overwrite)
-    preserve_attrs = dict(land_root.attrs)
+    if variable_name not in var_by_name:
+        raise ValueError(
+            f"Variable {variable_name!r} exists in store but not in manifest.\n  Use if_exists='replace' to fix."
+        )
 
-    # Acquire single-writer lock for all write operations
+    stored_source_id = var_by_name[variable_name].get("source_id", "")
+    if stored_source_id != source_ctx["source_id"]:
+        raise ValueError(
+            f"Variable {variable_name!r} exists with different source_id.\n"
+            f"  Existing: source_id={stored_source_id!r}\n"
+            f"  Expected: source_id={source_ctx['source_id']!r}\n"
+            "  Use if_exists='replace' to overwrite."
+        )
+
+    if source_ctx["stored_fingerprint"] != source_ctx["current_fingerprint"]:
+        raise ValueError(
+            f"Variable {variable_name!r} exists but source file has changed.\n"
+            f"  Stored fingerprint: {source_ctx['stored_fingerprint']!r}\n"
+            f"  Current fingerprint: {source_ctx['current_fingerprint']!r}\n"
+            "  Use if_exists='replace' to re-materialize."
+        )
+
+
+def _write_landscape_variable(
+    *,
+    store_path: Path,
+    variable_name: str,
+    da: xr.DataArray,
+    source_ctx: dict[str, Any],
+    wind_ref,
+    unifier,
+    atlas,
+    do_replace: bool,
+    categorical: bool,
+    preserve_attrs: dict[str, Any],
+) -> None:
+    """Write landscape variable to store with locking."""
     with single_writer_lock(zarr_store_lock_dir(store_path)):
-        # Handle replace if needed (inside lock to prevent race conditions)
         if do_replace:
             _atomic_replace_variable_dir(store_path, variable_name)
-            # Re-open landscape store after modification
-            land = open_zarr_dataset(store_path, chunk_policy=unifier.chunk_policy)
 
-        # 7) Append variable into store
+        # Write variable
         da.to_dataset().to_zarr(store_path, mode="a", consolidated=False)
 
-        # 8) Restore preserved attrs after append
+        # Restore preserved attrs
         root = zarr.open_group(store_path, mode="a")
         for k, v in preserve_attrs.items():
             root.attrs[k] = v
 
-        # 9) Update manifest JSON with new variable
-        manifest = _read_manifest(store_path)
-        existing_vars = manifest.get("variables", [])
-        existing_var_names = [v["variable_name"] for v in existing_vars]
+        # Update manifest
+        _update_manifest_for_variable(store_path, variable_name, source_ctx["source_id"], categorical, da.dtype)
 
-        # Update or add the new variable
-        new_var = {
-            "variable_name": variable_name,
-            "source_id": source_id,
-            "resampling_method": "nearest" if categorical else "bilinear",
-            "nodata_policy": "nan",
-            "dtype": str(da.dtype),
-        }
+        # Update inputs_id
+        _update_inputs_id(store_path, variable_name, source_ctx, wind_ref, unifier, atlas)
 
-        if variable_name in existing_var_names:
-            # Update existing entry
-            for i, v in enumerate(existing_vars):
-                if v["variable_name"] == variable_name:
-                    existing_vars[i] = new_var
-                    break
-        else:
-            existing_vars.append(new_var)
 
-        manifest["variables"] = existing_vars
-        _write_manifest_atomic(store_path, manifest)
+def _update_manifest_for_variable(
+    store_path: Path,
+    variable_name: str,
+    source_id: str,
+    categorical: bool,
+    dtype,
+) -> None:
+    """Update manifest with new or updated variable entry."""
+    manifest = _read_manifest(store_path)
+    existing_vars = manifest.get("variables", [])
+    existing_var_names = [v["variable_name"] for v in existing_vars]
 
-        # 11) Update inputs_id deterministically
-        items: list[tuple[str, str]] = []
-        items.append(("wind:grid_id", wind_grid_id))
-        items.append(("wind:inputs_id", wind_inputs_id))
-        items.append(("mask_policy", "nan+valid_mask_in_landscape"))
-        items.append(("region", _stable_json(getattr(atlas, "region", None))))
-        items.append(("chunk_policy", _stable_json(unifier.chunk_policy)))
-        items.append(("incremental_add", "landscape_add_v1"))
-        items.append((f"layer:{variable_name}:source_id", source_id))
-        items.append((f"layer:{variable_name}:fingerprint", fingerprint))
-        items.append((f"layer:{variable_name}:params_json", params_json))
+    new_var = {
+        "variable_name": variable_name,
+        "source_id": source_id,
+        "resampling_method": "nearest" if categorical else "bilinear",
+        "nodata_policy": "nan",
+        "dtype": str(dtype),
+    }
 
-        new_inputs_id = hash_inputs_id(items, method=unifier.fingerprint_method)
+    if variable_name in existing_var_names:
+        for i, v in enumerate(existing_vars):
+            if v["variable_name"] == variable_name:
+                existing_vars[i] = new_var
+                break
+    else:
+        existing_vars.append(new_var)
 
-        # Update store attrs (reopen to ensure we have latest state)
-        root = zarr.open_group(store_path, mode="a")
-        root.attrs["inputs_id"] = new_inputs_id
-        # grid_id remains unchanged (preserved from step 8)
+    manifest["variables"] = existing_vars
+    _write_manifest_atomic(store_path, manifest)
 
-    return True
+
+def _update_inputs_id(
+    store_path: Path,
+    variable_name: str,
+    source_ctx: dict[str, Any],
+    wind_ref,
+    unifier,
+    atlas,
+) -> None:
+    """Update store inputs_id after variable write."""
+    items: list[tuple[str, str]] = [
+        ("wind:grid_id", wind_ref.grid_id),
+        ("wind:inputs_id", wind_ref.inputs_id),
+        ("mask_policy", "nan+valid_mask_in_landscape"),
+        ("region", _stable_json(getattr(atlas, "region", None))),
+        ("chunk_policy", _stable_json(unifier.chunk_policy)),
+        ("incremental_add", "landscape_add_v1"),
+        (f"layer:{variable_name}:source_id", source_ctx["source_id"]),
+        (f"layer:{variable_name}:fingerprint", source_ctx["stored_fingerprint"]),
+        (f"layer:{variable_name}:params_json", source_ctx["params_json"]),
+    ]
+
+    new_inputs_id = hash_inputs_id(items, method=unifier.fingerprint_method)
+
+    root = zarr.open_group(store_path, mode="a")
+    root.attrs["inputs_id"] = new_inputs_id
 
 
 def compute_air_density_correction(

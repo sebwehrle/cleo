@@ -22,6 +22,7 @@ from cleo.unification.manifest import (
     init_manifest,
 )
 from cleo.unification.materializers.shared import _stable_json
+from cleo.unification.store_io import resolve_active_landscape_store_path
 from cleo.unification.materializers._landscape_vector import (
     _load_vector_shape,
     _vector_semantic_hash,
@@ -39,7 +40,18 @@ def _register_landscape_source_entry(
     fingerprint: str,
     if_exists: str,
 ) -> bool:
-    """Register/update one landscape source entry in manifest."""
+    """Register/update one landscape source entry in manifest.
+
+    :param atlas: Atlas-like object with active store routing context.
+    :param name: Target variable name.
+    :param kind: Source kind (``"raster"`` or ``"vector"``).
+    :param source_path: Source artifact path.
+    :param params: Source parameters payload.
+    :param fingerprint: Deterministic source fingerprint.
+    :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+    :returns: ``True`` when manifest entry changes, else ``False``.
+    :rtype: bool
+    """
     if kind not in {"raster", "vector"}:
         raise ValueError(f"Unsupported landscape source kind: {kind!r}")
 
@@ -47,7 +59,7 @@ def _register_landscape_source_entry(
     if if_exists not in valid_if_exists:
         raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
 
-    store_path = Path(atlas.path) / "landscape.zarr"
+    store_path = resolve_active_landscape_store_path(atlas)
     root = zarr.open_group(store_path, mode="r")
     if root.attrs.get("store_state") != "complete":
         raise RuntimeError("landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first.")

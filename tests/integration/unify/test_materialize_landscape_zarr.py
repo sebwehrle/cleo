@@ -482,18 +482,22 @@ class TestZarrV3Compatibility:
         # Check all data variables
         for name, var in ds.data_vars.items():
             dtype_kind = getattr(var.dtype, "kind", None)
-            assert dtype_kind not in ("U", "S", "O"), (
-                f"Data variable {name!r} has string/object dtype {var.dtype}, which is not Zarr v3 compatible."
-            )
+            assert dtype_kind not in (
+                "U",
+                "S",
+                "O",
+            ), f"Data variable {name!r} has string/object dtype {var.dtype}, which is not Zarr v3 compatible."
 
         # Check all coordinates (except spatial_ref which is special)
         for name, coord in ds.coords.items():
             if name == "spatial_ref":
                 continue
             dtype_kind = getattr(coord.dtype, "kind", None)
-            assert dtype_kind not in ("U", "S", "O"), (
-                f"Coordinate {name!r} has string/object dtype {coord.dtype}, which is not Zarr v3 compatible."
-            )
+            assert dtype_kind not in (
+                "U",
+                "S",
+                "O",
+            ), f"Coordinate {name!r} has string/object dtype {coord.dtype}, which is not Zarr v3 compatible."
 
     def test_landscape_store_no_consolidated_metadata(self, tmp_path: Path) -> None:
         """landscape.zarr must be readable with consolidated=False."""

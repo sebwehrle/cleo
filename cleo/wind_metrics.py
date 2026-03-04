@@ -683,23 +683,27 @@ _CF_SPEC_DEFAULTS = {
 }
 
 # Economics fields that are required for LCOE computation
-_REQUIRED_ECONOMICS_FIELDS = frozenset({
-    "discount_rate",
-    "lifetime_a",
-    "om_fixed_eur_per_kw_a",
-    "om_variable_eur_per_kwh",
-})
+_REQUIRED_ECONOMICS_FIELDS = frozenset(
+    {
+        "discount_rate",
+        "lifetime_a",
+        "om_fixed_eur_per_kw_a",
+        "om_variable_eur_per_kwh",
+    }
+)
 
 # Flat kwargs that are rejected for composed metrics (must use grouped specs)
 _FLAT_CF_KWARGS = frozenset({"mode", "air_density", "loss_factor", "rews_n"})
-_FLAT_ECONOMICS_KWARGS = frozenset({
-    "discount_rate",
-    "lifetime_a",
-    "om_fixed_eur_per_kw_a",
-    "om_variable_eur_per_kwh",
-    "bos_cost_share",
-    "grid_connect_cost_eur_per_kw",
-})
+_FLAT_ECONOMICS_KWARGS = frozenset(
+    {
+        "discount_rate",
+        "lifetime_a",
+        "om_fixed_eur_per_kw_a",
+        "om_variable_eur_per_kwh",
+        "bos_cost_share",
+        "grid_connect_cost_eur_per_kw",
+    }
+)
 
 
 # =============================================================================

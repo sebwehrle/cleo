@@ -559,7 +559,7 @@ def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False
 
 
 # %% methods
-def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> (xr.Dataset, gpd.GeoDataFrame):
+def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> tuple[xr.Dataset, gpd.GeoDataFrame]:
     """
     Clip the atlas data to the provided GeoDataFrame geometry.
 

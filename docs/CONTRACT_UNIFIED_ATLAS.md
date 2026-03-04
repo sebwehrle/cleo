@@ -1,6 +1,6 @@
 # Unified Atlas Contract
 
-Status: **Normative**  
+Status: **Normative**
 Scope: This document defines **both** (A) the stable *user-facing API* and (B) the *architectural / data invariants* of Cleo’s unified atlas.
 
 **No backward compatibility is required.** The codebase is expected to change to satisfy this contract.

@@ -47,6 +47,21 @@ def resolve_active_landscape_store_path(atlas) -> Path:
     return Path(atlas.path) / "landscape.zarr"
 
 
+def resolve_active_wind_store_path(atlas) -> Path:
+    """Resolve active wind store path (base or region) for an atlas-like object.
+
+    :param atlas: Atlas-like object exposing active or base wind store accessors.
+    :returns: Resolved active wind store path.
+    :rtype: pathlib.Path
+    """
+    active_store_path = getattr(atlas, "_active_wind_store_path", None)
+    if callable(active_store_path):
+        return Path(active_store_path())
+    if hasattr(atlas, "wind_store_path"):
+        return Path(getattr(atlas, "wind_store_path"))
+    return Path(atlas.path) / "wind.zarr"
+
+
 @lru_cache(maxsize=256)
 def turbine_ids_from_json(payload: str) -> tuple[str, ...]:
     """Decode ``cleo_turbines_json`` payload into ordered turbine IDs.

@@ -201,14 +201,10 @@ def validate_dataset(
         _validate_dataset_deep(ds, kind, errors)
 
     if errors:
-        raise ValidationError(
-            f"Dataset validation failed for kind={kind!r}:\n  - " + "\n  - ".join(errors)
-        )
+        raise ValidationError(f"Dataset validation failed for kind={kind!r}:\n  - " + "\n  - ".join(errors))
 
 
-def _validate_dataset_deep(
-    ds: xr.Dataset, kind: StoreKind, errors: list[str]
-) -> None:
+def _validate_dataset_deep(ds: xr.Dataset, kind: StoreKind, errors: list[str]) -> None:
     """Perform deep validation checks (may access small data samples)."""
     # Check coordinate monotonicity for spatial dims
     for dim in ("y", "x"):
@@ -300,8 +296,7 @@ def validate_store(
     if not allow_incomplete:
         if store_state != "complete":
             errors.append(
-                f"store_state is {store_state!r}, expected 'complete' "
-                "(use allow_incomplete=True to skip this check)"
+                f"store_state is {store_state!r}, expected 'complete' (use allow_incomplete=True to skip this check)"
             )
 
     # Determine required attrs based on kind
@@ -340,9 +335,7 @@ def validate_store(
     if kind == "export":
         schema_version = attrs.get("schema_version")
         if schema_version is not None and not isinstance(schema_version, int):
-            errors.append(
-                f"schema_version is {type(schema_version).__name__}, expected int"
-            )
+            errors.append(f"schema_version is {type(schema_version).__name__}, expected int")
 
     # Check required arrays exist in store
     array_names = set(group.array_keys()) if hasattr(group, "array_keys") else set()
@@ -358,6 +351,5 @@ def validate_store(
 
     if errors:
         raise ValidationError(
-            f"Store validation failed for {store_path} (kind={kind!r}):\n  - "
-            + "\n  - ".join(errors)
+            f"Store validation failed for {store_path} (kind={kind!r}):\n  - " + "\n  - ".join(errors)
         )

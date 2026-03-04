@@ -26,7 +26,7 @@ import zarr
 from cleo.contracts import ANALYSIS_EXPORT_SCHEMA_VERSION
 from cleo.dask_utils import compute as dask_compute
 from cleo.store import atomic_dir
-from cleo.validation import validate_dataset, validate_store
+from cleo.validation import validate_store
 
 if TYPE_CHECKING:
     pass
@@ -107,15 +107,12 @@ def _filter_variables(
         missing = requested - set(ds.data_vars.keys())
         if missing:
             raise ValueError(
-                f"include_only contains unknown variables: {sorted(missing)}. "
-                f"Available: {sorted(ds.data_vars.keys())}"
+                f"include_only contains unknown variables: {sorted(missing)}. Available: {sorted(ds.data_vars.keys())}"
             )
         vars_to_keep &= requested
 
     if not vars_to_keep:
-        raise ValueError(
-            "No variables to export after filtering. Check include_only and exclude_template settings."
-        )
+        raise ValueError("No variables to export after filtering. Check include_only and exclude_template settings.")
 
     return ds[sorted(vars_to_keep)]
 
@@ -252,9 +249,7 @@ def build_analysis_export_dataset(
         result = xr.merge([wind_prefixed, land_prefixed], compat="override")
 
     else:
-        raise ValueError(
-            f"Invalid domain {domain!r}. Expected 'wind', 'landscape', or 'both'."
-        )
+        raise ValueError(f"Invalid domain {domain!r}. Expected 'wind', 'landscape', or 'both'.")
 
     return result
 
@@ -313,15 +308,11 @@ def export_analysis_dataset_zarr(
         raise ValueError(f"Export path must end with '.zarr', got: {out_path}")
 
     if out_path.exists():
-        raise FileExistsError(
-            f"Export store already exists: {out_path}. Remove it first or use a different path."
-        )
+        raise FileExistsError(f"Export store already exists: {out_path}. Remove it first or use a different path.")
 
     # Ensure stores are ready
     if not getattr(atlas, "_canonical_ready", False):
-        raise ValueError(
-            "Atlas stores not ready. Call atlas.build() before exporting."
-        )
+        raise ValueError("Atlas stores not ready. Call atlas.build() before exporting.")
 
     # Get wind and landscape datasets
     wind_ds = None

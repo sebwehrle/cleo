@@ -3,12 +3,12 @@
 These tests verify that cleo.domains does not import underscore-prefixed
 internals from cleo.wind_metrics, ensuring a stable boundary interface.
 
-Uses shared utilities from cleo._arch_check.
+Uses shared utilities from tools.arch_check.
 """
 
 from __future__ import annotations
 
-from cleo._arch_check import check_domains_wind_metrics_boundary
+from tools.arch_check import check_domains_wind_metrics_boundary
 
 
 def test_domains_no_underscore_imports_from_wind_metrics() -> None:

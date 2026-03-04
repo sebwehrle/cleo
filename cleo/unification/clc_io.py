@@ -76,6 +76,23 @@ def _is_identity_pixel_grid(da: xr.DataArray) -> bool:
     return bool(x_ok and y_ok)
 
 
+def raster_band_count(path: Path) -> int | None:
+    """Read raster band count for lightweight source/prepared validation.
+
+    :param path: Candidate raster path.
+    :type path: pathlib.Path
+    :returns: Band count for readable rasters, else ``None``.
+    :rtype: int | None
+    """
+    try:
+        import rasterio
+
+        with rasterio.open(path) as dataset:
+            return int(dataset.count)
+    except (ModuleNotFoundError, OSError, ValueError, RuntimeError, TypeError):
+        return None
+
+
 def prepare_clc_to_wind_grid(
     *,
     source_path: Path,

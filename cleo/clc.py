@@ -14,6 +14,7 @@ from cleo.net import download_to_path, http_get, http_post
 from cleo.unification.clc_io import (
     load_clc_codes,
     prepare_clc_to_wind_grid,
+    raster_band_count,
     wind_reference_template,
 )
 
@@ -362,22 +363,6 @@ def _resolve_default_clc_download(source: str) -> tuple[str, dict[str, str] | No
     return url, {"Authorization": f"Bearer {access_token}"}
 
 
-def _raster_band_count(path: Path) -> int | None:
-    """Read raster band count for validation.
-
-    :param path: Raster path.
-    :returns: Band count when readable, else ``None``.
-    :rtype: int | None
-    """
-    try:
-        import rasterio
-
-        with rasterio.open(path) as ds:
-            return int(ds.count)
-    except (OSError, ValueError, RuntimeError, TypeError):
-        return None
-
-
 def materialize_clc(
     atlas,
     *,
@@ -408,12 +393,12 @@ def materialize_clc(
     prepared.parent.mkdir(parents=True, exist_ok=True)
 
     if prepared.exists() and not force_prepare:
-        prepared_band_count = _raster_band_count(prepared)
+        prepared_band_count = raster_band_count(prepared)
         if prepared_band_count in (None, 1):
             return prepared
         force_prepare = True
 
-    source_band_count = _raster_band_count(source_path) if source_path.exists() else None
+    source_band_count = raster_band_count(source_path) if source_path.exists() else None
     if source_band_count is not None and source_band_count != 1:
         force_download = True
 

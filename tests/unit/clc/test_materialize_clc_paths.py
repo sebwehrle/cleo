@@ -523,6 +523,60 @@ def test_materialize_clc_refreshes_cached_multiband_source(tmp_path: Path, monke
     assert calls["downloaded"] == 1
 
 
+def test_materialize_clc_uses_shared_raster_band_count_helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source_path = tmp_path / "data" / "raw" / "clc" / CLC_SOURCES["clc2018"]["filename"]
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("placeholder", encoding="utf-8")
+
+    atlas = SimpleNamespace(
+        path=tmp_path,
+        country="AUT",
+        crs="epsg:3035",
+        chunk_policy={"y": 2, "x": 2},
+        _canonical_ready=True,
+        build_canonical=lambda: None,
+    )
+
+    ref = xr.DataArray(
+        np.ones((2, 2), dtype=np.float32),
+        dims=("y", "x"),
+        coords={
+            "y": np.array([200.0, 100.0], dtype=np.float64),
+            "x": np.array([10.0, 20.0], dtype=np.float64),
+        },
+        name="weibull_A",
+    ).rio.write_crs("EPSG:3035")
+    monkeypatch.setattr("cleo.clc.wind_reference_template", lambda _atlas: ref)
+    monkeypatch.setattr(
+        "cleo.clc._resolve_default_clc_download",
+        lambda _source: ("https://download.example.test/clc2018.tif", {"Authorization": "Bearer test-token"}),
+    )
+    monkeypatch.setattr("cleo.clc.prepare_clc_to_wind_grid", lambda **kwargs: kwargs["prepared_path"])
+
+    helper_calls: list[Path] = []
+
+    def _fake_band_count(path: Path) -> int | None:
+        helper_calls.append(path)
+        if path == source_path:
+            return 4
+        return None
+
+    download_calls = {"count": 0}
+
+    def _fake_download(url: str, out_path: Path, **kwargs) -> None:
+        del url, kwargs
+        download_calls["count"] += 1
+        out_path.write_text("source", encoding="utf-8")
+
+    monkeypatch.setattr("cleo.clc.raster_band_count", _fake_band_count)
+    monkeypatch.setattr("cleo.clc.download_to_path", _fake_download)
+
+    materialize_clc(atlas, source="clc2018")
+
+    assert helper_calls == [source_path]
+    assert download_calls["count"] == 1
+
+
 def test_materialize_clc_raises_for_multiband_rendered_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = SimpleNamespace(
         path=tmp_path,

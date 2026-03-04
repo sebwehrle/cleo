@@ -122,8 +122,9 @@ def test_add_clc_category_requires_name_for_multi_code(tmp_path: Path) -> None:
 def test_materialize_clc_downloads_when_source_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     atlas = _build_atlas(tmp_path)
 
-    def _fake_download(url: str, out_path: Path) -> None:
+    def _fake_download(url: str, out_path: Path, **kwargs) -> None:
         del url
+        del kwargs
         clc = np.full((60, 60), 231.0, dtype=np.float32)
         clc[20:40, 20:40] = 311.0
         _create_raster(

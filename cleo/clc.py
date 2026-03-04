@@ -177,9 +177,7 @@ def _load_clms_service_key_payload() -> dict[str, str] | None:
             raise RuntimeError("CLEO_CLMS_SERVICE_KEY_JSON is not valid JSON.") from exc
         normalized = _normalize_service_key_payload(payload)
         if normalized is None:
-            raise RuntimeError(
-                "CLEO_CLMS_SERVICE_KEY_JSON must contain non-empty service_name/secret/username fields."
-            )
+            raise RuntimeError("CLEO_CLMS_SERVICE_KEY_JSON must contain non-empty service_name/secret/username fields.")
         return normalized
 
     for env_name in ("CLEO_CLMS_SERVICE_KEY_PATH", "CLMS_API_SERVICE_KEY"):
@@ -196,9 +194,7 @@ def _load_clms_service_key_payload() -> dict[str, str] | None:
             raise RuntimeError(f"{env_name} file is not valid JSON: {path}") from exc
         normalized = _normalize_service_key_payload(payload)
         if normalized is None:
-            raise RuntimeError(
-                f"{env_name} file must contain non-empty service_name/secret/username fields: {path}"
-            )
+            raise RuntimeError(f"{env_name} file must contain non-empty service_name/secret/username fields: {path}")
         return normalized
     return None
 
@@ -319,8 +315,7 @@ def _request_clms_download_url(*, source: str, access_token: str, expected_filen
     selected = _select_clms_dataset_file(datasets=datasets_payload.get("datasets"), expected_filename=expected_filename)
     if selected is None:
         raise RuntimeError(
-            f"CLMS API did not return downloadable file {expected_filename!r}. "
-            "Provide url=... explicitly."
+            f"CLMS API did not return downloadable file {expected_filename!r}. Provide url=... explicitly."
         )
     dataset_id, file_id = selected
 

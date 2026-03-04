@@ -631,7 +631,9 @@ class Atlas:
         clipped/cropped to country coverage and aligned to the canonical wind grid.
 
         :param source: CLC source identifier (currently ``"clc2018"``).
-        :param url: Optional source URL override.
+        :param url: Optional source URL override. If ``None``, CLEO resolves a
+            default CLMS download URL for the source and requires CLMS auth
+            via supported environment variables.
         :param force_download: If ``True``, re-download source raster.
         :param force_prepare: If ``True``, rebuild prepared country cache.
         :returns: Path to prepared CLC GeoTIFF.

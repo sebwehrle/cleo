@@ -253,6 +253,61 @@ def test_download_copdem_tiles_for_bbox_determinism(monkeypatch: pytest.MonkeyPa
     assert result1 == result2, "Returned paths should be deterministic"
 
 
+def test_download_copdem_tiles_for_bbox_skips_missing_tiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Missing tiles (HTTP 404) are skipped when at least one tile is available."""
+    missing_tile = "Copernicus_DSM_COG_10_N46_00_E010_00_DEM"
+    calls: list[str] = []
+
+    def mock_download_copdem_tile(base_dir, iso3_arg, tile_id, *, overwrite=False, timeout_s=300):
+        calls.append(tile_id)
+        if tile_id == missing_tile:
+            raise FileNotFoundError(f"Copernicus DEM tile not found: {tile_id} (HTTP 404)")
+        return Path(base_dir) / "data" / "raw" / iso3_arg / "copdem" / tile_id / f"{tile_id}.tif"
+
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tile", mock_download_copdem_tile)
+
+    result_paths = download_copdem_tiles_for_bbox(
+        tmp_path,
+        "AUT",
+        min_lon=9.2,
+        min_lat=46.0,
+        max_lon=11.1,
+        max_lat=47.0,
+    )
+
+    expected_calls = [
+        "Copernicus_DSM_COG_10_N46_00_E009_00_DEM",
+        "Copernicus_DSM_COG_10_N46_00_E010_00_DEM",
+        "Copernicus_DSM_COG_10_N46_00_E011_00_DEM",
+    ]
+    assert calls == expected_calls
+    assert [p.stem for p in result_paths] == [
+        "Copernicus_DSM_COG_10_N46_00_E009_00_DEM",
+        "Copernicus_DSM_COG_10_N46_00_E011_00_DEM",
+    ]
+
+
+def test_download_copdem_tiles_for_bbox_raises_when_all_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """All-missing tiles raise a clear FileNotFoundError."""
+
+    def mock_download_copdem_tile(base_dir, iso3_arg, tile_id, *, overwrite=False, timeout_s=300):
+        raise FileNotFoundError(f"Copernicus DEM tile not found: {tile_id} (HTTP 404)")
+
+    monkeypatch.setattr("cleo.unification.raster_io.download_copdem_tile", mock_download_copdem_tile)
+
+    with pytest.raises(FileNotFoundError, match="No Copernicus DEM tiles could be downloaded"):
+        download_copdem_tiles_for_bbox(
+            tmp_path,
+            "AUT",
+            min_lon=9.2,
+            min_lat=46.0,
+            max_lon=11.1,
+            max_lat=47.0,
+        )
+
+
 def test_tiles_for_bbox_degenerate_raises() -> None:
     with pytest.raises(ValueError, match="Degenerate bbox"):
         tiles_for_bbox(10.0, 45.0, 10.0, 46.0)

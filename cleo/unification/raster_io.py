@@ -92,11 +92,50 @@ def download_copdem_tiles_for_bbox(
     max_lat: float,
     overwrite: bool = False,
 ) -> list[Path]:
-    """Download all CopDEM tiles needed for bbox in deterministic lexicographic order."""
+    """Download CopDEM tiles for a bbox in deterministic lexicographic order.
+
+    :param base_dir: Atlas base directory for cache storage.
+    :type base_dir: Path | str
+    :param iso3: ISO3 country code used in cache paths.
+    :type iso3: str
+    :param min_lon: Minimum longitude (EPSG:4326).
+    :type min_lon: float
+    :param min_lat: Minimum latitude (EPSG:4326).
+    :type min_lat: float
+    :param max_lon: Maximum longitude (EPSG:4326, exclusive for tile planning).
+    :type max_lon: float
+    :param max_lat: Maximum latitude (EPSG:4326, exclusive for tile planning).
+    :type max_lat: float
+    :param overwrite: Whether to force re-download of cached tiles.
+    :type overwrite: bool
+    :returns: Existing/downloading tile paths that were resolved successfully.
+    :rtype: list[Path]
+    :raises FileNotFoundError: If no tile could be resolved for the requested bbox.
+    """
     tile_ids = tiles_for_bbox(min_lon, min_lat, max_lon, max_lat)
     paths: list[Path] = []
+    missing_tile_ids: list[str] = []
     for tile_id in tile_ids:
-        paths.append(download_copdem_tile(base_dir, iso3, tile_id, overwrite=overwrite))
+        try:
+            paths.append(download_copdem_tile(base_dir, iso3, tile_id, overwrite=overwrite))
+        except FileNotFoundError:
+            missing_tile_ids.append(tile_id)
+
+    if missing_tile_ids and paths:
+        logger.warning(
+            "CopDEM: skipped %d unavailable tiles (HTTP 404); proceeding with %d tiles. Missing tile IDs: %s",
+            len(missing_tile_ids),
+            len(paths),
+            ", ".join(missing_tile_ids),
+        )
+
+    if not paths:
+        raise FileNotFoundError(
+            "No Copernicus DEM tiles could be downloaded for bbox "
+            f"({min_lon}, {min_lat}, {max_lon}, {max_lat}). "
+            f"Missing tile IDs ({len(missing_tile_ids)}): {', '.join(missing_tile_ids)}"
+        )
+
     return paths
 
 
@@ -189,9 +228,6 @@ def _build_copdem_elevation(
 
     min_lon, min_lat, max_lon, max_lat = bbox_4326
 
-    # Get tile IDs for deterministic fingerprinting (sorted lexicographically)
-    tile_ids = tiles_for_bbox(min_lon, min_lat, max_lon, max_lat)
-
     # Download tiles (uses cache; deterministic order)
     tile_paths = download_copdem_tiles_for_bbox(
         atlas.path,
@@ -204,13 +240,14 @@ def _build_copdem_elevation(
 
     # Build mosaic aligned to wind_ref
     elevation = build_copdem_elevation_like(wind_ref, tile_paths)
+    downloaded_tile_ids = [path.stem for path in tile_paths]
 
     # Build metadata for deterministic inputs_id
     meta = {
         "provider": "copernicus",
         "version": "GLO-30",
         "bbox_4326": list(bbox_4326),
-        "tile_ids": tile_ids,
+        "tile_ids": downloaded_tile_ids,
         "clip": "aoi" if aoi_gdf is not None else "none",
     }
 

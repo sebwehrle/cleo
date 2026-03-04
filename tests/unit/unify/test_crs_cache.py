@@ -13,7 +13,12 @@ import pytest
 import rasterio
 from rasterio.crs import CRS
 
-from cleo.unification.gwa_io import _crs_cache_path, _load_or_fetch_gwa_crs, _open_gwa_raster
+from cleo.unification.gwa_io import (
+    _crs_cache_path,
+    _ensure_proj_crs_preflight,
+    _load_or_fetch_gwa_crs,
+    _open_gwa_raster,
+)
 
 
 class MockAtlas:
@@ -47,6 +52,50 @@ class TestCrsCachePath:
         assert path_aut != path_deu
         assert path_aut.name == "AUT.wkt"
         assert path_deu.name == "DEU.wkt"
+
+
+def test_proj_preflight_raises_clear_error_on_proj_db_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Preflight reports environment-level PROJ mismatch with actionable hints."""
+
+    def _fail_resolve(_code: str) -> CRS:
+        raise RuntimeError(
+            "The EPSG code is unknown. PROJ: proj_create_from_database: "
+            "proj.db contains DATABASE.LAYOUT.VERSION.MINOR = 3 whereas a number >= 6 is expected."
+        )
+
+    monkeypatch.setattr("cleo.unification.gwa_io._resolve_epsg_crs", _fail_resolve)
+    monkeypatch.setenv("PROJ_DATA", "/env/share/proj")
+    monkeypatch.setenv("GDAL_DATA", "/env/share/gdal")
+
+    with pytest.raises(RuntimeError, match="outside cleo") as exc:
+        _ensure_proj_crs_preflight("epsg:3035")
+
+    msg = str(exc.value)
+    assert "PROJ_DATA" in msg
+    assert "GDAL_DATA" in msg
+    assert "DATABASE.LAYOUT.VERSION" in msg
+
+
+def test_open_gwa_raster_runs_preflight_before_raster_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Preflight guard should fail before trying to open raster files."""
+    atlas = MockAtlas(tmp_path)
+    calls = {"count": 0}
+
+    def _fail_preflight(_target_crs) -> None:  # noqa: ANN001
+        calls["count"] += 1
+        raise RuntimeError("preflight failed")
+
+    monkeypatch.setattr("cleo.unification.gwa_io._ensure_proj_crs_preflight", _fail_preflight)
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        _open_gwa_raster(
+            atlas,
+            tmp_path / "missing.tif",
+            iso3="AUT",
+            target_crs="epsg:3035",
+        )
+
+    assert calls["count"] == 1
 
 
 class TestLoadOrFetchGwaCrs:
@@ -114,6 +163,20 @@ class TestLoadOrFetchGwaCrs:
             # Both should return same CRS
             assert result1.to_epsg() == result2.to_epsg() == 3035
 
+    def test_parses_and_caches_crs84_name(self, tmp_path: Path) -> None:
+        """Parses OGC CRS84 from fetched GeoJSON CRS name and caches it."""
+        atlas = MockAtlas(tmp_path)
+        cache_path = _crs_cache_path(atlas, "ROU")
+        assert not cache_path.exists()
+
+        crs_name = "urn:ogc:def:crs:OGC:1.3:CRS84"
+        with patch("cleo.unification.gwa_io.fetch_gwa_crs", return_value=crs_name) as mock_fetch:
+            result = _load_or_fetch_gwa_crs(atlas, "ROU")
+
+        mock_fetch.assert_called_once_with("ROU")
+        assert result.to_epsg() == 4326
+        assert cache_path.exists()
+
     def test_raises_on_fetch_failure(self, tmp_path: Path) -> None:
         """Raises RuntimeError if fetch fails and cache doesn't exist."""
         atlas = MockAtlas(tmp_path)
@@ -164,11 +227,12 @@ class TestOpenGwaRasterWithCrsCache:
         with_crs: bool = True,
         crs_epsg: int = 3035,
         shape: tuple[int, int] = (10, 10),
+        bounds: tuple[float, float, float, float] = (0.0, 0.0, 100.0, 100.0),
     ) -> None:
         """Create a minimal test GeoTIFF."""
         data = np.random.rand(*shape).astype(np.float32)
 
-        transform = rasterio.transform.from_bounds(0, 0, 100, 100, shape[1], shape[0])
+        transform = rasterio.transform.from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], shape[1], shape[0])
 
         profile = {
             "driver": "GTiff",
@@ -265,3 +329,26 @@ class TestOpenGwaRasterWithCrsCache:
             # Cache should be created
             cache_path = _crs_cache_path(atlas, "AUT")
             assert cache_path.exists()
+
+    def test_raises_when_fetch_fails_for_crsless_raster(self, tmp_path: Path) -> None:
+        """Keeps fail-fast behavior when CRS-less raster lookup fails."""
+        atlas = MockAtlas(tmp_path)
+
+        raster_path = tmp_path / "test_no_crs_non_geo.tif"
+        self._create_test_raster(
+            raster_path,
+            with_crs=False,
+            bounds=(1000.0, 1000.0, 2000.0, 2000.0),
+        )
+
+        with patch(
+            "cleo.unification.gwa_io._load_or_fetch_gwa_crs",
+            side_effect=RuntimeError("CRS lookup failed"),
+        ):
+            with pytest.raises(RuntimeError, match="CRS lookup failed"):
+                _open_gwa_raster(
+                    atlas,
+                    raster_path,
+                    iso3="ROU",
+                    target_crs="epsg:3035",
+                )

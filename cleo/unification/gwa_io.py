@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
+import re
 
 import numpy as np
 import rioxarray as rxr
@@ -23,6 +25,92 @@ _GWA_LAYER_NAME_BY_INTERNAL = {
     "weibull_k": "combined-Weibull-k",
     "rho": "air-density",
 }
+
+
+def _resolve_epsg_crs(crs_code: str) -> CRS:
+    """Resolve a CRS code through rasterio/PROJ.
+
+    :param crs_code: CRS identifier such as ``EPSG:4326``.
+    :type crs_code: str
+    :returns: Parsed CRS.
+    :rtype: rasterio.crs.CRS
+    """
+    return CRS.from_string(crs_code)
+
+
+def _ensure_proj_crs_preflight(target_crs) -> None:
+    """Fail fast when PROJ runtime cannot resolve required EPSG definitions.
+
+    This guard surfaces environment-level PROJ/GDAL misconfiguration early with
+    actionable diagnostics, instead of failing deep in reprojection calls.
+
+    :param target_crs: Target CRS requested for reprojection.
+    :type target_crs: str | rasterio.crs.CRS
+    :raises RuntimeError: If EPSG CRS resolution fails in current process.
+    """
+    checks = ["EPSG:4326"]
+    target_text = str(target_crs).strip()
+    target_upper = target_text.upper()
+    if target_upper.startswith("EPSG:") and target_upper not in checks:
+        checks.append(target_upper)
+
+    for code in checks:
+        try:
+            _resolve_epsg_crs(code)
+        except Exception as e:
+            err_text = str(e)
+            env_proj_data = os.environ.get("PROJ_DATA")
+            env_proj_lib = os.environ.get("PROJ_LIB")
+            env_gdal_data = os.environ.get("GDAL_DATA")
+            if "DATABASE.LAYOUT.VERSION" in err_text or "proj_create_from_database" in err_text:
+                raise RuntimeError(
+                    "PROJ runtime misconfiguration detected (outside cleo): "
+                    f"failed EPSG resolution preflight for {code!r} while preparing reprojection to {target_text!r}. "
+                    "This usually indicates mixed PROJ/GDAL installations or missing IDE/runtime environment setup. "
+                    "Set PROJ_DATA (or PROJ_LIB) and GDAL_DATA to the active environment "
+                    "(for conda: $CONDA_PREFIX/share/proj and $CONDA_PREFIX/share/gdal), then restart the process. "
+                    f"Current env: PROJ_DATA={env_proj_data!r}, PROJ_LIB={env_proj_lib!r}, GDAL_DATA={env_gdal_data!r}. "
+                    f"Original error: {err_text}"
+                ) from e
+            raise RuntimeError(
+                "CRS preflight failed before reprojection. "
+                f"Could not resolve {code!r} while preparing reprojection to {target_text!r}. "
+                "Check target CRS validity and PROJ/GDAL runtime configuration outside cleo. "
+                f"Current env: PROJ_DATA={env_proj_data!r}, PROJ_LIB={env_proj_lib!r}, GDAL_DATA={env_gdal_data!r}. "
+                f"Original error: {err_text}"
+            ) from e
+
+
+def _parse_gwa_crs_name(crs_name: str) -> CRS:
+    """Parse CRS identifier returned by the GWA country GeoJSON endpoint.
+
+    The API returns values like ``urn:ogc:def:crs:OGC:1.3:CRS84`` or EPSG URNs.
+    This parser handles those explicitly so we don't depend on environment-
+    specific PROJ database availability for common GWA responses.
+
+    :param crs_name: CRS identifier from GeoJSON ``crs.properties.name``.
+    :type crs_name: str
+    :returns: Parsed raster CRS.
+    :rtype: rasterio.crs.CRS
+    :raises ValueError: If CRS identifier cannot be parsed.
+    """
+    raw = str(crs_name).strip()
+    if not raw:
+        raise ValueError("Empty CRS name in GWA GeoJSON response.")
+
+    normalized = raw.upper()
+    if normalized == "CRS84" or normalized.endswith(":CRS84"):
+        # OGC CRS84 is geographic WGS84 with lon/lat axis order.
+        return CRS.from_string("+proj=longlat +datum=WGS84 +no_defs")
+
+    epsg_match = re.search(r"(?:^|[:/])EPSG(?:[:/]|::)(\d+)$", normalized)
+    if epsg_match:
+        return CRS.from_epsg(int(epsg_match.group(1)))
+
+    try:
+        return CRS.from_string(raw)
+    except Exception as e:
+        raise ValueError(f"Could not parse GWA CRS name {raw!r}: {e}") from e
 
 
 def fetch_gwa_crs(iso3: str) -> str:
@@ -80,21 +168,22 @@ def _crs_cache_path(atlas, iso3: str) -> Path:
     return Path(atlas.path) / "intermediates" / "crs_cache" / f"{iso3}.wkt"
 
 
-def _load_or_fetch_gwa_crs(atlas, iso3: str) -> CRS:
-    """Load CRS from cache or fetch from GWA API.
+def _load_or_fetch_gwa_crs(atlas, iso3: str, *, log_errors: bool = True) -> CRS:
+    """Load GWA CRS from cache or fetch once and persist.
 
-    Fetch-once semantics: fetches from network only if cache is missing,
-    then persists to cache. Subsequent calls read from cache.
+    Fetch-once semantics: fetches from network only when cache is missing,
+    then writes cache for subsequent calls.
 
-    Args:
-        atlas: Atlas instance.
-        iso3: ISO3 country code.
-
-    Returns:
-        rasterio CRS object.
-
-    Raises:
-        RuntimeError: If fetch fails or cache is empty/corrupt.
+    :param atlas: Atlas-like object with ``path`` attribute.
+    :type atlas: object
+    :param iso3: ISO3 country code.
+    :type iso3: str
+    :param log_errors: If ``True``, emit error logs before raising.
+    :type log_errors: bool
+    :returns: Parsed raster CRS.
+    :rtype: rasterio.crs.CRS
+    :raises RuntimeError: If cache is empty/corrupt, fetch fails, or cache
+        persistence fails.
     """
     cache = _crs_cache_path(atlas, iso3)
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -108,13 +197,14 @@ def _load_or_fetch_gwa_crs(atlas, iso3: str) -> CRS:
     # Fetch from network
     try:
         crs_str = fetch_gwa_crs(iso3)
-        crs = CRS.from_string(crs_str)
+        crs = _parse_gwa_crs_name(crs_str)
     except (cleo.net.RequestException, RuntimeError, ValueError, TypeError, OSError) as e:
-        logger.error(
-            "Failed to fetch GWA CRS and cache is unavailable.",
-            extra={"iso3": iso3, "cache_path": str(cache)},
-            exc_info=True,
-        )
+        if log_errors:
+            logger.error(
+                "Failed to fetch GWA CRS and cache is unavailable.",
+                extra={"iso3": iso3, "cache_path": str(cache)},
+                exc_info=True,
+            )
         raise RuntimeError(f"Failed to fetch GWA CRS for {iso3}; cache missing at {cache}. Error: {e}") from e
 
     # Persist to cache
@@ -270,20 +360,28 @@ def _open_gwa_raster(
     clip_geom=None,
     resampling: str = "bilinear",
 ) -> xr.DataArray:
-    """Open a GWA raster with CRS cache support.
+    """Open and normalize a GWA raster to requested CRS/grid.
 
-    Args:
-        atlas: Atlas instance.
-        path: Path to the raster file.
-        iso3: ISO3 country code for CRS lookup.
-        target_crs: Target CRS to reproject to.
-        ref_da: Reference DataArray to match grid to (optional).
-        clip_geom: Geometry to clip to (optional).
-        resampling: Resampling method (default "bilinear").
-
-    Returns:
-        DataArray with CRS set, reprojected/clipped as specified.
+    :param atlas: Atlas-like object with path/country context.
+    :type atlas: object
+    :param path: Input GWA raster path.
+    :type path: pathlib.Path
+    :param iso3: ISO3 country code used for CRS lookup/cache key.
+    :type iso3: str
+    :param target_crs: Target CRS for reprojection.
+    :type target_crs: str | rasterio.crs.CRS
+    :param ref_da: Optional reference raster for ``reproject_match``.
+    :type ref_da: xarray.DataArray | None
+    :param clip_geom: Optional clip geometry (GeoDataFrame or geometry iterable).
+    :type clip_geom: object
+    :param resampling: Rasterio resampling name.
+    :type resampling: str
+    :returns: Opened raster with CRS set and optional reprojection/clip/match.
+    :rtype: xarray.DataArray
+    :raises RuntimeError: If CRS is missing and cannot be fetched/parsed.
     """
+    _ensure_proj_crs_preflight(target_crs)
+
     da_raw = rxr.open_rasterio(path, chunks=None)
     da: xr.DataArray = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
 

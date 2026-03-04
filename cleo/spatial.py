@@ -532,20 +532,22 @@ def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False
     Strategy:
     - Primary: all_touched=all_touched_primary, drop=drop
     - On NoDataInBounds: retry with all_touched=True, drop=drop
-    - If still NoDataInBounds: re-raise
+    - If still NoDataInBounds: raise ClipNoDataInBounds
 
     :param da: xarray DataArray with rioxarray accessor
     :param geoms: iterable of geometries for clipping
     :param drop: whether to drop pixels outside clip bounds
     :param all_touched_primary: all_touched setting for primary attempt
     :return: clipped DataArray
-    :raises: NoDataInBounds if geometry does not overlap raster bounds
+    :raises ClipNoDataInBounds: if geometry does not overlap raster bounds
     """
-    # Import lazily so cleo can still import in minimal envs/tests if needed
+    from cleo.errors import ClipNoDataInBounds
+
     try:
         from rioxarray.exceptions import NoDataInBounds
     except ImportError:  # pragma: no cover
-        NoDataInBounds = ()  # type: ignore[misc]  # fallback tuple, will never match
+        # rioxarray not available; just attempt clip directly
+        return da.rio.clip(geoms, all_touched=all_touched_primary, drop=drop)
 
     try:
         return da.rio.clip(geoms, all_touched=all_touched_primary, drop=drop)
@@ -554,8 +556,10 @@ def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False
         logger.warning(
             f"_rio_clip_robust: NoDataInBounds with all_touched={all_touched_primary}; retrying with all_touched=True."
         )
-        # Re-raise if still fails (let caller handle)
-        return da.rio.clip(geoms, all_touched=True, drop=drop)
+        try:
+            return da.rio.clip(geoms, all_touched=True, drop=drop)
+        except NoDataInBounds as e:
+            raise ClipNoDataInBounds("Geometry does not overlap raster bounds") from e
 
 
 # %% methods
@@ -659,16 +663,12 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> tuple[xr.Dataset, gp
     # rioxarray expects an iterable of geometries
     geoms = list(clip_shape.geometry)
 
-    # Import lazily so cleo can still import in minimal envs/tests if needed
-    try:
-        from rioxarray.exceptions import NoDataInBounds
-    except ImportError:  # pragma: no cover
-        NoDataInBounds = ()  # type: ignore[misc]  # fallback tuple, will never match
+    from cleo.errors import ClipNoDataInBounds
 
     for var_name, var in self.data.data_vars.items():
         try:
             data_clipped[var_name] = _rio_clip_robust(var, geoms, drop=True, all_touched_primary=False)
-        except NoDataInBounds as e:
+        except ClipNoDataInBounds as e:
             raise ValueError(f"Clipping geometry does not overlap raster bounds for variable '{var_name}'.") from e
         except (ValueError, TypeError, RuntimeError) as e:
             raise ValueError(f"Error clipping data variable '{var_name}'") from e

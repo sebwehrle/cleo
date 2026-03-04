@@ -15,6 +15,7 @@ import geopandas as gpd
 from types import SimpleNamespace
 from shapely.geometry import Polygon
 from cleo.spatial import clip_to_geometry, _rio_clip_robust
+from cleo.errors import ClipNoDataInBounds
 from tests.helpers.factories import wind_speed_axis
 
 
@@ -156,3 +157,34 @@ def test_rio_clip_robust_fallback_path(monkeypatch):
 
     # Result is a DataArray
     assert isinstance(result, xr.DataArray), "Result should be a DataArray"
+
+
+def test_rio_clip_robust_raises_clip_no_data_in_bounds(monkeypatch):
+    """
+    _rio_clip_robust raises ClipNoDataInBounds when both clip attempts fail.
+    """
+    from rioxarray.exceptions import NoDataInBounds
+
+    da = xr.DataArray(
+        np.ones((2, 2)),
+        dims=("y", "x"),
+        coords={"x": [0.0, 1.0], "y": [0.0, 1.0]},
+    ).rio.write_crs("EPSG:4326")
+
+    geoms = [Polygon([(10.0, 10.0), (11.0, 10.0), (11.0, 11.0), (10.0, 11.0)])]
+
+    def mock_clip(geoms, all_touched=False, drop=True):
+        raise NoDataInBounds("geometry does not overlap")
+
+    monkeypatch.setattr(da.rio, "clip", mock_clip)
+
+    with pytest.raises(ClipNoDataInBounds, match="does not overlap"):
+        _rio_clip_robust(da, geoms, drop=True, all_touched_primary=False)
+
+
+def test_clip_no_data_in_bounds_is_value_error():
+    """ClipNoDataInBounds is a ValueError subclass for compatibility."""
+    assert issubclass(ClipNoDataInBounds, ValueError)
+
+    exc = ClipNoDataInBounds("test message")
+    assert str(exc) == "test message"

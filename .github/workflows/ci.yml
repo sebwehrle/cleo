@@ -29,6 +29,79 @@ jobs:
       - name: Check linting
         run: python -m ruff check .
 
+  complexity:
+    name: Complexity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install complexity tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install radon vulture
+
+      - name: Check cyclomatic complexity (fail on grade E)
+        run: |
+          echo "Checking for very high complexity functions (grade E, CC > 30)..."
+          GRADE_E=$(radon cc cleo --min E -s 2>/dev/null || true)
+          if [[ -n "$GRADE_E" ]]; then
+            echo "FAIL: Functions with complexity grade E found (CC > 30):"
+            echo "$GRADE_E"
+            echo ""
+            echo "These functions must be refactored to reduce complexity."
+            exit 1
+          fi
+          echo "OK: No grade E functions found"
+
+      - name: Check cyclomatic complexity (warn on grade D)
+        run: |
+          echo "Checking for high complexity functions (grade D, CC 21-30)..."
+          GRADE_D=$(radon cc cleo --min D --max D -s 2>/dev/null || true)
+          if [[ -n "$GRADE_D" ]]; then
+            echo "WARNING: Functions with complexity grade D found (CC 21-30):"
+            echo "$GRADE_D"
+            echo ""
+            echo "Consider refactoring these functions in future PRs."
+          else
+            echo "OK: No grade D functions found"
+          fi
+
+      - name: Check maintainability index
+        run: |
+          echo "Checking maintainability index..."
+          LOW_MI=$(radon mi cleo -s 2>/dev/null | grep -E "^cleo.*- [CF]" || true)
+          if [[ -n "$LOW_MI" ]]; then
+            echo "WARNING: Modules with low maintainability (grade C or below):"
+            echo "$LOW_MI"
+          else
+            echo "OK: All modules have acceptable maintainability"
+          fi
+
+      - name: Check for dead code
+        run: |
+          echo "Checking for dead code..."
+          DEAD_CODE=$(vulture cleo --min-confidence 90 2>/dev/null || true)
+          if [[ -n "$DEAD_CODE" ]]; then
+            echo "WARNING: Potential dead code detected (90%+ confidence):"
+            echo "$DEAD_CODE"
+          else
+            echo "OK: No high-confidence dead code detected"
+          fi
+
+      - name: Print complexity summary
+        run: |
+          echo ""
+          echo "=== Complexity Summary ==="
+          radon cc cleo -a 2>/dev/null | tail -1
+          echo ""
+          echo "Grade distribution:"
+          radon cc cleo -a 2>/dev/null | grep -E "^[A-F] " || true
+
   docs:
     name: Docs
     runs-on: ubuntu-latest

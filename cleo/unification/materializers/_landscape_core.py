@@ -161,6 +161,9 @@ def _compute_landscape_inputs_id(
         fingerprint_method = unifier.fingerprint_method
     else:
         meta = elev_result.meta
+        if meta is None:
+            raise RuntimeError("elev_result.meta muat be set when elev_result.kind != 'local'")
+
         items.extend(
             [
                 ("elevation:kind", "copdem"),

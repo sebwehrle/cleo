@@ -324,6 +324,7 @@ def capacity_factors_v1(
         H = float(hub_heights_m[i])
 
         if mode == "direct_cf_quadrature":
+            assert rotor_diameters_m is not None
             D = float(rotor_diameters_m[i])
             cf, _rews = _direct_cf_and_rews_for_turbine(
                 A_stack=A_stack,
@@ -339,6 +340,7 @@ def capacity_factors_v1(
                 compute_cf=True,
             )
         elif mode == "momentmatch_weibull":
+            assert rotor_diameters_m is not None
             D = float(rotor_diameters_m[i])
             cf, _rews = _momentmatch_cf_and_rews_for_turbine(
                 A_stack=A_stack,
@@ -356,6 +358,7 @@ def capacity_factors_v1(
             # Legacy paths retained for explicit comparability.
             A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, H)
             if mode == "rews":
+                assert rotor_diameters_m is not None
                 D = float(rotor_diameters_m[i])
                 f = _rews_moment_factor(
                     A_stack=A_stack,

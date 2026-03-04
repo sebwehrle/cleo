@@ -233,9 +233,9 @@ def build_analysis_export_dataset(
             land_prefixed = _prefix_variables(land_filtered, "landscape__")
         else:
             # Check for collisions
-            wind_vars = set(wind_filtered.data_vars.keys())
-            land_vars = set(land_filtered.data_vars.keys())
-            overlap = wind_vars & land_vars
+            wind_var_names: set[str] = set(wind_filtered.data_vars.keys())
+            land_var_names: set[str] = set(land_filtered.data_vars.keys())
+            overlap = wind_var_names & land_var_names
             if overlap:
                 raise ValueError(
                     f"Variable name collision when exporting domain='both' with prefix=False: "

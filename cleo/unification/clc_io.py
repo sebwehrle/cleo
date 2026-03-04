@@ -105,7 +105,8 @@ def prepare_clc_to_wind_grid(
 
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
-        clc = rxr.open_rasterio(source_path, parse_coordinates=True)
+        clc_raw = rxr.open_rasterio(source_path, parse_coordinates=True)
+        clc: xr.DataArray = clc_raw  # type: ignore[assignment]  # single-file returns DataArray
     if "band" in clc.dims:
         band_count = int(clc.sizes.get("band", 0))
         if band_count != 1:

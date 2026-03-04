@@ -12,7 +12,7 @@ from __future__ import annotations
 import xarray as xr
 from pint import UnitRegistry
 
-_UREG = UnitRegistry()
+_UREG: UnitRegistry = UnitRegistry()
 
 # Canonical attr key (normative)
 UNIT_ATTR_KEY = "units"

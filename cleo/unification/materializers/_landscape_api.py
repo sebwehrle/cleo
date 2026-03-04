@@ -170,8 +170,9 @@ def prepare_landscape_variable_data(
     else:
         aoi = _aoi_geom_or_none(atlas)
 
-        da = rxr.open_rasterio(source_path, parse_coordinates=True).squeeze(drop=True)
-        if da.rio.crs is None:
+        da_raw = rxr.open_rasterio(source_path, parse_coordinates=True)
+        da = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
+        if da.rio.crs is None:  # type: ignore[union-attr]
             raise RuntimeError(f"Source raster {source_path} has no CRS; cannot materialize.")
 
         if aoi is not None:

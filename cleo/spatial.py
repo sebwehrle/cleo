@@ -545,7 +545,7 @@ def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False
     try:
         from rioxarray.exceptions import NoDataInBounds
     except ImportError:  # pragma: no cover
-        NoDataInBounds = ()  # fallback type, will never match
+        NoDataInBounds = ()  # type: ignore[misc]  # fallback tuple, will never match
 
     try:
         return da.rio.clip(geoms, all_touched=all_touched_primary, drop=drop)
@@ -663,7 +663,7 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> tuple[xr.Dataset, gp
     try:
         from rioxarray.exceptions import NoDataInBounds
     except ImportError:  # pragma: no cover
-        NoDataInBounds = ()  # fallback type, will never match
+        NoDataInBounds = ()  # type: ignore[misc]  # fallback tuple, will never match
 
     for var_name, var in self.data.data_vars.items():
         try:

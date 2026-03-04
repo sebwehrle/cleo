@@ -284,7 +284,8 @@ def _open_gwa_raster(
     Returns:
         DataArray with CRS set, reprojected/clipped as specified.
     """
-    da = rxr.open_rasterio(path, chunks=None).squeeze(drop=True)
+    da_raw = rxr.open_rasterio(path, chunks=None)
+    da: xr.DataArray = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
 
     # Ensure CRS is set (use cache if needed)
     if da.rio.crs is None:

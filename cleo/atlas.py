@@ -57,6 +57,8 @@ def _safe_basename(path) -> str:
 class NutsRegionName(str):
     """String-like NUTS region name carrying its NUTS level metadata."""
 
+    _nuts_level: int
+
     def __new__(cls, value: str, level: int):
         """
         Create region-name wrapper with attached NUTS level metadata.
@@ -129,8 +131,8 @@ class Atlas:
         self._deploy_resources()
 
         # v1 Domain objects (cached, lazy)
-        self._wind_domain = None
-        self._landscape_domain = None
+        self._wind_domain: WindDomain | None = None
+        self._landscape_domain: LandscapeDomain | None = None
 
         # Canonical store configuration
         self.chunk_policy = chunk_policy if chunk_policy is not None else {"y": 1024, "x": 1024}

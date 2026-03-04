@@ -469,7 +469,7 @@ def _validate_height_slice_overwrite(
     if callable(evaluator):
         existing_slice_any = evaluator(existing_slice_any)
     else:
-        existing_slice_any = dask_compute(existing_slice_any, backend=backend, num_workers=workers)
+        existing_slice_any = dask_compute(existing_slice_any, backend=backend, num_workers=workers)  # type: ignore[call-overload]
 
     has_existing_height_data = bool(np.asarray(existing_slice_any).item())
     if has_existing_height_data and not overwrite:
@@ -753,7 +753,7 @@ class DomainResult:
         """Compute data for I/O using appropriate backend."""
         if callable(evaluator):
             return evaluator(da)
-        return dask_compute(da, backend=backend, num_workers=workers)
+        return dask_compute(da, backend=backend, num_workers=workers)  # type: ignore[call-overload]
 
     def _write_to_store(
         self,

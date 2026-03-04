@@ -744,11 +744,13 @@ def get_wind_metric_spec(name: str) -> types.MappingProxyType:
 
     spec = _WIND_METRICS[name]
     # Normalize to immutable types
+    required_params: set[str] = spec["required"]  # type: ignore[assignment]
+    allowed_params: set[str] = spec["allowed"]  # type: ignore[assignment]
     normalized = {
         "fn": spec["fn"],
         "requires_turbines": spec["requires_turbines"],
-        "required": frozenset(spec["required"]),
-        "allowed": frozenset(spec["allowed"]),
+        "required": frozenset(required_params),
+        "allowed": frozenset(allowed_params),
         "composed": spec.get("composed", False),
     }
     return types.MappingProxyType(normalized)

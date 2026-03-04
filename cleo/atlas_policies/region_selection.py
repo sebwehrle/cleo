@@ -126,7 +126,7 @@ def select_region_decision(
 
     inferred_level: int | None = None
     if isinstance(region, nuts_region_name_type):
-        inferred_level = int(region.level)
+        inferred_level = int(region.level)  # type: ignore[attr-defined]  # dynamic type check
     elif not isinstance(region, str):
         raise ValueError(f"region must be a string or None, got {type(region).__name__}")
 
@@ -140,7 +140,7 @@ def select_region_decision(
             f"region carries level={inferred_level}, but region_level={region_level}."
         )
 
-    stripped = region.strip()
+    stripped = str(region).strip()
     if not stripped:
         raise ValueError("region cannot be empty or whitespace-only")
 

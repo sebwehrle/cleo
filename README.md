@@ -19,7 +19,7 @@ For detailed environment requirements and dependency policies, see `docs/CONTRAC
 python -m pip install -e .
 ```
 
-Dependency management is defined in `pyproject.toml` (no tracked `environment.yaml`).
+Dependency management is defined in `pyproject.toml`. A `requirements-lock.txt` is available for reproducible installs.
 
 ## Development Commands (Canonical)
 
@@ -45,7 +45,7 @@ python -m pytest -q tests/smoke
 python -m pip install build
 python -m build
 python -m pip install dist/*.whl
-python -c "import cleo; print('cleo import OK')"
+python -c "from cleo import __version__; print(f'cleo {__version__}')"
 
 # docs build
 python -m mkdocs build --strict
@@ -107,9 +107,15 @@ After materialization, CLEO uses:
 
 Public API boundary:
 
-- Supported entry point: `from cleo import Atlas`.
+- Supported entry point: `from cleo import Atlas, __version__`.
+- `__version__` provides runtime version access.
 - Public behavior is defined by the `Atlas`, `WindDomain`, `LandscapeDomain`, and `DomainResult` contracts below.
 - Internal modules (for example `cleo.assess`, `cleo.loaders`, `cleo.unification.*`, `cleo.clc`) are implementation details and not part of the stability contract.
+
+```python
+from cleo import __version__
+print(__version__)  # e.g., "0.0.1"
+```
 
 ### Atlas Construction
 
@@ -496,3 +502,22 @@ print(df)
 ```bash
 python -m pytest -q
 ```
+
+## Citation
+
+If you use CLEO in your research, please cite:
+
+```bibtex
+@article{wehrle2024inferring,
+  title={Inferring local social cost from renewable zoning decisions. Evidence from Lower Austria's wind power zoning},
+  author={Wehrle, Sebastian and Regner, Peter and Morawetz, Ulrich B. and Schmidt, Johannes},
+  journal={Energy Economics},
+  volume={139},
+  pages={107865},
+  year={2024},
+  publisher={Elsevier},
+  doi={10.1016/j.eneco.2024.107865}
+}
+```
+
+See `CITATION.cff` for machine-readable citation metadata.

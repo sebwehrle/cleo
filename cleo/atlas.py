@@ -1,3 +1,38 @@
+"""Atlas orchestration and lifecycle management.
+
+This module provides the ``Atlas`` class, the single public entry point for CLEO.
+Atlas coordinates wind resource assessment workflows including:
+
+- Workspace initialization and resource deployment
+- Base store materialization (wind.zarr, landscape.zarr)
+- Area selection and derived store management
+- Domain access (wind, landscape) for computation and data retrieval
+- Results persistence, export, and cleanup
+
+The Atlas class follows a progressive disclosure API pattern where simple workflows
+require minimal configuration while advanced features remain accessible through
+optional parameters and method calls.
+
+Example usage::
+
+    from cleo import Atlas
+
+    atlas = Atlas(path="./my_atlas", country="AUT", crs="EPSG:3035")
+    atlas.build()
+
+    # Compute capacity factors
+    result = atlas.wind.compute("capacity_factors")
+    result.materialize()
+
+    # Access data
+    cf = atlas.wind.data["capacity_factors"]
+
+See Also
+--------
+cleo.domains : Domain facades for wind and landscape data access
+docs/CONTRACT_UNIFIED_ATLAS.md : Normative API contract
+"""
+
 # %% imports
 import math
 import re

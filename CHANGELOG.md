@@ -1,0 +1,97 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Chunk policy auto-detection: `open_zarr_dataset` now reads stored chunk policy from Zarr attrs and warns if it differs from configured policy, using stored chunks for optimal read performance
+- `DEFAULT_CHUNK_POLICY` constant exported from `cleo.unification.store_io`
+- `__version__` attribute accessible via `cleo.__version__`
+- `CITATION.cff` for academic citation support
+- This changelog
+
+## [0.0.1] - 2024-12-01
+
+### Added
+- **Core Atlas API**
+  - `Atlas` class as single public entry point
+  - Area selection with NUTS region support (`atlas.select(area=...)`)
+  - Turbine configuration (`atlas.configure_turbines(...)`)
+  - Timebase configuration (`atlas.configure_timebase(...)`)
+  - Economics configuration (`atlas.configure_economics(...)`)
+
+- **Wind Domain**
+  - `atlas.wind.data` primary data interface
+  - `atlas.wind.compute(metric=...)` unified compute API
+  - Metrics: `capacity_factors`, `mean_wind_speed`, `rews_mps`, `lcoe`, `min_lcoe_turbine`, `optimal_power`, `optimal_energy`
+  - Grouped dependency specs for composed metrics (`cf={...}`, `economics={...}`)
+  - Turbine selection via `atlas.wind.select(turbines=...)` or `atlas.wind.select(turbine_indices=...)`
+  - Multiple CF computation modes: `direct_cf_quadrature`, `momentmatch_weibull`, `hub`, `rews`
+
+- **Landscape Domain**
+  - `atlas.landscape.data` primary data interface
+  - `atlas.landscape.add(...)` for raster ingestion
+  - `atlas.landscape.rasterize(...)` for vector-to-raster conversion
+  - `atlas.landscape.compute(metric="distance", ...)` for distance transforms
+  - CLC (CORINE Land Cover) integration via `atlas.build_clc(...)`
+
+- **Materialization System**
+  - Idempotent `atlas.build()` for base store creation
+  - `wind.zarr` and `landscape.zarr` canonical stores
+  - Area-scoped derived stores under `areas/<area_id>/`
+  - Manifest-based provenance tracking
+  - Single-writer lock enforcement for concurrent safety
+
+- **Results API**
+  - `DomainResult` wrapper with `.data`, `.materialize()`, `.persist()`
+  - `atlas.persist(...)` for result storage
+  - `atlas.open_result(...)` for result retrieval
+  - `atlas.export_result_netcdf(...)` for NetCDF export
+  - `atlas.export_analysis_dataset_zarr(...)` for schema-versioned exports
+
+- **Data Export**
+  - `atlas.flatten(...)` for tabular DataFrame export
+  - Schema-versioned Zarr exports with provenance tracking
+  - NetCDF export with CF-compliant handling
+
+- **Cleanup APIs**
+  - `atlas.clean_results(...)` for result store cleanup
+  - `atlas.clean_areas(...)` for area store cleanup
+
+- **Unit System**
+  - Canonical unit registry in `cleo/units.py`
+  - Unit conversion utilities (`convert_dataarray`, `conversion_factor`)
+  - Domain-level `convert_units()` method
+
+- **Infrastructure**
+  - Dask-native lazy computation with multi-backend support (`serial`, `threads`, `processes`, `distributed`)
+  - Automatic GWA data download for missing wind rasters
+  - Automatic NUTS shapefile download
+  - CopDEM tile download and mosaic for elevation data
+  - CLMS API integration for CLC data download
+
+- **Quality Assurance**
+  - Comprehensive test suite (877+ unit tests)
+  - CI pipeline with lint, test, and build jobs
+  - Cyclomatic complexity enforcement (no Grade E functions)
+  - Architecture boundary enforcement via static analysis
+  - Schema versioning for external exports
+
+- **Documentation**
+  - Contract-driven design (`docs/CONTRACT_UNIFIED_ATLAS.md`)
+  - MkDocs-based documentation site
+  - Domain guides for wind and landscape workflows
+  - Canonical workflow guide
+
+### Technical Details
+- Python 3.10+ required
+- Built on xarray, dask, rasterio, geopandas ecosystem
+- Zarr v3 compatible storage (no string arrays, no consolidated metadata dependency)
+- 5-layer architecture: orchestration, materialization, computation, boundaries, policies
+
+[Unreleased]: https://github.com/sebwehrle/cleo/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/sebwehrle/cleo/releases/tag/v0.0.1

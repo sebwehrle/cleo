@@ -1,3 +1,42 @@
+"""Domain facades for wind and landscape data access.
+
+This module provides domain-specific facades that expose computed metrics and
+data variables through a consistent interface. Each domain wraps an underlying
+Zarr store and provides:
+
+- Lazy data access via ``.data`` property (xarray Dataset)
+- Metric computation via ``.compute(metric=..., **kwargs)``
+- Result materialization into active stores
+- Variable selection and filtering
+
+WindDomain
+----------
+Handles wind resource metrics including:
+
+- ``capacity_factors``: Turbine-specific capacity factors
+- ``mean_wind_speed``: Height-specific mean wind speeds
+- ``rews_mps``: Rotor-equivalent wind speed
+- ``lcoe``: Levelized cost of electricity
+- ``min_lcoe_turbine``: Optimal turbine selection
+- ``optimal_power``, ``optimal_energy``: Optimal turbine outputs
+
+LandscapeDomain
+---------------
+Handles landscape data including:
+
+- ``valid_mask``: Land validity mask
+- ``elevation``: Terrain elevation
+- User-added rasters via ``.add(...)``
+- Vector rasterization via ``.rasterize(...)``
+- Distance transforms via ``.compute(metric="distance", ...)``
+
+See Also
+--------
+cleo.atlas.Atlas : Main orchestration class
+cleo.wind_metrics : Wind metric specifications and orchestration
+cleo.results : Result wrapper and materialization
+"""
+
 # %% imports
 import json
 import numpy as np

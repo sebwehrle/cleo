@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the software and the paper below."
+title: "CLEO: Wind Resource Assessment with Global Wind Atlas"
+type: software
+authors:
+  - family-names: Wehrle
+    given-names: Sebastian
+    affiliation: BOKU University
+license: MIT
+repository-code: https://github.com/sebwehrle/cleo
+keywords:
+  - wind energy
+  - renewable energy
+  - capacity factors
+  - wind resource assessment
+  - Global Wind Atlas
+
+references:
+  - type: article
+    title: "Inferring local social cost from renewable zoning decisions. Evidence from Lower Austria's wind power zoning"
+    authors:
+      - family-names: Wehrle
+        given-names: Sebastian
+      - family-names: Regner
+        given-names: Peter
+      - family-names: Morawetz
+        given-names: Ulrich B.
+      - family-names: Schmidt
+        given-names: Johannes
+    journal: "Energy Economics"
+    volume: 139
+    year: 2024
+    start: 107865
+    issn: "0140-9883"
+    doi: "10.1016/j.eneco.2024.107865"
+    url: "https://www.sciencedirect.com/science/article/pii/S0140988324005735"
+    abstract: "Large infrastructures, such as wind turbines, may adversely affect their environment, so their deployment is often regulated. These regulations are frequently based on a dichotomy between areas considered feasible or infeasible areas for infrastructure deployment. To overcome the inability of such a binary distinction to adequately represent the involved economic trade-offs between, but also within feasible and infeasible areas, we establish a discrete choice framework to elicit social preferences implicit in Lower Austria's wind power zoning and generate comprehensive estimates of local social costs in high spatial resolution. Our findings suggest that wind turbines were attributed significant local social costs in the political zoning process. These local social cost estimates can inform siting decisions, improve power system modelling and open a novel perspective on the assessment of potentials for renewable energies."
+    keywords:
+      - Externalities
+      - Wind power
+      - Renewable energy
+      - Power system design
+      - Policy

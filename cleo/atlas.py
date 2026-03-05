@@ -33,6 +33,7 @@ from cleo.results import (
 )
 from cleo.unification.nuts_io import _read_vector_file, _read_nuts_area_catalog
 from cleo.unification.store_io import (
+    DEFAULT_CHUNK_POLICY,
     delete_area_dir,
     list_area_dirs,
     open_zarr_dataset,
@@ -135,7 +136,7 @@ class Atlas:
         self._landscape_domain: LandscapeDomain | None = None
 
         # Canonical store configuration
-        self.chunk_policy = chunk_policy if chunk_policy is not None else {"y": 1024, "x": 1024}
+        self.chunk_policy = chunk_policy if chunk_policy is not None else dict(DEFAULT_CHUNK_POLICY)
         self.compute_backend = normalize_compute_backend(compute_backend)
         self.compute_workers = normalize_compute_workers(
             compute_workers,

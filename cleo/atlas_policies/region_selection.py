@@ -1,4 +1,4 @@
-"""Region-selection policy helpers for Atlas delegation."""
+"""Area-selection policy helpers for Atlas delegation."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ CatalogRow = dict[str, Any]
 
 
 @dataclass(frozen=True)
-class SelectionDecision:
-    """Resolved region-selection target for Atlas state application."""
+class AreaSelectionDecision:
+    """Resolved area-selection target for Atlas state application."""
 
-    region_name: str | None
-    region_id: str
+    area_name: str | None
+    area_id: str
 
 
-def normalize_region_name(name: str) -> str:
-    """Normalize region name for lookup semantics."""
+def normalize_area_name(name: str) -> str:
+    """Normalize area name for lookup semantics."""
     return re.sub(r"\s+", " ", name.strip()).casefold()
 
 
@@ -34,19 +34,19 @@ def validate_nuts_level(level: int, *, valid_levels: tuple[int, ...]) -> int:
     return level_i
 
 
-def nuts_regions_level_names(
+def nuts_areas_level_names(
     *,
     level: int,
     country: str,
     catalog_rows: list[CatalogRow],
     validate_level: Callable[[int], int],
-    make_region_name: Callable[[str, int], Any],
+    make_area_name: Callable[[str, int], Any],
 ) -> tuple[Any, ...]:
     """Return deterministic unique names for the requested NUTS level."""
     level_i = validate_level(level)
     rows = [row for row in catalog_rows if int(row["level"]) == level_i]
     if not rows:
-        raise ValueError(f"No NUTS level {level_i} regions found for atlas country {country!r}.")
+        raise ValueError(f"No NUTS level {level_i} areas found for atlas country {country!r}.")
 
     seen = set()
     out: list[Any] = []
@@ -55,37 +55,37 @@ def nuts_regions_level_names(
         if key in seen:
             continue
         seen.add(key)
-        out.append(make_region_name(str(row["name"]), level_i))
+        out.append(make_area_name(str(row["name"]), level_i))
     return tuple(out)
 
 
-def resolve_region_name(
+def resolve_area_name(
     *,
     name: str,
-    region_level: int | None,
+    nuts_level: int | None,
     default_level: int,
     country: str,
     catalog_rows: list[CatalogRow],
     normalize_name: Callable[[str], str],
     validate_level: Callable[[int], int],
-    default_regions_supplier: Callable[[], tuple[Any, ...]],
+    default_areas_supplier: Callable[[], tuple[Any, ...]],
 ) -> tuple[str, str, int]:
-    """Resolve region to ``(normalized_name, region_id, level)``."""
+    """Resolve area to ``(normalized_name, area_id, level)``."""
     name_norm = normalize_name(name)
     matches = [row for row in catalog_rows if row["name_norm"] == name_norm]
 
-    if region_level is not None:
-        level_i = validate_level(region_level)
+    if nuts_level is not None:
+        level_i = validate_level(nuts_level)
         matches_level = [row for row in matches if int(row["level"]) == level_i]
         if len(matches_level) == 1:
             row = matches_level[0]
             return name_norm, str(row["nuts_id"]), level_i
         if len(matches_level) > 1:
             raise ValueError(
-                f"Region '{name}' is ambiguous within NUTS level {level_i}; "
+                f"Area '{name}' is ambiguous within NUTS level {level_i}; "
                 f"matches IDs: {[str(r['nuts_id']) for r in matches_level]}."
             )
-        raise ValueError(f"Region '{name}' not found in NUTS level {level_i} for country {country!r}.")
+        raise ValueError(f"Area '{name}' not found in NUTS level {level_i} for country {country!r}.")
 
     matches_default = [row for row in matches if int(row["level"]) == default_level]
     if len(matches_default) == 1:
@@ -93,7 +93,7 @@ def resolve_region_name(
         return name_norm, str(row["nuts_id"]), default_level
     if len(matches_default) > 1:
         raise ValueError(
-            f"Region '{name}' is ambiguous at default NUTS level {default_level}; pass region_level explicitly."
+            f"Area '{name}' is ambiguous at default NUTS level {default_level}; pass nuts_level explicitly."
         )
 
     if len(matches) == 1:
@@ -101,48 +101,48 @@ def resolve_region_name(
         return name_norm, str(row["nuts_id"]), int(row["level"])
     if len(matches) > 1:
         levels = sorted({int(r["level"]) for r in matches})
-        raise ValueError(f"Region '{name}' is ambiguous across NUTS levels {levels}; pass region_level explicitly.")
+        raise ValueError(f"Area '{name}' is ambiguous across NUTS levels {levels}; pass nuts_level explicitly.")
 
-    available_regions = default_regions_supplier()
-    available = [str(r) for r in available_regions[:20]]
-    suffix = "..." if len(available_regions) > 20 else ""
+    available_areas = default_areas_supplier()
+    available = [str(r) for r in available_areas[:20]]
+    suffix = "..." if len(available_areas) > 20 else ""
     raise ValueError(
-        f"Region '{name}' not found at default NUTS level {default_level}. "
-        f"Available level-{default_level} regions: {available}{suffix}"
+        f"Area '{name}' not found at default NUTS level {default_level}. "
+        f"Available level-{default_level} areas: {available}{suffix}"
     )
 
 
-def select_region_decision(
+def select_area_decision(
     *,
-    region: object,
-    region_level: int | None,
-    nuts_region_name_type: type,
+    area: object,
+    nuts_level: int | None,
+    nuts_area_name_type: type,
     validate_level: Callable[[int], int],
     resolve_name: Callable[[str, int | None], tuple[str, str, int]],
-) -> SelectionDecision:
+) -> AreaSelectionDecision:
     """Resolve user selection arguments into Atlas state decision."""
-    if region is None:
-        return SelectionDecision(region_name=None, region_id="__all__")
+    if area is None:
+        return AreaSelectionDecision(area_name=None, area_id="__all__")
 
     inferred_level: int | None = None
-    if isinstance(region, nuts_region_name_type):
-        inferred_level = int(region.level)  # type: ignore[attr-defined]  # dynamic type check
-    elif not isinstance(region, str):
-        raise ValueError(f"region must be a string or None, got {type(region).__name__}")
+    if isinstance(area, nuts_area_name_type):
+        inferred_level = int(area.level)  # type: ignore[attr-defined]  # dynamic type check
+    elif not isinstance(area, str):
+        raise ValueError(f"area must be a string or None, got {type(area).__name__}")
 
-    if region_level is not None:
-        region_level = validate_level(region_level)
-    if inferred_level is not None and region_level is None:
-        region_level = inferred_level
-    elif inferred_level is not None and region_level != inferred_level:
+    if nuts_level is not None:
+        nuts_level = validate_level(nuts_level)
+    if inferred_level is not None and nuts_level is None:
+        nuts_level = inferred_level
+    elif inferred_level is not None and nuts_level != inferred_level:
         raise ValueError(
-            f"Conflicting NUTS levels for region {region!r}: "
-            f"region carries level={inferred_level}, but region_level={region_level}."
+            f"Conflicting NUTS levels for area {area!r}: "
+            f"area carries level={inferred_level}, but nuts_level={nuts_level}."
         )
 
-    stripped = str(region).strip()
+    stripped = str(area).strip()
     if not stripped:
-        raise ValueError("region cannot be empty or whitespace-only")
+        raise ValueError("area cannot be empty or whitespace-only")
 
-    _name_norm, region_id, _resolved_level = resolve_name(stripped, region_level)
-    return SelectionDecision(region_name=stripped, region_id=region_id)
+    _name_norm, area_id, _resolved_level = resolve_name(stripped, nuts_level)
+    return AreaSelectionDecision(area_name=stripped, area_id=area_id)

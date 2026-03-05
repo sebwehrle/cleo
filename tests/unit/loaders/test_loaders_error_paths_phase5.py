@@ -119,8 +119,8 @@ def test_load_air_density_wraps_open_errors(tmp_path: Path, monkeypatch: pytest.
         path=tmp_path,
         country="AUT",
         crs="EPSG:3035",
-        region=None,
-        get_nuts_region=lambda _r: None,
+        area=None,
+        get_nuts_area=lambda _r: None,
     )
     self_obj = SimpleNamespace(parent=parent)
 
@@ -137,8 +137,8 @@ def test_load_weibull_parameters_wraps_reprojection_errors(tmp_path: Path, monke
         path=tmp_path,
         country="AUT",
         crs="EPSG:3035",
-        region=None,
-        get_nuts_region=lambda _r: None,
+        area=None,
+        get_nuts_area=lambda _r: None,
     )
     self_obj = SimpleNamespace(parent=parent)
 

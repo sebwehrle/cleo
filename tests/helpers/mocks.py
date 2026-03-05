@@ -29,9 +29,9 @@ class DummyParent:
     path: Path | str
     country: str
     crs: str
-    region: str | None = None
+    area: str | None = None
 
-    def get_nuts_region(self, region):
+    def get_nuts_area(self, area):
         return None
 
 
@@ -46,9 +46,9 @@ def make_parent(
     *,
     country: str = "TEST",
     crs: str = "EPSG:4326",
-    region: str | None = None,
+    area: str | None = None,
 ) -> DummyParent:
-    return DummyParent(path=path, country=country, crs=crs, region=region)
+    return DummyParent(path=path, country=country, crs=crs, area=area)
 
 
 def make_atlas(data: xr.Dataset, *, parent: DummyParent | None = None) -> DummyWindAtlas:
@@ -102,7 +102,7 @@ def make_minimal_atlas(
     n: int = 5,
     country: str = "TEST",
     crs: str = "EPSG:4326",
-    region: str | None = None,
+    area: str | None = None,
     wind_speed: float = 7.0,
     include_template: bool = True,
     include_power_curve: bool = False,
@@ -123,7 +123,7 @@ def make_minimal_atlas(
     if include_power_curve:
         ds["power_curve"] = power_curve_da(u=wind_speed_axis(), turbine_id=turbine_id)
 
-    parent = make_parent(path=tmp_path, country=country, crs=crs, region=region)
+    parent = make_parent(path=tmp_path, country=country, crs=crs, area=area)
     return make_atlas(ds, parent=parent)
 
 

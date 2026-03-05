@@ -199,7 +199,7 @@ class TestTimebaseIntegration:
         atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
         atlas.configure_timebase(hours_per_year=8760.0)
 
-        clone = atlas.select(region=None, inplace=False)
+        clone = atlas.select(area=None, inplace=False)
 
         assert clone is not None
         assert clone.timebase_configured == {"hours_per_year": 8760.0}

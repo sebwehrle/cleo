@@ -49,13 +49,13 @@ class MockAtlas:
         path: Path,
         country: str = "AUT",
         crs: str = "epsg:3035",
-        region: str | None = None,
+        area: str | None = None,
         turbines: list[str] | None = None,
     ):
         self.path = path
         self.country = country
         self.crs = crs
-        self._region = region  # Region selection state
+        self._region = area  # Region selection state
         self._turbines_configured = tuple(turbines) if turbines else None
         self._wind_selected_turbines: tuple[str, ...] | None = None
 
@@ -79,18 +79,18 @@ class MockAtlas:
         return self._turbines_configured
 
     @property
-    def region(self):
+    def area(self):
         return self._region
 
     def _active_wind_store_path(self) -> Path:
-        """Return active wind store path (no region support in mock)."""
+        """Return active wind store path (no area support in mock)."""
         return self.wind_store_path
 
     def _active_landscape_store_path(self) -> Path:
-        """Return active landscape store path (no region support in mock)."""
+        """Return active landscape store path (no area support in mock)."""
         return self.landscape_store_path
 
-    def get_nuts_region(self, region: str):
+    def get_nuts_area(self, area: str):
         """Mock - would return GeoDataFrame."""
         return None
 
@@ -109,7 +109,7 @@ def _create_gwa_raster(
     else:
         data = np.random.rand(*shape).astype(np.float32) * 10 + 1
 
-    # Add nodata region in upper-left corner to test mask
+    # Add nodata area in upper-left corner to test mask
     if add_nodata_region:
         data[:3, :3] = np.nan
 

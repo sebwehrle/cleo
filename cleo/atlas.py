@@ -10,18 +10,18 @@ from pathlib import Path
 from typing import Sequence
 
 from cleo.domains import WindDomain, LandscapeDomain
-from cleo.atlas_policies.nuts_catalog import load_nuts_region_catalog as load_nuts_region_catalog_policy
+from cleo.atlas_policies.nuts_catalog import load_nuts_area_catalog as load_nuts_area_catalog_policy
 from cleo.atlas_policies.region_selection import (
-    normalize_region_name as normalize_region_name_policy,
-    nuts_regions_level_names as nuts_regions_level_names_policy,
-    resolve_region_name as resolve_region_name_policy,
-    select_region_decision as select_region_decision_policy,
+    normalize_area_name as normalize_area_name_policy,
+    nuts_areas_level_names as nuts_areas_level_names_policy,
+    resolve_area_name as resolve_area_name_policy,
+    select_area_decision as select_area_decision_policy,
     validate_nuts_level as validate_nuts_level_policy,
 )
 from cleo.atlas_policies.cleanup import (
     parse_older_than as parse_older_than_policy,
-    resolve_region_cleanup_id as resolve_region_cleanup_id_policy,
-    select_region_dirs_for_cleanup as select_region_dirs_for_cleanup_policy,
+    resolve_area_cleanup_id as resolve_area_cleanup_id_policy,
+    select_area_dirs_for_cleanup as select_area_dirs_for_cleanup_policy,
     select_result_stores_for_cleanup as select_result_stores_for_cleanup_policy,
 )
 from cleo.results import (
@@ -31,12 +31,12 @@ from cleo.results import (
     read_result_store_datetime,
     validate_result_path_token,
 )
-from cleo.unification.nuts_io import _read_vector_file, _read_nuts_region_catalog
+from cleo.unification.nuts_io import _read_vector_file, _read_nuts_area_catalog
 from cleo.unification.store_io import (
-    delete_region_dir,
-    list_region_dirs,
+    delete_area_dir,
+    list_area_dirs,
     open_zarr_dataset,
-    read_region_store_meta,
+    read_area_store_meta,
     read_zarr_group_attrs,
     write_netcdf_atomic,
 )
@@ -54,18 +54,18 @@ def _safe_basename(path) -> str:
         return "?"
 
 
-class NutsRegionName(str):
-    """String-like NUTS region name carrying its NUTS level metadata."""
+class NutsAreaName(str):
+    """String-like NUTS area name carrying its NUTS level metadata."""
 
     _nuts_level: int
 
     def __new__(cls, value: str, level: int):
         """
-        Create region-name wrapper with attached NUTS level metadata.
+        Create area-name wrapper with attached NUTS level metadata.
 
         :param value: Region display name.
         :param level: NUTS level.
-        :returns: New ``NutsRegionName`` instance.
+        :returns: New ``NutsAreaName`` instance.
         """
         obj = str.__new__(cls, value)
         obj._nuts_level = int(level)
@@ -74,7 +74,7 @@ class NutsRegionName(str):
     @property
     def level(self) -> int:
         """
-        Return NUTS level metadata attached to this region name.
+        Return NUTS level metadata attached to this area name.
 
         :returns: NUTS level.
         """
@@ -83,7 +83,7 @@ class NutsRegionName(str):
 
 class Atlas:
     DEFAULT_NUTS_LEVEL = 2
-    _VALID_NUTS_LEVELS = (1, 2, 3)
+    _VALID_NUTS_LEVELS = (0, 1, 2, 3)
     DEFAULT_HOURS_PER_YEAR = 8766.0
 
     def __init__(
@@ -95,7 +95,7 @@ class Atlas:
         chunk_policy: dict[str, int] | None = None,
         compute_backend: str = "serial",
         compute_workers: int | None = None,
-        region: str | None = None,
+        area: str | None = None,
         results_root: Path | None = None,
         fingerprint_method: str = "path_mtime_size",
     ):
@@ -108,19 +108,19 @@ class Atlas:
         :param chunk_policy: Optional dataset chunk policy.
         :param compute_backend: Compute backend for eager I/O materialization.
         :param compute_workers: Optional local worker cap.
-        :param region: Optional initial region selection (applied after build).
+        :param area: Optional initial area selection (applied after build).
         :param results_root: Optional override for results artifact root.
         :param fingerprint_method: Unification fingerprint strategy.
         """
         self.path = path
         self.country = country
-        # Region selection state (use select() to set after build())
-        # _region_name: public human-readable name (or None)
-        # _region_id: internal stable id ("__all__" when no region selected)
-        self._region_name: str | None = None
-        self._region_id: str = "__all__"
-        # _pending_region: region name passed to constructor, applied in build()
-        self._pending_region: str | None = region
+        # Area selection state (use select() to set after build())
+        # _area_name: public human-readable name (or None)
+        # _area_id: internal stable id ("__all__" when no area selected)
+        self._area_name: str | None = None
+        self._area_id: str = "__all__"
+        # _pending_area: area name passed to constructor, applied in build()
+        self._pending_area: str | None = area
         self.crs = crs
         self._turbines_configured: tuple[str, ...] | None = None
         self._wind_selected_turbines: tuple[str, ...] | None = None
@@ -151,48 +151,48 @@ class Atlas:
 
         # Canonical store readiness flag
         self._canonical_ready = False
-        self._nuts_region_catalog_cache: tuple[dict, ...] | None = None
+        self._nuts_area_catalog_cache: tuple[dict, ...] | None = None
 
     def __repr__(self) -> str:
         """Audit-safe repr: no IO, no mutation, bounded length."""
         try:
             country = getattr(self, "country", "?")
-            region_name = getattr(self, "_region_name", None) or ""
+            area_name = getattr(self, "_area_name", None) or ""
             crs = getattr(self, "_crs", "?")
             path = _safe_basename(getattr(self, "_path", None))
             canonical = "ready" if getattr(self, "_canonical_ready", False) else "not_ready"
 
-            region_part = f", region={region_name!r}" if region_name else ""
-            return f"Atlas(country={country!r}{region_part}, crs={crs!r}, path={path!r}, stores={canonical})"
+            area_part = f", area={area_name!r}" if area_name else ""
+            return f"Atlas(country={country!r}{area_part}, crs={crs!r}, path={path!r}, stores={canonical})"
         except (AttributeError, TypeError, ValueError):
             return "Atlas(?)"
 
     __str__ = __repr__
 
     def build(self):
-        """Materialize stores: base (country-wide) and region (if selected).
+        """Materialize stores: base (country-wide) and area (if selected).
 
         - Always creates/updates base stores (wind.zarr, landscape.zarr)
-        - If region passed to constructor or select(), also creates region stores
+        - If area passed to constructor or select(), also creates area stores
 
         Must be called before accessing wind/landscape data.
         """
-        # Region-aware build paths require NUTS boundaries.
-        if self.region is not None:
+        # Area-aware build paths require NUTS boundaries.
+        if self.area is not None:
             self._ensure_nuts_shapefile(auto_download=True)
 
         # Always ensure base stores exist
         if not self._canonical_ready:
             self.build_canonical()
 
-        # Apply pending region from constructor (now that stores exist)
-        if self._pending_region is not None:
-            self.select(region=self._pending_region, inplace=True)
-            self._pending_region = None  # Clear after applying
+        # Apply pending area from constructor (now that stores exist)
+        if self._pending_area is not None:
+            self.select(area=self._pending_area, inplace=True)
+            self._pending_area = None  # Clear after applying
 
-        # If region selected, ensure region stores exist
-        if self._region_name is not None:
-            self._ensure_region_stores()
+        # If area selected, ensure area stores exist
+        if self._area_name is not None:
+            self._ensure_area_stores()
 
         # Build may alter active-store routing/state; clear transient overlays.
         self._invalidate_domain_views(clear_wind=True, clear_landscape=True)
@@ -356,39 +356,39 @@ class Atlas:
         return open_zarr_dataset(self.landscape_store_path, chunk_policy=self.chunk_policy)
 
     # -------------------------------------------------------------------------
-    # Region selection (contract A4, B1)
+    # Area selection (contract A4, B1)
     # -------------------------------------------------------------------------
 
     @property
-    def region(self) -> str | None:
+    def area(self) -> str | None:
         """
-        Current region selection (public name or ``None`` for full-country).
+        Current area selection (public name or ``None`` for full-country).
 
-        Returns pending region if passed to constructor but not yet applied
-        (before build()), otherwise returns the resolved region name.
+        Returns pending area if passed to constructor but not yet applied
+        (before build()), otherwise returns the resolved area name.
 
-        :returns: Active or pending region name, or ``None``.
+        :returns: Active or pending area name, or ``None``.
         """
-        if self._region_name is not None:
-            return self._region_name
-        # Return pending region if set but not yet applied (before build())
-        return self._pending_region
+        if self._area_name is not None:
+            return self._area_name
+        # Return pending area if set but not yet applied (before build())
+        return self._pending_area
 
-    @region.setter
-    def region(self, value: str | None) -> None:
-        """Set region selection (equivalent to select(region=value))."""
-        self.select(region=value, inplace=True)
+    @area.setter
+    def area(self, value: str | None) -> None:
+        """Set area selection (equivalent to select(area=value))."""
+        self.select(area=value, inplace=True)
 
-    def _normalize_region_name(self, name: str) -> str:
-        """Normalize region name: strip, collapse whitespace, casefold."""
-        return normalize_region_name_policy(name)
+    def _normalize_area_name(self, name: str) -> str:
+        """Normalize area name: strip, collapse whitespace, casefold."""
+        return normalize_area_name_policy(name)
 
     def _validate_nuts_level(self, level: int) -> int:
         """Validate and normalize NUTS level."""
         return validate_nuts_level_policy(level, valid_levels=self._VALID_NUTS_LEVELS)
 
-    def _load_nuts_region_catalog(self) -> list[dict]:
-        """Load NUTS region catalog from store attrs (fast) or raw NUTS files (fallback)."""
+    def _load_nuts_area_catalog(self) -> list[dict]:
+        """Load NUTS area catalog from store attrs (fast) or raw NUTS files (fallback)."""
 
         def _log_debug(msg: str) -> None:
             logger.debug(
@@ -399,54 +399,54 @@ class Atlas:
 
         def _read_raw_catalog() -> list[dict]:
             self._ensure_nuts_shapefile(auto_download=True)
-            return _read_nuts_region_catalog(self.path, self.country)
+            return _read_nuts_area_catalog(self.path, self.country)
 
-        catalog, cache = load_nuts_region_catalog_policy(
-            cached_rows=self._nuts_region_catalog_cache,
+        catalog, cache = load_nuts_area_catalog_policy(
+            cached_rows=self._nuts_area_catalog_cache,
             landscape_store_path=self.landscape_store_path,
             valid_levels=self._VALID_NUTS_LEVELS,
             read_store_attrs=read_zarr_group_attrs,
             read_raw_catalog=_read_raw_catalog,
             log_debug=_log_debug,
         )
-        self._nuts_region_catalog_cache = cache
+        self._nuts_area_catalog_cache = cache
         return catalog
 
     @property
-    def nuts_regions(self) -> tuple[NutsRegionName, ...]:
-        """List selectable region names for default NUTS level (level 2)."""
-        return self.nuts_regions_level(self.DEFAULT_NUTS_LEVEL)
+    def nuts_areas(self) -> tuple[NutsAreaName, ...]:
+        """List selectable area names for default NUTS level (level 2)."""
+        return self.nuts_areas_level(self.DEFAULT_NUTS_LEVEL)
 
-    def nuts_regions_level(self, level: int) -> tuple[NutsRegionName, ...]:
-        """List selectable region names for a specific NUTS level.
+    def nuts_areas_level(self, level: int) -> tuple[NutsAreaName, ...]:
+        """List selectable area names for a specific NUTS level.
 
         :param level: NUTS level (1, 2, or 3).
-        :returns: Tuple of region names tagged with level metadata.
-        :raises ValueError: If level is invalid or no regions are available.
+        :returns: Tuple of area names tagged with level metadata.
+        :raises ValueError: If level is invalid or no areas are available.
         """
-        catalog = self._load_nuts_region_catalog()
-        return nuts_regions_level_names_policy(
+        catalog = self._load_nuts_area_catalog()
+        return nuts_areas_level_names_policy(
             level=level,
             country=self.country,
             catalog_rows=catalog,
             validate_level=self._validate_nuts_level,
-            make_region_name=lambda name, level_i: NutsRegionName(name, level_i),
+            make_area_name=lambda name, level_i: NutsAreaName(name, level_i),
         )
 
-    def _resolve_region_name(self, name: str, *, region_level: int | None = None) -> tuple[str, str, int]:
+    def _resolve_area_name(self, name: str, *, nuts_level: int | None = None) -> tuple[str, str, int]:
         """
-        Resolve region name to ``(normalized_name, region_id, level)``.
+        Resolve area name to ``(normalized_name, area_id, level)``.
         """
-        catalog = self._load_nuts_region_catalog()
-        return resolve_region_name_policy(
+        catalog = self._load_nuts_area_catalog()
+        return resolve_area_name_policy(
             name=name,
-            region_level=region_level,
+            nuts_level=nuts_level,
             default_level=self.DEFAULT_NUTS_LEVEL,
             country=self.country,
             catalog_rows=catalog,
-            normalize_name=self._normalize_region_name,
+            normalize_name=self._normalize_area_name,
             validate_level=self._validate_nuts_level,
-            default_regions_supplier=lambda: self.nuts_regions_level(self.DEFAULT_NUTS_LEVEL),
+            default_areas_supplier=lambda: self.nuts_areas_level(self.DEFAULT_NUTS_LEVEL),
         )
 
     def _clone_for_selection(self) -> "Atlas":
@@ -466,7 +466,7 @@ class Atlas:
             chunk_policy=dict(self.chunk_policy) if self.chunk_policy is not None else None,
             compute_backend=self.compute_backend,
             compute_workers=self.compute_workers,
-            region=None,
+            area=None,
             results_root=self.results_root,
             fingerprint_method=self.fingerprint_method,
         )
@@ -484,8 +484,8 @@ class Atlas:
     def select(
         self,
         *,
-        region: str | NutsRegionName | None = None,
-        region_level: int | None = None,
+        area: str | NutsAreaName | None = None,
+        nuts_level: int | None = None,
         inplace: bool = False,
     ) -> "Atlas | None":
         """
@@ -495,72 +495,72 @@ class Atlas:
             - inplace=False (default): return a new constrained Atlas; leave self unchanged
             - inplace=True: constrain self in-place and return None
 
-        :param region: Human-readable region name (for example ``"Niederösterreich"``),
-            a ``NutsRegionName`` value, or ``None`` to clear selection.
-        :param region_level: Optional NUTS level override for resolving plain strings.
+        :param area: Human-readable area name (for example ``"Niederösterreich"``),
+            a ``NutsAreaName`` value, or ``None`` to clear selection.
+        :param nuts_level: Optional NUTS level override for resolving plain strings.
         :param inplace: If ``True``, mutate ``self`` and return ``None``.
         :returns: A new constrained :class:`Atlas` when ``inplace=False``, else ``None``.
-        :raises ValueError: If ``region`` is empty, whitespace-only, wrong type, or unknown.
+        :raises ValueError: If ``area`` is empty, whitespace-only, wrong type, or unknown.
         """
         if not inplace:
             clone = self._clone_for_selection()
-            clone.select(region=region, region_level=region_level, inplace=True)
+            clone.select(area=area, nuts_level=nuts_level, inplace=True)
             return clone
 
-        decision = select_region_decision_policy(
-            region=region,
-            region_level=region_level,
-            nuts_region_name_type=NutsRegionName,
+        decision = select_area_decision_policy(
+            area=area,
+            nuts_level=nuts_level,
+            nuts_area_name_type=NutsAreaName,
             validate_level=self._validate_nuts_level,
-            resolve_name=lambda name, level: self._resolve_region_name(name, region_level=level),
+            resolve_name=lambda name, level: self._resolve_area_name(name, nuts_level=level),
         )
-        self._region_name = decision.region_name
-        self._region_id = decision.region_id
+        self._area_name = decision.area_name
+        self._area_id = decision.area_id
 
-        # Region routing changed: invalidate caches and staged overlays.
+        # Area routing changed: invalidate caches and staged overlays.
         self._invalidate_domain_views(clear_wind=True, clear_landscape=True)
 
         return None
 
     @property
-    def _effective_region_id(self) -> str:
+    def _effective_area_id(self) -> str:
         """
-        Effective region ID for store paths (contract B1).
+        Effective area ID for store paths (contract B1).
 
-        Returns "__all__" when no region selected, otherwise the internal region_id.
+        Returns "__all__" when no area selected, otherwise the internal area_id.
 
-        :returns: Effective region ID used in path routing.
+        :returns: Effective area ID used in path routing.
         """
-        return self._region_id
+        return self._area_id
 
-    def _region_store_root(self) -> Path:
+    def _area_store_root(self) -> Path:
         """
-        Root directory for region stores (contract B1).
+        Root directory for area stores (contract B1).
 
-        Layout: <ROOT>/regions/<region_id>/
+        Layout: <ROOT>/areas/<area_id>/
         """
-        return self.path / "regions" / self._effective_region_id
+        return self.path / "areas" / self._effective_area_id
 
     def _active_wind_store_path(self) -> Path:
         """
-        Path to the active wind store (base or region).
+        Path to the active wind store (base or area).
 
-        When region selected: <ROOT>/regions/<region_id>/wind.zarr
-        When no region: <ROOT>/wind.zarr (base store)
+        When area selected: <ROOT>/areas/<area_id>/wind.zarr
+        When no area: <ROOT>/wind.zarr (base store)
         """
-        if self._region_name is not None:
-            return self._region_store_root() / "wind.zarr"
+        if self._area_name is not None:
+            return self._area_store_root() / "wind.zarr"
         return self.wind_store_path
 
     def _active_landscape_store_path(self) -> Path:
         """
-        Path to the active landscape store (base or region).
+        Path to the active landscape store (base or area).
 
-        When region selected: <ROOT>/regions/<region_id>/landscape.zarr
-        When no region: <ROOT>/landscape.zarr (base store)
+        When area selected: <ROOT>/areas/<area_id>/landscape.zarr
+        When no area: <ROOT>/landscape.zarr (base store)
         """
-        if self._region_name is not None:
-            return self._region_store_root() / "landscape.zarr"
+        if self._area_name is not None:
+            return self._area_store_root() / "landscape.zarr"
         return self.landscape_store_path
 
     def _evaluate_for_io(self, obj: xr.DataArray | xr.Dataset) -> xr.DataArray | xr.Dataset:
@@ -575,14 +575,14 @@ class Atlas:
             num_workers=self.compute_workers,
         )
 
-    def _ensure_region_stores(self) -> None:
+    def _ensure_area_stores(self) -> None:
         """
-        Ensure region stores exist for current region selection.
+        Ensure area stores exist for current area selection.
 
-        Creates region stores by subsetting from country stores if needed.
-        Does nothing if no region selected.
+        Creates area stores by subsetting from country stores if needed.
+        Does nothing if no area selected.
         """
-        if self._region_name is None:
+        if self._area_name is None:
             return
 
         from cleo.unification import Unifier
@@ -591,9 +591,9 @@ class Atlas:
             chunk_policy=self.chunk_policy,
             fingerprint_method=self.fingerprint_method,
         )
-        u.ensure_region_stores(
+        u.ensure_area_stores(
             self,
-            self._region_id,
+            self._area_id,
             logger=logger,
         )
 
@@ -879,84 +879,84 @@ class Atlas:
 
         return count
 
-    def clean_regions(
+    def clean_areas(
         self,
-        region: str | None = None,
+        area: str | None = None,
         older_than: str | None = None,
         *,
         include_incomplete: bool = True,
     ) -> int:
-        """Clean up materialized region stores under ``<atlas.path>/regions``.
+        """Clean up materialized area stores under ``<atlas.path>/areas``.
 
-        Deletes region directories that match the given filters. A region directory
+        Deletes area directories that match the given filters. A area directory
         is expected to contain ``wind.zarr`` and/or ``landscape.zarr``.
 
-        :param region: Optional human-readable region name. When provided, it is
-            resolved with the same region-resolution logic as :meth:`select`, and
-            only that resolved region directory is considered.
-        :param older_than: Optional age threshold. Only region directories older
+        :param area: Optional human-readable area name. When provided, it is
+            resolved with the same area-resolution logic as :meth:`select`, and
+            only that resolved area directory is considered.
+        :param older_than: Optional age threshold. Only area directories older
             than this timestamp are deleted. Accepts ``YYYY-MM-DD`` or ISO datetime.
-            Age is determined from ``created_at`` in region store attrs when available,
+            Age is determined from ``created_at`` in area store attrs when available,
             otherwise filesystem mtime.
-        :param include_incomplete: If ``True`` (default), incomplete/partial region
-            directories are eligible for deletion. If ``False``, only complete region
+        :param include_incomplete: If ``True`` (default), incomplete/partial area
+            directories are eligible for deletion. If ``False``, only complete area
             directories (both stores present and ``store_state == "complete"``) are
             eligible.
-        :returns: Number of region directories deleted.
-        :raises ValueError: If ``region`` is not a string/None, is empty, or if
+        :returns: Number of area directories deleted.
+        :raises ValueError: If ``area`` is not a string/None, is empty, or if
             ``older_than`` has invalid format.
         """
-        regions_root = self.path / "regions"
+        areas_root = self.path / "areas"
 
-        if not regions_root.exists():
+        if not areas_root.exists():
             logger.info(
-                "clean_regions: deleted=0 (scanned=0, region=%r, older_than=%r, include_incomplete=%r, regions_root=%s). "
-                "No region stores directory exists.",
-                region,
+                "clean_areas: deleted=0 (scanned=0, area=%r, older_than=%r, include_incomplete=%r, areas_root=%s). "
+                "No area stores directory exists.",
+                area,
                 older_than,
                 include_incomplete,
-                regions_root,
+                areas_root,
             )
             return 0
 
-        region_id_filter = resolve_region_cleanup_id_policy(
-            region=region,
-            resolve_region_name=lambda value: self._resolve_region_name(value),
+        area_id_filter = resolve_area_cleanup_id_policy(
+            area=area,
+            resolve_area_name=lambda value: self._resolve_area_name(value),
         )
-        region_dirs = list_region_dirs(regions_root)
-        if region_id_filter is not None:
-            region_dirs = [p for p in region_dirs if p.name == region_id_filter]
+        area_dirs = list_area_dirs(areas_root)
+        if area_id_filter is not None:
+            area_dirs = [p for p in area_dirs if p.name == area_id_filter]
 
         threshold_dt = parse_older_than_policy(older_than)
-        selected, scanned = select_region_dirs_for_cleanup_policy(
-            region_dirs=region_dirs,
+        selected, scanned = select_area_dirs_for_cleanup_policy(
+            area_dirs=area_dirs,
             include_incomplete=include_incomplete,
             threshold_dt=threshold_dt,
-            read_region_meta=read_region_store_meta,
+            read_area_meta=read_area_store_meta,
         )
-        for region_dir in selected:
-            delete_region_dir(region_dir)
+        for area_dir in selected:
+            delete_area_dir(area_dir)
         deleted = len(selected)
 
         if deleted == 0:
             logger.info(
-                "clean_regions: deleted=0 (scanned=%d, region=%r, older_than=%r, include_incomplete=%r, regions_root=%s). "
-                "No matching region stores were found.",
+                "clean_areas: deleted=0 (scanned=%d, area=%r, older_than=%r, include_incomplete=%r, areas_root=%s). "
+                "No matching area stores were found.",
                 scanned,
-                region,
+                area,
                 older_than,
                 include_incomplete,
-                regions_root,
+                areas_root,
             )
         else:
             logger.info(
-                "clean_regions: deleted=%d (scanned=%d, region=%r, older_than=%r, include_incomplete=%r, regions_root=%s).",
+                "clean_areas: deleted=%d (scanned=%d, area=%r, older_than=%r, include_incomplete=%r, areas_root=%s).",
                 deleted,
                 scanned,
-                region,
+                area,
                 older_than,
                 include_incomplete,
-                regions_root,
+                areas_root,
             )
 
         return deleted
@@ -1419,22 +1419,22 @@ class Atlas:
             message += " Run NUTS download/extract first (e.g. via cleo.loaders.load_nuts)."
         raise FileNotFoundError(message)
 
-    def get_nuts_region(self, region, merged_name=None, to_atlascrs=True):
-        """Return dissolved NUTS geometry for one or more regions.
+    def get_nuts_area(self, area, merged_name=None, to_atlascrs=True):
+        """Return dissolved NUTS geometry for one or more areas.
 
-        Region inputs may be NUTS names (``NAME_LATN``) or NUTS IDs.
+        Area inputs may be NUTS names (``NAME_LATN``) or NUTS IDs.
 
-        :param region: Region name/ID or a list of names/IDs.
-        :type region: str | list[str]
+        :param area: Area name/ID or a list of names/IDs.
+        :type area: str | list[str]
         :param merged_name: Optional output value for ``NAME_LATN`` in the dissolved
             GeoDataFrame.
         :type merged_name: str | None
         :param to_atlascrs: If ``True``, reproject output to ``self.crs``.
-        :returns: Single-row dissolved region geometry.
+        :returns: Single-row dissolved area geometry.
         :rtype: geopandas.GeoDataFrame
         :raises FileNotFoundError: If no NUTS shapefile is available.
-        :raises TypeError: If ``region`` is neither ``str`` nor ``list[str]``.
-        :raises ValueError: If any requested region is not valid for the atlas country.
+        :raises TypeError: If ``area`` is neither ``str`` nor ``list[str]``.
+        :raises ValueError: If any requested area is not valid for the atlas country.
         """
         nuts_shape = self._ensure_nuts_shapefile(auto_download=True)
         # Read vector via centralized helper
@@ -1443,39 +1443,39 @@ class Atlas:
         # Convert three-digit country code to two-digit country code
         alpha_2 = pct.countries.get(alpha_3=self.country).alpha_2
 
-        # Filter regions by country code
-        feasible_regions = nuts[nuts["CNTR_CODE"] == alpha_2]
+        # Filter areas by country code
+        feasible_areas = nuts[nuts["CNTR_CODE"] == alpha_2]
 
-        if isinstance(region, str):
-            region_list = [region]
-        elif isinstance(region, list):
-            region_list = region
+        if isinstance(area, str):
+            area_list = [area]
+        elif isinstance(area, list):
+            area_list = area
         else:
-            raise TypeError("Region must be a string or a list of strings.")
+            raise TypeError("Area must be a string or a list of strings.")
 
         # Accept either human names (NAME_LATN) or NUTS IDs (typically NUTS_ID)
         name_col = "NAME_LATN"
-        id_col = "NUTS_ID" if "NUTS_ID" in feasible_regions.columns else None
+        id_col = "NUTS_ID" if "NUTS_ID" in feasible_areas.columns else None
 
-        valid_names = set(feasible_regions[name_col].astype(str).to_numpy())
-        valid_ids = set(feasible_regions[id_col].astype(str).to_numpy()) if id_col else set()
+        valid_names = set(feasible_areas[name_col].astype(str).to_numpy())
+        valid_ids = set(feasible_areas[id_col].astype(str).to_numpy()) if id_col else set()
 
-        invalid_regions = [r for r in region_list if (r not in valid_names) and (r not in valid_ids)]
-        if invalid_regions:
+        invalid_areas = [r for r in area_list if (r not in valid_names) and (r not in valid_ids)]
+        if invalid_areas:
             hint = "NAME_LATN" if id_col is None else "NAME_LATN or NUTS_ID"
-            raise ValueError(f"{', '.join(invalid_regions)} are not valid regions in {self.country} (expected {hint}).")
+            raise ValueError(f"{', '.join(invalid_areas)} are not valid areas in {self.country} (expected {hint}).")
 
         if id_col:
-            selected_shapes = feasible_regions[
-                feasible_regions[name_col].isin(region_list) | feasible_regions[id_col].isin(region_list)
+            selected_shapes = feasible_areas[
+                feasible_areas[name_col].isin(area_list) | feasible_areas[id_col].isin(area_list)
             ]
         else:
-            selected_shapes = feasible_regions[feasible_regions[name_col].isin(region_list)]
+            selected_shapes = feasible_areas[feasible_areas[name_col].isin(area_list)]
 
         merged_shape = selected_shapes.dissolve()
 
-        # Set the name for the merged region
-        merged_shape["NAME_LATN"] = merged_name if merged_name else ", ".join(region_list)
+        # Set the name for the merged area
+        merged_shape["NAME_LATN"] = merged_name if merged_name else ", ".join(area_list)
         merged_shape = merged_shape.reset_index(drop=True)
 
         if to_atlascrs:
@@ -1483,7 +1483,7 @@ class Atlas:
 
         return merged_shape
 
-    def get_nuts_country(self):
+    def get_nuts_area_country(self):
         """Return country-level NUTS geometry for the configured atlas country.
 
         :returns: NUTS level-0 geometry rows matching atlas country.

@@ -2,7 +2,7 @@
 
 Verifies:
 - Atlas accepts all constructor parameters per contract A2
-- region parameter is optional and stored correctly
+- area parameter is optional and stored correctly
 - Construction performs no heavy I/O
 """
 
@@ -25,7 +25,7 @@ def _mock_region_catalog(tmp_path: Path) -> None:
             "level": 2,
         }
     ]
-    g.attrs["cleo_region_catalog_json"] = json.dumps(catalog, sort_keys=True, separators=(",", ":"))
+    g.attrs["cleo_area_catalog_json"] = json.dumps(catalog, sort_keys=True, separators=(",", ":"))
 
 
 class TestAtlasConstructorContractA2:
@@ -47,48 +47,48 @@ class TestAtlasConstructorContractA2:
         assert not hasattr(atlas, "materialize_clc")
 
     def test_atlas_accepts_region_parameter(self, tmp_path: Path) -> None:
-        """Atlas constructor accepts region parameter per contract A2.
+        """Atlas constructor accepts area parameter per contract A2.
 
         Contract A2 states:
-        - region=None is optional at construction time
-        - region must also be settable later (A4)
+        - area=None is optional at construction time
+        - area must also be settable later (A4)
         """
-        # Should not raise TypeError for 'region' parameter
+        # Should not raise TypeError for 'area' parameter
         atlas = Atlas(
             tmp_path,
             country="AUT",
             crs="epsg:3035",
-            region="Niederösterreich",
+            area="Niederösterreich",
         )
-        assert atlas.region == "Niederösterreich"
+        assert atlas.area == "Niederösterreich"
 
     def test_atlas_region_defaults_to_none(self, tmp_path: Path) -> None:
-        """Atlas region defaults to None when not specified."""
+        """Atlas area defaults to None when not specified."""
         atlas = Atlas(
             tmp_path,
             country="AUT",
             crs="epsg:3035",
         )
-        assert atlas.region is None
+        assert atlas.area is None
 
     def test_atlas_region_can_be_set_after_construction(self, tmp_path: Path) -> None:
-        """Atlas region can be changed after construction per contract A4."""
+        """Atlas area can be changed after construction per contract A4."""
         atlas = Atlas(
             tmp_path,
             country="AUT",
             crs="epsg:3035",
         )
-        assert atlas.region is None
+        assert atlas.area is None
 
         _mock_region_catalog(tmp_path)
 
-        # Contract A4: region must be changeable at any time
-        atlas.region = "Niederösterreich"
-        assert atlas.region == "Niederösterreich"
+        # Contract A4: area must be changeable at any time
+        atlas.area = "Niederösterreich"
+        assert atlas.area == "Niederösterreich"
 
-        # Clear region selection
-        atlas.region = None
-        assert atlas.region is None
+        # Clear area selection
+        atlas.area = None
+        assert atlas.area is None
 
     def test_atlas_accepts_all_optional_parameters(self, tmp_path: Path) -> None:
         """Atlas constructor accepts all optional parameters per contract A2."""
@@ -99,10 +99,10 @@ class TestAtlasConstructorContractA2:
             chunk_policy={"y": 512, "x": 512},
             compute_backend="threads",
             compute_workers=4,
-            region="Niederösterreich",
+            area="Niederösterreich",
             results_root=tmp_path / "custom_results",
         )
-        assert atlas.region == "Niederösterreich"
+        assert atlas.area == "Niederösterreich"
         assert atlas.chunk_policy == {"y": 512, "x": 512}
         assert atlas.compute_backend == "threads"
         assert atlas.compute_workers == 4
@@ -166,7 +166,7 @@ class TestAtlasConstructorContractA2:
             tmp_path,
             country="AUT",
             crs="epsg:3035",
-            region="Niederösterreich",
+            area="Niederösterreich",
         )
 
         # No zarr stores should exist after construction
@@ -199,7 +199,7 @@ class TestAtlasConstructorContractA2:
             compute_workers=3,
         )
 
-        clone = atlas.select(region=None, inplace=False)
+        clone = atlas.select(area=None, inplace=False)
         assert clone is not None
         assert clone.compute_backend == "threads"
         assert clone.compute_workers == 3
@@ -244,7 +244,7 @@ class TestAtlasConstructorContractA2:
         atlas._wind_domain = wind
         atlas._landscape_domain = land
 
-        atlas.select(region=None, inplace=True)
+        atlas.select(area=None, inplace=True)
 
         assert wind._data is None
         assert wind._computed_overlays == {}

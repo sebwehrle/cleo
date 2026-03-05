@@ -19,11 +19,11 @@ atlas.configure_timebase(hours_per_year=8766.0)
 atlas.configure_economics(discount_rate=0.05, lifetime_a=25)
 ```
 
-### 2. Select region routing (in place)
+### 2. Select area routing (in place)
 
 ```python
-atlas.select(region="Niederösterreich", inplace=True)
-atlas.build()  # ensures region stores for current selection
+atlas.select(area="Niederösterreich", inplace=True)
+atlas.build()  # ensures area stores for current selection
 ```
 
 Use `inplace=True` as default. Clone-style selection with `inplace=False` is supported but secondary.
@@ -51,7 +51,7 @@ run_path = atlas.wind.compute("mean_wind_speed", height=100).persist(metric_name
 
 ```python
 atlas.clean_results(metric_name="mean_wind_speed")
-atlas.clean_regions(include_incomplete=True)
+atlas.clean_areas(include_incomplete=True)
 ```
 
 ## Common mistakes

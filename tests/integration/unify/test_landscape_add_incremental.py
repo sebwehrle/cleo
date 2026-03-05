@@ -49,12 +49,12 @@ class MockAtlas:
         path: Path,
         country: str = "AUT",
         crs: str = "epsg:3035",
-        region: str | None = None,
+        area: str | None = None,
     ):
         self.path = path
         self.country = country
         self.crs = crs
-        self.region = region
+        self.area = area
         self.turbines_configured = None
         self.chunk_policy = {"y": 1024, "x": 1024}
         self.fingerprint_method = "path_mtime_size"
@@ -68,8 +68,8 @@ class MockAtlas:
         # Copy default turbine for wind materialization
         _copy_default_turbine(path)
 
-    def get_nuts_region(self, region: str):
-        """Return None - no NUTS region for basic tests."""
+    def get_nuts_area(self, area: str):
+        """Return None - no NUTS area for basic tests."""
         return None
 
     def build_canonical(self) -> None:

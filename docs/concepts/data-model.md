@@ -11,7 +11,7 @@ CLEO is atlas-centric: one mutable `Atlas` object is the working state container
 ## Store layers
 
 - Base stores: country-level canonical stores from `Atlas.build()`
-- Region stores: region-scoped stores selected via `atlas.select(..., inplace=True)`
+- Area stores: area-scoped stores selected via `atlas.select(..., inplace=True)`
 - Results stores: optional run artifacts under `results/<run_id>/...`
 
 ## Operational distinction

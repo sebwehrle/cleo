@@ -386,9 +386,9 @@ class WindDomain:
         store_path = self._atlas._active_wind_store_path()
 
         if not store_path.exists():
-            if self._atlas._region_name is not None:
+            if self._atlas._area_name is not None:
                 raise FileNotFoundError(
-                    f"Region wind store missing at {store_path}; call atlas.build() after selecting region."
+                    f"Area wind store missing at {store_path}; call atlas.build() after selecting area."
                 )
             raise FileNotFoundError(f"Wind store missing at {store_path}; call atlas.build().")
 
@@ -406,7 +406,7 @@ class WindDomain:
         """
         Lazy access to the active wind zarr store as xr.Dataset.
 
-        Routes to region store when region is selected, otherwise base store.
+        Routes to area store when area is selected, otherwise base store.
         Opens the store once and caches it. Validates store_state == "complete".
         Includes staged computed overlays (if any) from :meth:`compute`.
 
@@ -886,9 +886,9 @@ class LandscapeDomain:
 
         store_path = resolve_active_landscape_store_path(self._atlas)
         if not store_path.exists():
-            if getattr(self._atlas, "_region_name", None) is not None:
+            if getattr(self._atlas, "_area_name", None) is not None:
                 raise FileNotFoundError(
-                    f"Region landscape store missing at {store_path}; call atlas.build() after selecting region."
+                    f"Area landscape store missing at {store_path}; call atlas.build() after selecting area."
                 )
             raise FileNotFoundError(f"Landscape store missing at {store_path}; call atlas.build().")
 

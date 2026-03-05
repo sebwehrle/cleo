@@ -106,7 +106,7 @@ def prepare_landscape_variable_data(
 ) -> xr.DataArray:
     """Prepare a landscape variable DataArray from a registered source.
 
-    Reads/writes are scoped to the active store routing (base or selected region).
+    Reads/writes are scoped to the active store routing (base or selected area).
 
     :param unifier: Unifier instance providing chunk policy and helpers.
     :param atlas: Atlas-like object with store routing context.
@@ -314,7 +314,7 @@ def materialize_landscape_variable(
 ) -> bool:
     """Materialize a single landscape variable from a registered source.
 
-    Reads/writes are scoped to the active store routing (base or selected region).
+    Reads/writes are scoped to the active store routing (base or selected area).
 
     :param unifier: Unifier instance providing chunk policy and helpers.
     :param atlas: Atlas-like object with store routing context.
@@ -545,7 +545,7 @@ def _update_inputs_id(
         ("wind:grid_id", wind_ref.grid_id),
         ("wind:inputs_id", wind_ref.inputs_id),
         ("mask_policy", "nan+valid_mask_in_landscape"),
-        ("region", _stable_json(getattr(atlas, "region", None))),
+        ("area", _stable_json(getattr(atlas, "area", None))),
         ("chunk_policy", _stable_json(unifier.chunk_policy)),
         ("incremental_add", "landscape_add_v1"),
         (f"layer:{variable_name}:source_id", source_ctx["source_id"]),

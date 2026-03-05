@@ -96,8 +96,8 @@ After materialization, CLEO uses:
 
 - `<workdir>/wind.zarr`
 - `<workdir>/landscape.zarr`
-- `<workdir>/regions/<region_id>/wind.zarr` (after region selection/materialization)
-- `<workdir>/regions/<region_id>/landscape.zarr`
+- `<workdir>/areas/<area_id>/wind.zarr` (after area selection/materialization)
+- `<workdir>/areas/<area_id>/landscape.zarr`
 - `<workdir>/results/<run_id>/<metric_name>.zarr` (after `persist`)
 - `<workdir>/resources/*.yml`
 - `<workdir>/data/raw/<ISO3>/*.tif`
@@ -122,7 +122,7 @@ Atlas(
     chunk_policy: dict[str, int] | None = None,
     compute_backend: str = "serial",
     compute_workers: int | None = None,
-    region: str | None = None,
+    area: str | None = None,
     results_root: Path | None = None,
     fingerprint_method: str = "path_mtime_size",
 )
@@ -135,30 +135,31 @@ Atlas(
 - `compute_backend`: eager-materialization backend (`"serial"|"threads"|"processes"|"distributed"`).
 - `compute_workers`: optional worker cap for local backends (`threads`/`processes`).
   Must be `None` or `1` for `serial`; must be `None` for `distributed`.
-- `region`: optional initial region selection (applied on `build()`).
+- `area`: optional initial area selection (applied on `build()`).
 - `results_root`: optional custom results directory.
 - `fingerprint_method`: internal fingerprinting policy used by unification internals.
 
 ### Lifecycle and Selection
 
 - `atlas.build()`
-  - Ensures base stores and, when a region is selected, region stores.
+  - Ensures base stores and, when an area is selected, area stores.
   - If required GWA wind rasters are missing under
     `<workdir>/data/raw/<ISO3>/`, attempts automatic download of the required
     GWA layers/heights before failing.
-  - If region-aware paths require NUTS boundaries and no local NUTS shapefile
+  - If area-aware paths require NUTS boundaries and no local NUTS shapefile
     exists under `<workdir>/data/nuts/`, attempts automatic NUTS
     download/extract before failing.
 - `atlas.build_canonical()`
   - Ensures base stores only (`wind.zarr`, `landscape.zarr`).
-- `atlas.select(region=..., region_level=None, inplace=False)`
-  - `region`: region name or `None` to clear selection.
-  - `region_level`: optional NUTS level disambiguation (`1|2|3`).
+- `atlas.select(area=..., nuts_level=None, inplace=False)`
+  - `area`: area name or `None` to clear selection.
+  - `nuts_level`: optional NUTS level disambiguation (`0|1|2|3`).
+    - `0` selects the country-border area (NUTS level 0).
   - `inplace=False` returns a selected clone; `inplace=True` mutates current atlas.
-- `atlas.region`
-  - current selected region name, or `None`.
-- `atlas.nuts_regions`, `atlas.nuts_regions_level(level)`
-  - discover available region names.
+- `atlas.area`
+  - current selected area name, or `None`.
+- `atlas.nuts_areas`, `atlas.nuts_areas_level(level)`
+  - discover available area names.
 
 ### Domains and Data Access
 
@@ -385,7 +386,7 @@ ds_mat = run.materialize()
 Notes:
 - Distance outputs are in meters (`units="m"`), based on projected metric CRS and exact atlas grid spacing.
 - `if_exists="noop"` skips existing distance variables only when their stored distance spec matches the requested source/algorithm; otherwise it raises and requires `if_exists="replace"`.
-- Distance variables materialized in region stores are region-local artifacts and may disappear when region stores are rebuilt from base stores.
+- Distance variables materialized in area stores are area-local artifacts and may disappear when area stores are rebuilt from base stores.
 
 Vector rasterization example:
 
@@ -435,8 +436,8 @@ For LCOE unit changes, export and post-process manually.
   - export persisted result store to `.nc`.
 - `atlas.clean_results(run_id=None, older_than=None, metric_name=None)`
   - cleanup persisted result stores.
-- `atlas.clean_regions(region=None, older_than=None, include_incomplete=True)`
-  - cleanup region materialization stores.
+- `atlas.clean_areas(area=None, older_than=None, include_incomplete=True)`
+  - cleanup area materialization stores.
 
 Example:
 

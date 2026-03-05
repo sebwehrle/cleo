@@ -339,8 +339,9 @@ def load_weibull_parameters(self, height):
         a = reproject_raster_if_needed(a, self.parent.crs, nodata=np.nan)
         k = reproject_raster_if_needed(k, self.parent.crs, nodata=np.nan)
 
-        if self.parent.region is not None:
-            clip_shape = self.parent.get_nuts_region(self.parent.region)
+        if self.parent.area is not None:
+            area_id = getattr(self.parent, "_area_id", self.parent.area)
+            clip_shape = self.parent.get_nuts_area(area_id)
             clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
             a = a.rio.clip(clip_shape.geometry)
             k = k.rio.clip(clip_shape.geometry)
@@ -387,8 +388,9 @@ def load_air_density(self, height):
         # Reproject to Atlas CRS if needed
         rho = reproject_raster_if_needed(rho, self.parent.crs, nodata=np.nan)
 
-        if self.parent.region is not None:
-            clip_shape = self.parent.get_nuts_region(self.parent.region)
+        if self.parent.area is not None:
+            area_id = getattr(self.parent, "_area_id", self.parent.area)
+            clip_shape = self.parent.get_nuts_area(area_id)
             clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
             rho = rho.rio.clip(clip_shape.geometry)
 
@@ -455,7 +457,7 @@ def load_gwa(self):
     logger.info(f"Global Wind Atlas data for {c} initialized.")
 
 
-def load_nuts(self, resolution="03M", year=2021, crs=4326):
+def load_nuts(self, resolution="01M", year=2024, crs=4326):
     """Download and extract NUTS boundary data for configured atlas country.
 
     Downloads the GISCO collection ZIP when needed, extracts the requested
@@ -476,7 +478,7 @@ def load_nuts(self, resolution="03M", year=2021, crs=4326):
         in the downloaded collection.
     """
     RESOLUTION = ["01M", "03M", "10M", "20M", "60M"]
-    YEAR = [2021, 2016, 2013, 2010, 2006, 2003]
+    YEAR = [2024, 2021, 2016, 2013, 2010, 2006, 2003]
     CRS = [3035, 4326, 3857]
 
     if resolution not in RESOLUTION:

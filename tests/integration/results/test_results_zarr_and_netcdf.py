@@ -51,7 +51,7 @@ class MockAtlas:
         self.path = path
         self.country = country
         self.crs = crs
-        self.region = None
+        self.area = None
         self.turbines_configured = None
         self.chunk_policy = {"y": 1024, "x": 1024}
         self.fingerprint_method = "path_mtime_size"
@@ -89,7 +89,7 @@ class MockAtlas:
             raise RuntimeError("Canonical stores not ready")
         return xr.open_zarr(self.landscape_store_path, consolidated=False)
 
-    def get_nuts_region(self, region: str):
+    def get_nuts_area(self, area: str):
         return None
 
     def build_canonical(self) -> None:

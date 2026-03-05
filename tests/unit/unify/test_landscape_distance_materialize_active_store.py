@@ -14,13 +14,13 @@ class _AtlasStub:
     def __init__(self, root: Path) -> None:
         self.path = root
         self.landscape_store_path = root / "landscape.zarr"
-        self._region_name = "R1"
-        self._region_id = "R1"
+        self._area_name = "R1"
+        self._area_id = "R1"
         self.chunk_policy = {"y": 32, "x": 32}
         self.fingerprint_method = "path_mtime_size"
 
     def _active_landscape_store_path(self) -> Path:
-        return self.path / "regions" / self._region_id / "landscape.zarr"
+        return self.path / "areas" / self._area_id / "landscape.zarr"
 
 
 def _make_landscape_store(path: Path) -> None:

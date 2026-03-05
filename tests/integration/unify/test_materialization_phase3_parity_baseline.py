@@ -26,7 +26,7 @@ _FIXED_MTIME_NS = 1704067200000000000  # 2024-01-01T00:00:00Z
 _GWA_HEIGHTS = [10, 50, 100, 150, 200]
 _GOLDEN = {
     "wind_grid_id": "e3c31174a7256f36",
-    "wind_inputs_id": "df4ff6164b7360b4",
+    "wind_inputs_id": "d51a1966f9bebfd2",
     "wind_subset_checksum": "d83475c443ac887100a9f7164978dabc06d0666c9093cf541d53f6388c185da0",
     "wind_template_checksum": "d83475c443ac887100a9f7164978dabc06d0666c9093cf541d53f6388c185da0",
     "land_valid_mask_checksum": "834a709ba2534ebe3ee1397fd4f7bd288b2acc1d20a08d6c862dcd99b6f04400",
@@ -230,10 +230,10 @@ class TestPhase3MaterializationBaseline:
         atlas = phase3_baseline_atlas
         atlas.build()
 
-        atlas.select(region="Niederösterreich", inplace=True)
+        atlas.select(area="Niederösterreich", inplace=True)
         atlas.build()
 
-        region_root = Path(atlas.path) / "regions" / atlas._region_id
+        region_root = Path(atlas.path) / "areas" / atlas._area_id
         wind = xr.open_zarr(region_root / "wind.zarr", consolidated=False)
         land = xr.open_zarr(region_root / "landscape.zarr", consolidated=False)
 

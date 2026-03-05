@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class RegionMeta:
-    """Region-store metadata used by cleanup policy."""
+class AreaMeta:
+    """Area-store metadata used by cleanup policy."""
 
     created_at: datetime.datetime
     is_complete: bool
@@ -38,7 +38,7 @@ def open_zarr_dataset(
 
 
 def resolve_active_landscape_store_path(atlas) -> Path:
-    """Resolve active landscape store path (base or region) for an atlas-like object."""
+    """Resolve active landscape store path (base or area) for an atlas-like object."""
     active_store_path = getattr(atlas, "_active_landscape_store_path", None)
     if callable(active_store_path):
         return Path(active_store_path())
@@ -48,7 +48,7 @@ def resolve_active_landscape_store_path(atlas) -> Path:
 
 
 def resolve_active_wind_store_path(atlas) -> Path:
-    """Resolve active wind store path (base or region) for an atlas-like object.
+    """Resolve active wind store path (base or area) for an atlas-like object.
 
     :param atlas: Atlas-like object exposing active or base wind store accessors.
     :returns: Resolved active wind store path.
@@ -99,18 +99,18 @@ def read_zarr_group_attrs(store_path: str | Path) -> dict[str, object]:
     return dict(g.attrs)
 
 
-def list_region_dirs(root: Path) -> list[Path]:
-    """List candidate region directories under ``root``."""
+def list_area_dirs(root: Path) -> list[Path]:
+    """List candidate area directories under ``root``."""
     base = Path(root)
     if not base.exists():
         return []
     return sorted([p for p in base.iterdir() if p.is_dir()])
 
 
-def read_region_store_meta(region_dir: Path) -> RegionMeta:
-    """Read completeness and timestamp metadata for a region directory."""
-    wind_store = region_dir / "wind.zarr"
-    land_store = region_dir / "landscape.zarr"
+def read_area_store_meta(area_dir: Path) -> AreaMeta:
+    """Read completeness and timestamp metadata for an area directory."""
+    wind_store = area_dir / "wind.zarr"
+    land_store = area_dir / "landscape.zarr"
 
     wind_exists = wind_store.exists() and wind_store.is_dir()
     land_exists = land_store.exists() and land_store.is_dir()
@@ -124,7 +124,7 @@ def read_region_store_meta(region_dir: Path) -> RegionMeta:
             wind_complete = g_wind.attrs.get("store_state") == "complete"
         except (OSError, ValueError, TypeError, KeyError):
             logger.debug(
-                "Failed to read wind region store_state; treating as incomplete.",
+                "Failed to read wind area store_state; treating as incomplete.",
                 extra={"wind_store": str(wind_store)},
                 exc_info=True,
             )
@@ -135,7 +135,7 @@ def read_region_store_meta(region_dir: Path) -> RegionMeta:
             land_complete = g_land.attrs.get("store_state") == "complete"
         except (OSError, ValueError, TypeError, KeyError):
             logger.debug(
-                "Failed to read landscape region store_state; treating as incomplete.",
+                "Failed to read landscape area store_state; treating as incomplete.",
                 extra={"land_store": str(land_store)},
                 exc_info=True,
             )
@@ -150,16 +150,16 @@ def read_region_store_meta(region_dir: Path) -> RegionMeta:
                 break
         except (OSError, ValueError, TypeError, KeyError):
             logger.debug(
-                "Failed to read region store created_at; trying next fallback.",
+                "Failed to read area store created_at; trying next fallback.",
                 extra={"store_path": str(store_path)},
                 exc_info=True,
             )
 
     if created_at is None:
-        created_at = datetime.datetime.fromtimestamp(region_dir.stat().st_mtime)
+        created_at = datetime.datetime.fromtimestamp(area_dir.stat().st_mtime)
 
     is_complete = wind_exists and land_exists and wind_complete and land_complete
-    return RegionMeta(
+    return AreaMeta(
         created_at=created_at,
         is_complete=is_complete,
         wind_exists=wind_exists,
@@ -167,6 +167,6 @@ def read_region_store_meta(region_dir: Path) -> RegionMeta:
     )
 
 
-def delete_region_dir(region_dir: Path) -> None:
-    """Delete a region directory recursively."""
-    shutil.rmtree(region_dir)
+def delete_area_dir(area_dir: Path) -> None:
+    """Delete an area directory recursively."""
+    shutil.rmtree(area_dir)

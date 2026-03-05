@@ -5,7 +5,7 @@ CLEO is an Atlas-first analysis package. The intended usage is one working `Atla
 ## Read This In Order
 
 1. `Start Here` for the 10-minute, end-to-end canonical flow.
-2. `Canonical Workflow` for region routing, materialization, and cleanup behavior.
+2. `Canonical Workflow` for area routing, materialization, and cleanup behavior.
 3. Domain guide for the task at hand (`Wind` or `Landscape`).
 4. `Reference -> Knobs and Methods` when selecting parameters and algorithm variants.
 5. API reference pages for exact signatures and docstring-level details.

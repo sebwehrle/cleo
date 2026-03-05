@@ -9,7 +9,7 @@ from cleo.unification.materializers.shared import (
     ensure_store_skeleton as ensure_store_skeleton_shared,
 )
 from cleo.unification.materializers import landscape as landscape_materializer
-from cleo.unification.materializers import region as region_materializer
+from cleo.unification.materializers import region as area_materializer
 from cleo.unification.materializers import wind as wind_materializer
 
 # =============================================================================
@@ -68,7 +68,7 @@ class Unifier:
         and cost assumptions. The store is marked as store_state="complete"
         only after successful atomic write.
 
-        :param atlas: Atlas instance with path, country, CRS, and region attributes.
+        :param atlas: Atlas instance with path, country, CRS, and area attributes.
         :returns: ``None``
         :raises FileNotFoundError: If required GWA files are missing.
         :raises RuntimeError: If CRS fetch/assignment fails.
@@ -178,26 +178,26 @@ class Unifier:
             force=force,
         )
 
-    def materialize_region(self, atlas, region_id: str) -> None:
-        """Materialize region stores by subsetting from country stores."""
-        return region_materializer.materialize_region(self, atlas, region_id)
+    def materialize_area(self, atlas, area_id: str) -> None:
+        """Materialize area stores by subsetting from country stores."""
+        return area_materializer.materialize_area(self, atlas, area_id)
 
-    def ensure_region_stores(self, atlas, region_id: str, *, logger) -> None:
-        """Ensure region stores exist for a given region selection.
+    def ensure_area_stores(self, atlas, area_id: str, *, logger) -> None:
+        """Ensure area stores exist for a given area selection.
 
-        This method handles region store lifecycle including:
-        - Removing stale/partial region directories
-        - Delegating to materialize_region for freshness/completeness checks
-        - Verifying region stores exist after materialization
+        This method handles area store lifecycle including:
+        - Removing stale/partial area directories
+        - Delegating to ``materialize_area`` for freshness/completeness checks
+        - Verifying area stores exist after materialization
 
-        :param atlas: Atlas instance with path and region attributes.
-        :param region_id: The region identifier.
+        :param atlas: Atlas instance with path and area attributes.
+        :param area_id: The area identifier.
         :param logger: Logger instance for diagnostics.
-        :raises RuntimeError: If region stores are missing after materialization.
+        :raises RuntimeError: If area stores are missing after materialization.
         """
-        return region_materializer._ensure_region_stores_ready(
+        return area_materializer._ensure_area_stores_ready(
             atlas=atlas,
             unifier=self,
-            region_id=region_id,
+            area_id=area_id,
             logger=logger,
         )

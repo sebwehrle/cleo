@@ -112,14 +112,14 @@ class TestTimebaseClonePreservation:
     def test_select_inplace_false_preserves_timebase(self, tmp_path: Path) -> None:
         atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
         atlas.configure_timebase(hours_per_year=8760.0)
-        clone = atlas.select(region=None, inplace=False)
+        clone = atlas.select(area=None, inplace=False)
         assert clone is not None
         assert clone.timebase_configured == {"hours_per_year": 8760.0}
         assert clone._effective_hours_per_year() == 8760.0
 
     def test_select_inplace_false_preserves_timebase_none(self, tmp_path: Path) -> None:
         atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
-        clone = atlas.select(region=None, inplace=False)
+        clone = atlas.select(area=None, inplace=False)
         assert clone is not None
         assert clone.timebase_configured is None
 

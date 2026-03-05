@@ -254,7 +254,7 @@ def _compute_wind_inputs_id(
         {
             "country": atlas.country,
             "target_crs": str(atlas.crs),
-            "region": atlas.region,
+            "area": atlas.area,
             "chunk_policy": chunk_policy,
             "mask_policy": mask_policy,
             "fingerprint_method": unifier.fingerprint_method,

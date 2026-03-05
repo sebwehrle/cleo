@@ -28,7 +28,7 @@ class MockAtlas:
         self.path = path
         self.country = country
         self.crs = "epsg:3035"
-        self.region = None
+        self.area = None
 
 
 class TestCrsCachePath:

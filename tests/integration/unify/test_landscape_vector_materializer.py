@@ -49,7 +49,7 @@ class MockAtlas:
         self.path = path
         self.country = country
         self.crs = crs
-        self.region = None
+        self.area = None
         self.turbines_configured = None
         self.chunk_policy = {"y": 1024, "x": 1024}
         self.fingerprint_method = "path_mtime_size"
@@ -60,8 +60,8 @@ class MockAtlas:
         (path / "intermediates" / "crs_cache").mkdir(parents=True, exist_ok=True)
         _copy_default_turbine(path)
 
-    def get_nuts_region(self, region: str):  # noqa: ANN001
-        del region
+    def get_nuts_area(self, area: str):  # noqa: ANN001
+        del area
         return None
 
     def build_canonical(self) -> None:

@@ -45,10 +45,16 @@ def ensure_store_skeleton(
 
 
 def _get_clip_geometry(atlas):
-    """Get clipping geometry from NUTS region if specified."""
-    if atlas.region is None:
+    """Get clipping geometry from NUTS area if specified."""
+    area_name = getattr(atlas, "area", None)
+    if area_name is None:
         return None
-    return atlas.get_nuts_region(atlas.region)
+    area_id = getattr(atlas, "_area_id", area_name)
+    if area_id == "__all__":
+        return None
+    if not hasattr(atlas, "get_nuts_area"):
+        return None
+    return atlas.get_nuts_area(area_id)
 
 
 def _stable_json(obj: Any) -> str:
@@ -61,13 +67,19 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-def _nuts_region_geom(atlas):
-    """Get NUTS region geometry if atlas.region is set."""
-    if atlas.region is None:
+def _nuts_area_geom(atlas):
+    """Get NUTS area geometry if atlas.area is set."""
+    area_name = getattr(atlas, "area", None)
+    if area_name is None:
         return None
-    return atlas.get_nuts_region(atlas.region)
+    area_id = getattr(atlas, "_area_id", area_name)
+    if area_id == "__all__":
+        return None
+    if not hasattr(atlas, "get_nuts_area"):
+        return None
+    return atlas.get_nuts_area(area_id)
 
 
 def _aoi_geom_or_none(atlas):
-    """Get AOI geometry from NUTS region if specified."""
-    return _nuts_region_geom(atlas)
+    """Get AOI geometry from NUTS area if specified."""
+    return _nuts_area_geom(atlas)

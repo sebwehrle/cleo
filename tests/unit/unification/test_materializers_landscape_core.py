@@ -13,7 +13,7 @@ import zarr
 from cleo.unification.materializers._landscape_core import (
     _build_landscape_dataset,
     _ElevationResult,
-    _write_region_catalog_attr,
+    _write_area_catalog_attr,
     _write_wind_propagated_attrs,
 )
 
@@ -191,10 +191,10 @@ class TestWriteWindPropagatedAttrs:
 
 
 class TestWriteRegionCatalogAttr:
-    """Tests for _write_region_catalog_attr function."""
+    """Tests for _write_area_catalog_attr function."""
 
     def test_writes_region_catalog(self, tmp_path: Path) -> None:
-        """Writes region catalog to attrs when available."""
+        """Writes area catalog to attrs when available."""
         store_path = tmp_path / "test.zarr"
         store_path.mkdir()
         g = zarr.open_group(store_path, mode="w")
@@ -203,13 +203,13 @@ class TestWriteRegionCatalogAttr:
         catalog = [{"nuts_id": "AT", "name": "Austria"}]
 
         with patch(
-            "cleo.unification.materializers._landscape_core._read_nuts_region_catalog",
+            "cleo.unification.materializers._landscape_core._read_nuts_area_catalog",
             return_value=catalog,
         ):
-            _write_region_catalog_attr(g, mock_atlas)
+            _write_area_catalog_attr(g, mock_atlas)
 
-        assert "cleo_region_catalog_json" in g.attrs
-        assert "AT" in g.attrs["cleo_region_catalog_json"]
+        assert "cleo_area_catalog_json" in g.attrs
+        assert "AT" in g.attrs["cleo_area_catalog_json"]
 
     def test_handles_missing_catalog(self, tmp_path: Path) -> None:
         """Handles FileNotFoundError gracefully."""
@@ -220,12 +220,12 @@ class TestWriteRegionCatalogAttr:
         mock_atlas = MagicMock()
 
         with patch(
-            "cleo.unification.materializers._landscape_core._read_nuts_region_catalog",
+            "cleo.unification.materializers._landscape_core._read_nuts_area_catalog",
             side_effect=FileNotFoundError("catalog not found"),
         ):
-            _write_region_catalog_attr(g, mock_atlas)
+            _write_area_catalog_attr(g, mock_atlas)
 
-        assert "cleo_region_catalog_json" not in g.attrs
+        assert "cleo_area_catalog_json" not in g.attrs
 
     def test_handles_value_error(self, tmp_path: Path) -> None:
         """Handles ValueError from catalog reading."""
@@ -236,12 +236,12 @@ class TestWriteRegionCatalogAttr:
         mock_atlas = MagicMock()
 
         with patch(
-            "cleo.unification.materializers._landscape_core._read_nuts_region_catalog",
+            "cleo.unification.materializers._landscape_core._read_nuts_area_catalog",
             side_effect=ValueError("invalid catalog"),
         ):
-            _write_region_catalog_attr(g, mock_atlas)
+            _write_area_catalog_attr(g, mock_atlas)
 
-        assert "cleo_region_catalog_json" not in g.attrs
+        assert "cleo_area_catalog_json" not in g.attrs
 
     def test_skips_empty_catalog(self, tmp_path: Path) -> None:
         """Skips writing when catalog is empty."""
@@ -252,9 +252,9 @@ class TestWriteRegionCatalogAttr:
         mock_atlas = MagicMock()
 
         with patch(
-            "cleo.unification.materializers._landscape_core._read_nuts_region_catalog",
+            "cleo.unification.materializers._landscape_core._read_nuts_area_catalog",
             return_value=[],
         ):
-            _write_region_catalog_attr(g, mock_atlas)
+            _write_area_catalog_attr(g, mock_atlas)
 
-        assert "cleo_region_catalog_json" not in g.attrs
+        assert "cleo_area_catalog_json" not in g.attrs

@@ -20,7 +20,7 @@ def _coerce_catalog_rows(
     *,
     valid_levels: tuple[int, ...],
 ) -> list[CatalogRow]:
-    """Normalize ``cleo_region_catalog_json`` rows to the contract shape."""
+    """Normalize ``cleo_area_catalog_json`` rows to the contract shape."""
     catalog: list[CatalogRow] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -46,7 +46,7 @@ def _coerce_catalog_rows(
     return catalog
 
 
-def load_nuts_region_catalog(
+def load_nuts_area_catalog(
     *,
     cached_rows: tuple[CatalogRow, ...] | None,
     landscape_store_path: Path,
@@ -64,7 +64,7 @@ def load_nuts_region_catalog(
         try:
             attrs = read_store_attrs(landscape_store_path)
 
-            catalog_json = attrs.get("cleo_region_catalog_json")
+            catalog_json = attrs.get("cleo_area_catalog_json")
             if catalog_json:
                 rows = json.loads(catalog_json)
                 if isinstance(rows, list):
@@ -75,14 +75,13 @@ def load_nuts_region_catalog(
 
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             log_debug(
-                "Failed to load NUTS region catalog from landscape store attrs; "
-                "falling back to raw NUTS catalog loading."
+                "Failed to load NUTS area catalog from landscape store attrs; falling back to raw NUTS catalog loading."
             )
 
     catalog = read_raw_catalog()
     if not catalog:
         raise ValueError(
-            "No NUTS regions available for this atlas. Ensure NUTS data is present (e.g. run cleo.loaders.load_nuts)."
+            "No NUTS areas available for this atlas. Ensure NUTS data is present (e.g. run cleo.loaders.load_nuts)."
         )
 
     cache = tuple(dict(row) for row in catalog)

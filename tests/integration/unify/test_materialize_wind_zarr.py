@@ -43,12 +43,12 @@ class MockAtlas:
         path: Path,
         country: str = "AUT",
         crs: str = "epsg:3035",
-        region: str | None = None,
+        area: str | None = None,
     ):
         self.path = path
         self.country = country
         self.crs = crs
-        self.region = region
+        self.area = area
         self.turbines_configured = None
         self.chunk_policy = {"y": 64, "x": 64}
 
@@ -56,7 +56,7 @@ class MockAtlas:
         (path / "resources").mkdir(parents=True, exist_ok=True)
         _copy_default_turbine(path)
 
-    def get_nuts_region(self, region):
+    def get_nuts_area(self, area):
         """Mock - would return GeoDataFrame."""
         return None
 

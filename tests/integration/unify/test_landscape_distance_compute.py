@@ -39,9 +39,9 @@ class MockAtlas:
         self.path = path
         self.country = country
         self.crs = crs
-        self.region = None
-        self._region_name = None
-        self._region_id = "__all__"
+        self.area = None
+        self._area_name = None
+        self._area_id = "__all__"
         self.turbines_configured = None
         self.chunk_policy = {"y": 64, "x": 64}
         self.fingerprint_method = "path_mtime_size"
@@ -55,19 +55,19 @@ class MockAtlas:
         (path / "intermediates" / "crs_cache").mkdir(parents=True, exist_ok=True)
         _copy_default_turbine(path)
 
-    def get_nuts_region(self, region: str):
-        del region
+    def get_nuts_area(self, area: str):
+        del area
         return None
 
     def _active_wind_store_path(self) -> Path:
-        if self._region_name is None:
+        if self._area_name is None:
             return self.wind_store_path
-        return self.path / "regions" / self._region_id / "wind.zarr"
+        return self.path / "areas" / self._area_id / "wind.zarr"
 
     def _active_landscape_store_path(self) -> Path:
-        if self._region_name is None:
+        if self._area_name is None:
             return self.landscape_store_path
-        return self.path / "regions" / self._region_id / "landscape.zarr"
+        return self.path / "areas" / self._area_id / "landscape.zarr"
 
     def build_canonical(self) -> None:
         u = Unifier(
@@ -230,13 +230,13 @@ def test_region_local_distance_not_guaranteed_after_region_store_rebuild(tmp_pat
     atlas.landscape.add("roads_mask", roads_path, params={"categorical": True}).materialize()
 
     region_id = "AT-R1"
-    region_root = tmp_path / "regions" / region_id
+    region_root = tmp_path / "areas" / region_id
     region_root.mkdir(parents=True, exist_ok=True)
     shutil.copytree(tmp_path / "wind.zarr", region_root / "wind.zarr")
     shutil.copytree(tmp_path / "landscape.zarr", region_root / "landscape.zarr")
 
-    atlas._region_name = "Region-1"
-    atlas._region_id = region_id
+    atlas._area_name = "Region-1"
+    atlas._area_id = region_id
     atlas._landscape_domain = None
 
     atlas.landscape.compute("distance", source="roads_mask").materialize()

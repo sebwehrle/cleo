@@ -1,4 +1,4 @@
-"""Regression tests for region materialization with single-cell axes."""
+"""Regression tests for area materialization with single-cell axes."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 import xarray as xr
 from shapely.geometry import box
 
-from cleo.unification.materializers.region import materialize_region
+from cleo.unification.materializers.region import materialize_area
 
 
 class _AtlasStub:
@@ -18,7 +18,7 @@ class _AtlasStub:
         self.path = path
         self._region_gdf = region_gdf
 
-    def get_nuts_region(self, region_id: str) -> gpd.GeoDataFrame:  # noqa: ARG002
+    def get_nuts_area(self, region_id: str) -> gpd.GeoDataFrame:  # noqa: ARG002
         return self._region_gdf
 
 
@@ -32,7 +32,7 @@ def _write_base_stores(root: Path) -> None:
 
     This fixture intentionally writes ``y/x`` chunks of size ``2`` so opening
     with ``chunk_policy={"y": 2, "x": 2}`` does not trigger xarray
-    split-chunk performance warnings during region materializer tests.
+    split-chunk performance warnings during area materializer tests.
 
     :param root: Temporary atlas root directory.
     :type root: pathlib.Path
@@ -99,10 +99,10 @@ def test_region_materialization_handles_single_cell_axes(
     atlas = _AtlasStub(path=tmp_path, region_gdf=region_gdf)
     unifier = _UnifierStub()
 
-    materialize_region(unifier, atlas, "ATX2")
+    materialize_area(unifier, atlas, "ATX2")
 
-    wind_region_path = tmp_path / "regions" / "ATX2" / "wind.zarr"
-    land_region_path = tmp_path / "regions" / "ATX2" / "landscape.zarr"
+    wind_region_path = tmp_path / "areas" / "ATX2" / "wind.zarr"
+    land_region_path = tmp_path / "areas" / "ATX2" / "landscape.zarr"
     wind_region = xr.open_zarr(wind_region_path, consolidated=False)
     land_region = xr.open_zarr(land_region_path, consolidated=False)
 
@@ -111,8 +111,8 @@ def test_region_materialization_handles_single_cell_axes(
         assert (land_region.sizes["y"], land_region.sizes["x"]) == expected_shape
         assert wind_region.attrs["store_state"] == "complete"
         assert land_region.attrs["store_state"] == "complete"
-        assert wind_region.attrs["region_id"] == "ATX2"
-        assert land_region.attrs["region_id"] == "ATX2"
+        assert wind_region.attrs["area_id"] == "ATX2"
+        assert land_region.attrs["area_id"] == "ATX2"
         assert wind_region.attrs["base_wind_inputs_id"] == "wind-inputs-id"
         assert land_region.attrs["base_land_inputs_id"] == "land-inputs-id"
 

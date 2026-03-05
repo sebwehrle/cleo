@@ -21,7 +21,7 @@ CLEO is designed around a single mutable `Atlas` workspace object.
 | `chunk_policy` | `dict[str, int] \| None` | `{"y": 1024, "x": 1024}` | Open/chunk policy for xarray/zarr reads. |
 | `compute_backend` | `"serial"\|"threads"\|"processes"\|"distributed"` | `"serial"` | Backend used when eager compute is needed for I/O. |
 | `compute_workers` | `int \| None` | `None` | Local worker cap (backend-dependent). |
-| `region` | `str \| None` | `None` | Optional initial region selection applied after build. |
+| `area` | `str \| None` | `None` | Optional initial area selection applied after build. |
 | `results_root` | `Path \| None` | `<path>/results` | Persisted run artifact root. |
 | `fingerprint_method` | `str` | `"path_mtime_size"` | Unification fingerprint strategy. |
 
@@ -37,10 +37,10 @@ CLEO is designed around a single mutable `Atlas` workspace object.
 
 | Method | Knobs | Meaning |
 |---|---|---|
-| `select(...)` | `region`, `region_level`, `inplace` | Region routing selection; `inplace=True` is intended atlas-first workflow. |
+| `select(...)` | `area`, `nuts_level`, `inplace` | Area routing selection (`nuts_level=0|1|2|3`); `inplace=True` is intended atlas-first workflow. |
 | `build_clc(...)` | `source`, `url`, `force_download`, `force_prepare` | CLC source preparation and cache behavior. |
 | `clean_results(...)` | `run_id`, `older_than`, `metric_name` | Cleanup filters for persisted result stores. |
-| `clean_regions(...)` | `region`, `older_than`, `include_incomplete` | Cleanup filters for region stores. |
+| `clean_areas(...)` | `area`, `older_than`, `include_incomplete` | Cleanup filters for area stores. |
 
 ## Wind domain knobs
 

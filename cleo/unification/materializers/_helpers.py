@@ -137,7 +137,7 @@ def get_wind_reference(
     preferred_height: int = 100,
 ) -> WindReference:
     """
-    Get wind reference grid for landscape/region alignment.
+    Get wind reference grid for landscape/area alignment.
 
     The caller is responsible for closing the returned dataset when done.
 

@@ -12,8 +12,8 @@ def test_load_weibull_parameters_missing_files_raises(tmp_path):
         path=tmp_path,
         country="AUT",
         crs="EPSG:4326",
-        region=None,
-        get_nuts_region=lambda r: None,
+        area=None,
+        get_nuts_area=lambda r: None,
     )
     self = SimpleNamespace(parent=parent)
 

@@ -1,10 +1,10 @@
-"""Integration tests for region selection and region stores.
+"""Integration tests for area selection and area stores.
 
 Tests verify:
-- atlas.select(region=...) persists region selection
+- atlas.select(area=...) persists area selection
 - Region stores are created with smaller y/x than country stores
-- DomainResult.materialize() writes to region store (not country store)
-- atlas.wind.data surfaces data from region store when region selected
+- DomainResult.materialize() writes to area store (not country store)
+- atlas.wind.data surfaces data from area store when area selected
 
 Offline-only: uses local synthetic fixtures with no network calls.
 """
@@ -29,7 +29,7 @@ GWA_HEIGHTS = [10, 50, 100, 150, 200]
 
 def _create_gwa_raster(
     path: Path,
-    shape: tuple[int, int] = (40, 40),  # Larger for region subsetting
+    shape: tuple[int, int] = (40, 40),  # Larger for area subsetting
     crs_epsg: int = 3035,
     bounds: tuple[float, float, float, float] = (4000000, 2600000, 4200000, 2800000),
     fill_value: float | None = None,
@@ -96,16 +96,16 @@ def _create_nuts_shapefile(
 ) -> None:
     """Create a synthetic NUTS shapefile for testing.
 
-    Creates a small region in the center of the data extent.
-    Must include all columns expected by Atlas.get_nuts_region():
+    Creates a small area in the center of the data extent.
+    Must include all columns expected by Atlas.get_nuts_area():
     - CNTR_CODE: country code (AT)
-    - NAME_LATN: region name in Latin script (used for lookup)
-    - LEVL_CODE: NUTS level (for get_nuts_country)
+    - NAME_LATN: area name in Latin script (used for lookup)
+    - LEVL_CODE: NUTS level (for get_nuts_area_country)
     """
     nuts_dir = atlas_path / "data" / "nuts"
     nuts_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create a smaller region in the center (approximately 1/4 of the extent)
+    # Create a smaller area in the center (approximately 1/4 of the extent)
     center_x = (bounds[0] + bounds[2]) / 2
     center_y = (bounds[1] + bounds[3]) / 2
     width = (bounds[2] - bounds[0]) / 4
@@ -118,7 +118,7 @@ def _create_nuts_shapefile(
         center_y + height,
     )
 
-    # Create additional nested/adjacent regions for level-aware discovery tests.
+    # Create additional nested/adjacent areas for level-aware discovery tests.
     level1_bounds = (
         bounds[0],
         bounds[1],
@@ -147,7 +147,7 @@ def _create_nuts_shapefile(
         bounds[3],
     )
 
-    # Add an additional level-2 region ("Wien") for realistic small-region workflow tests.
+    # Add an additional level-2 area ("Wien") for realistic small-area workflow tests.
     wien_bounds = (
         center_x,
         center_y - height / 2,
@@ -155,8 +155,8 @@ def _create_nuts_shapefile(
         center_y + height / 2,
     )
 
-    # Create GeoDataFrame with test regions
-    # Include all columns expected by Atlas.get_nuts_region()
+    # Create GeoDataFrame with test areas
+    # Include all columns expected by Atlas.get_nuts_area()
     gdf = gpd.GeoDataFrame(
         {
             "NUTS_ID": [
@@ -208,10 +208,10 @@ def _create_nuts_shapefile(
 
 @pytest.fixture
 def region_atlas(tmp_path: Path) -> Atlas:
-    """Create an Atlas with synthetic data for region testing.
+    """Create an Atlas with synthetic data for area testing.
 
-    Creates larger rasters so region subsetting produces meaningful subsets.
-    Calls materialize() to build region name index for select() to work.
+    Creates larger rasters so area subsetting produces meaningful subsets.
+    Calls materialize() to build area name index for select() to work.
     """
     country = "AUT"
     shape = (40, 40)
@@ -224,107 +224,107 @@ def region_atlas(tmp_path: Path) -> Atlas:
     elev_path = tmp_path / "data" / "raw" / country / f"{country}_elevation_w_bathymetry.tif"
     _create_elevation_raster(elev_path, shape=shape, bounds=bounds)
 
-    # Create NUTS shapefile for region lookup
+    # Create NUTS shapefile for area lookup
     _create_nuts_shapefile(tmp_path, country=country, bounds=bounds)
 
-    # Create Atlas (no region selected initially)
+    # Create Atlas (no area selected initially)
     atlas = Atlas(tmp_path, country, "epsg:3035")
 
-    # Materialize to build region name index (required for select() to work)
+    # Materialize to build area name index (required for select() to work)
     atlas.build()
 
     return atlas
 
 
 class TestRegionSelection:
-    """Tests for atlas.select(region=...) API."""
+    """Tests for atlas.select(area=...) API."""
 
     def test_select_region_persists(self, region_atlas: Atlas) -> None:
-        """atlas.select(region=...) persists region selection."""
+        """atlas.select(area=...) persists area selection."""
         atlas = region_atlas
 
-        # Initially no region selected
-        assert atlas.region is None
+        # Initially no area selected
+        assert atlas.area is None
 
-        # Select region
-        atlas.select(region="Niederösterreich", inplace=True)
+        # Select area
+        atlas.select(area="Niederösterreich", inplace=True)
 
         # Region persists
-        assert atlas.region == "Niederösterreich"
+        assert atlas.area == "Niederösterreich"
 
     def test_select_region_can_be_cleared(self, region_atlas: Atlas) -> None:
-        """atlas.select(region=None) clears region selection."""
+        """atlas.select(area=None) clears area selection."""
         atlas = region_atlas
 
-        atlas.select(region="Niederösterreich", inplace=True)
-        assert atlas.region == "Niederösterreich"
+        atlas.select(area="Niederösterreich", inplace=True)
+        assert atlas.area == "Niederösterreich"
 
-        atlas.select(region=None, inplace=True)
-        assert atlas.region is None
+        atlas.select(area=None, inplace=True)
+        assert atlas.area is None
 
     def test_select_region_validates_empty(self, region_atlas: Atlas) -> None:
-        """atlas.select(region='') raises ValueError."""
+        """atlas.select(area='') raises ValueError."""
         atlas = region_atlas
 
         with pytest.raises(ValueError, match="empty"):
-            atlas.select(region="", inplace=True)
+            atlas.select(area="", inplace=True)
 
         with pytest.raises(ValueError, match="empty"):
-            atlas.select(region="   ", inplace=True)
+            atlas.select(area="   ", inplace=True)
 
 
 class TestNutsRegionDiscovery:
-    """Tests for NUTS region discovery and level-aware selection."""
+    """Tests for NUTS area discovery and level-aware selection."""
 
-    def test_nuts_regions_defaults_to_level_2(self, region_atlas: Atlas) -> None:
-        """atlas.nuts_regions returns level-2 names by default."""
+    def test_nuts_areas_defaults_to_level_2(self, region_atlas: Atlas) -> None:
+        """atlas.nuts_areas returns level-2 names by default."""
         atlas = region_atlas
 
-        regions = atlas.nuts_regions
-        assert isinstance(regions, tuple)
-        assert regions, "Expected at least one level-2 region"
-        assert all(getattr(r, "level", None) == 2 for r in regions)
-        assert "Niederösterreich" in [str(r) for r in regions]
-        assert "Sankt Pölten" not in [str(r) for r in regions]
+        areas = atlas.nuts_areas
+        assert isinstance(areas, tuple)
+        assert areas, "Expected at least one level-2 area"
+        assert all(getattr(r, "level", None) == 2 for r in areas)
+        assert "Niederösterreich" in [str(r) for r in areas]
+        assert "Sankt Pölten" not in [str(r) for r in areas]
 
-    def test_nuts_regions_level_returns_tagged_names(self, region_atlas: Atlas) -> None:
-        """atlas.nuts_regions_level(level) returns names tagged with that level."""
+    def test_nuts_areas_level_returns_tagged_names(self, region_atlas: Atlas) -> None:
+        """atlas.nuts_areas_level(level) returns names tagged with that level."""
         atlas = region_atlas
 
-        level3 = atlas.nuts_regions_level(3)
+        level3 = atlas.nuts_areas_level(3)
         assert isinstance(level3, tuple)
-        assert level3, "Expected at least one level-3 region"
+        assert level3, "Expected at least one level-3 area"
         assert all(getattr(r, "level", None) == 3 for r in level3)
         assert "Sankt Pölten" in [str(r) for r in level3]
         assert "Niederösterreich" not in [str(r) for r in level3]
 
-    def test_select_accepts_level_tagged_region_without_region_level(self, region_atlas: Atlas) -> None:
-        """Selecting a region object from nuts_regions_level infers its level."""
+    def test_select_accepts_level_tagged_region_without_nuts_level(self, region_atlas: Atlas) -> None:
+        """Selecting a area object from nuts_areas_level infers its level."""
         atlas = region_atlas
 
-        target = [r for r in atlas.nuts_regions_level(3) if str(r) == "Sankt Pölten"][0]
-        atlas.select(region=target, inplace=True)
+        target = [r for r in atlas.nuts_areas_level(3) if str(r) == "Sankt Pölten"][0]
+        atlas.select(area=target, inplace=True)
 
-        assert atlas.region == "Sankt Pölten"
-        assert atlas._region_id == "AT123"
+        assert atlas.area == "Sankt Pölten"
+        assert atlas._area_id == "AT123"
 
     def test_select_ambiguous_plain_name_requires_level(self, region_atlas: Atlas) -> None:
-        """Ambiguous plain names across levels raise unless region_level is provided."""
+        """Ambiguous plain names across levels raise unless nuts_level is provided."""
         atlas = region_atlas
 
         with pytest.raises(ValueError, match="ambiguous"):
-            atlas.select(region="SharedName", inplace=True)
+            atlas.select(area="SharedName", inplace=True)
 
-        atlas.select(region="SharedName", region_level=1, inplace=True)
-        assert atlas.region == "SharedName"
-        assert atlas._region_id == "ATX1"
+        atlas.select(area="SharedName", nuts_level=1, inplace=True)
+        assert atlas.area == "SharedName"
+        assert atlas._area_id == "ATX1"
 
 
 class TestRegionStores:
-    """Tests for region store creation and structure."""
+    """Tests for area store creation and structure."""
 
     def test_region_stores_created_on_materialize(self, region_atlas: Atlas) -> None:
-        """Selecting region then materializing creates region stores."""
+        """Selecting area then materializing creates area stores."""
         atlas = region_atlas
 
         # First materialize base stores
@@ -336,12 +336,12 @@ class TestRegionStores:
         base_x_size = base_wind.sizes["x"]
         base_wind.close()
 
-        # Select region and materialize again
-        atlas.select(region="Niederösterreich", inplace=True)
+        # Select area and materialize again
+        atlas.select(area="Niederösterreich", inplace=True)
         atlas.build()
 
         # Region stores should exist
-        region_root = atlas.path / "regions" / atlas._region_id
+        region_root = atlas.path / "areas" / atlas._area_id
         region_wind_path = region_root / "wind.zarr"
         region_land_path = region_root / "landscape.zarr"
 
@@ -358,7 +358,7 @@ class TestRegionStores:
         assert region_x_size < base_x_size, f"Region x ({region_x_size}) should be smaller than base ({base_x_size})"
 
     def test_region_data_routes_to_region_store(self, region_atlas: Atlas) -> None:
-        """atlas.wind.data routes to region store when region selected."""
+        """atlas.wind.data routes to area store when area selected."""
         atlas = region_atlas
 
         # Materialize base stores
@@ -371,11 +371,11 @@ class TestRegionStores:
         # Clear cached data
         atlas._wind_domain._data = None
 
-        # Select region and materialize
-        atlas.select(region="Niederösterreich", inplace=True)
+        # Select area and materialize
+        atlas.select(area="Niederösterreich", inplace=True)
         atlas.build()
 
-        # Data should now come from region store (smaller dims)
+        # Data should now come from area store (smaller dims)
         region_data = atlas.wind.data
         region_y_size = region_data.sizes["y"]
 
@@ -384,14 +384,14 @@ class TestRegionStores:
         ), f"Region data y ({region_y_size}) should be smaller than base ({base_y_size})"
 
     def test_region_stores_rebuild_when_base_inputs_id_changes(self, region_atlas: Atlas) -> None:
-        """Region store freshness tracks base inputs; stale region stores must rebuild."""
+        """Region store freshness tracks base inputs; stale area stores must rebuild."""
         atlas = region_atlas
 
-        # Build initial region stores from default base turbine set.
-        atlas.select(region="Niederösterreich", inplace=True)
+        # Build initial area stores from default base turbine set.
+        atlas.select(area="Niederösterreich", inplace=True)
         atlas.build()
-        region_id = atlas._region_id
-        region_wind_path = atlas.path / "regions" / region_id / "wind.zarr"
+        region_id = atlas._area_id
+        region_wind_path = atlas.path / "areas" / region_id / "wind.zarr"
 
         region_before = xr.open_zarr(region_wind_path, consolidated=False)
         n_before = int(region_before.sizes["turbine"])
@@ -399,7 +399,7 @@ class TestRegionStores:
         region_before.close()
 
         # Rebuild base with a smaller configured turbine set.
-        atlas.select(region=None, inplace=True)
+        atlas.select(area=None, inplace=True)
         subset = list(atlas.wind.turbines[:2])
         assert len(subset) == 2
         atlas.configure_turbines(subset)
@@ -410,8 +410,8 @@ class TestRegionStores:
         assert int(base_after.sizes["turbine"]) == len(subset)
         base_after.close()
 
-        # Re-materialize region. Region store must rebuild to track new base inputs.
-        atlas.select(region="Niederösterreich", inplace=True)
+        # Re-materialize area. Region store must rebuild to track new base inputs.
+        atlas.select(area="Niederösterreich", inplace=True)
         atlas.build()
 
         region_after = xr.open_zarr(region_wind_path, consolidated=False)
@@ -424,17 +424,17 @@ class TestRegionStores:
 
 
 class TestRegionMaterialization:
-    """Tests for DomainResult.materialize() with region selection."""
+    """Tests for DomainResult.materialize() with area selection."""
 
     def test_materialize_writes_to_region_store(self, region_atlas: Atlas) -> None:
-        """DomainResult.materialize() writes to region store, not base store."""
+        """DomainResult.materialize() writes to area store, not base store."""
         atlas = region_atlas
 
         # Materialize base stores first
         atlas.build()
 
-        # Select region and materialize region stores
-        atlas.select(region="Niederösterreich", inplace=True)
+        # Select area and materialize area stores
+        atlas.select(area="Niederösterreich", inplace=True)
         atlas.build()
 
         # Select turbine and compute
@@ -448,15 +448,15 @@ class TestRegionMaterialization:
             loss_factor=1.0,
         ).materialize()
 
-        # Verify metric appears in atlas.wind.data (region store)
+        # Verify metric appears in atlas.wind.data (area store)
         assert (
             "capacity_factors" in atlas.wind.data
         ), "capacity_factors should appear in atlas.wind.data after materialize()"
 
-        # Verify it was written to region store, NOT base store
-        region_wind_path = atlas.path / "regions" / atlas._region_id / "wind.zarr"
+        # Verify it was written to area store, NOT base store
+        region_wind_path = atlas.path / "areas" / atlas._area_id / "wind.zarr"
         region_wind = xr.open_zarr(region_wind_path, consolidated=False)
-        assert "capacity_factors" in region_wind, "capacity_factors should be in region wind store"
+        assert "capacity_factors" in region_wind, "capacity_factors should be in area wind store"
         region_wind.close()
 
         # Base store should NOT have capacity_factors
@@ -470,7 +470,7 @@ class TestRegionMaterialization:
 
         # Materialize
         atlas.build()
-        atlas.select(region="Niederösterreich", inplace=True)
+        atlas.select(area="Niederösterreich", inplace=True)
         atlas.build()
 
         # Select turbine
@@ -484,16 +484,16 @@ class TestRegionMaterialization:
         ).materialize()
 
         # Selections should persist
-        assert atlas.region == "Niederösterreich"
+        assert atlas.area == "Niederösterreich"
         assert atlas.wind.selected_turbines == (tid,)
 
     def test_wien_capacity_factors_exist_and_not_all_nan(self, region_atlas: Atlas) -> None:
-        """Small-region workflow: Wien + limited turbines yields non-empty, non-all-NaN CF."""
+        """Small-area workflow: Wien + limited turbines yields non-empty, non-all-NaN CF."""
         atlas = region_atlas
 
-        # Build base, select small region, and build region stores.
+        # Build base, select small area, and build area stores.
         atlas.build()
-        atlas.select(region="Wien", inplace=True)
+        atlas.select(area="Wien", inplace=True)
         atlas.build()
 
         # Limit turbine set for compute workload.

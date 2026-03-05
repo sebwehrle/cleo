@@ -62,6 +62,6 @@ python -m mkdocs build --strict
 
 ## Next pages
 
-- `Canonical Workflow` for region selection/materialization semantics.
+- `Canonical Workflow` for area selection/materialization semantics.
 - `Domain Guides` for wind/landscape-specific knobs.
 - `Reference -> Knobs and Methods` for complete parameter and method tables.

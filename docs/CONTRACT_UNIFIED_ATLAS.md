@@ -10,8 +10,8 @@ Scope: This document defines **both** (A) the stable *user-facing API* and (B) t
 ## 0. Core concepts (terminology)
 
 - **Base stores**: country-wide canonical data, written by `Atlas.build()`.
-- **Region selection**: an optional NUTS region identifier (e.g. `"AT13"`) that defines a *subsetting mask*.
-- **Derived region stores**: region-scoped data products (metrics and user-added rasters) written on demand, keyed by the current region selection.
+- **Area selection**: an optional NUTS area identifier (e.g. `"AT13"`) that defines a *subsetting mask*.
+- **Derived area stores**: area-scoped data products (metrics and user-added rasters) written on demand, keyed by the current area selection.
 - **`atlas.<domain>.data` is the primary interface**: computed or loaded data must surface there as an `xarray.Dataset`.
 
 ---
@@ -40,14 +40,14 @@ atlas = Atlas(
     chunk_policy={"y": 1024, "x": 1024},  # optional
     compute_backend="serial",             # optional: serial|threads|processes|distributed
     compute_workers=None,                 # optional local worker cap
-    region=None,            # optional initial region selection (see A4)
+    area=None,            # optional initial area selection (see A4)
     results_root=None,      # optional custom results directory
     fingerprint_method="path_mtime_size", # optional unification fingerprint policy
 )
 ```
 
 Normative:
-- `region` is optional at construction time; it must also be settable later (A4).
+- `area` is optional at construction time; it must also be settable later (A4).
 - Construction performs **no heavy I/O**.
 
 ---
@@ -106,23 +106,23 @@ Normative:
 
 ---
 
-### A4. Region selection (optional, may change over time)
+### A4. Area selection (optional, may change over time)
 
 Typical usage:
 
 ```python
-atlas.select(region="Niederösterreich", inplace=True)   # sets active region selection (persistent)
-atlas.select(region=None, inplace=True)       # clears region selection (full-country view)
+atlas.select(area="Niederösterreich", inplace=True)   # sets active area selection (persistent)
+atlas.select(area=None, inplace=True)       # clears area selection (full-country view)
 ```
 
 Normative:
-- Region selection must be changeable **at any time** after construction.
+- Area selection must be changeable **at any time** after construction.
 - Selection API supports optional disambiguation and copy-vs-inplace semantics:
-  - `select(region=..., region_level=1|2|3|None, inplace=False|True)`
-- Region selection affects:
+  - `select(area=..., nuts_level=0|1|2|3|None, inplace=False|True)`
+- Area selection affects:
   - *what computations operate on* (they apply a mask/subset), and
-  - *where derived outputs are written on disk* (region-scoped stores).
-- Region selection **must not rewrite** the base stores.
+  - *where derived outputs are written on disk* (area-scoped stores).
+- Area selection **must not rewrite** the base stores.
 
 ---
 
@@ -139,7 +139,7 @@ Normative:
 - Must be **idempotent**.
 - When required GWA wind rasters are missing, build must attempt deterministic
   download of the required file set for the configured country before failing.
-- When region-aware build paths require NUTS boundaries and local NUTS files
+- When area-aware build paths require NUTS boundaries and local NUTS files
   are missing, build must attempt deterministic NUTS download/extract before
   failing.
 - Must be offline-safe if local raw inputs are present (and may use CopDEM tile download if configured/required by contract B).
@@ -247,7 +247,7 @@ Normative:
     - `economics={...}` for economic assumptions.
   - For composed metrics, top-level flat dependency knobs are not part of the public contract.
 - `.materialize()` must:
-  1) write the result into the active wind store (region store when a region is selected, base store otherwise), and
+  1) write the result into the active wind store (area store when a area is selected, base store otherwise), and
   2) surface it immediately as `atlas.wind.data[metric_name]`, and
   3) return the materialized `xr.DataArray`.
 - When replacing materialized `capacity_factors`, a mode change requires `allow_mode_change=True`.
@@ -283,7 +283,7 @@ Parameters:
 
 Normative:
 - Must not require turbine selection.
-- Must operate on the current region selection if set (A4).
+- Must operate on the current area selection if set (A4).
 - Output must carry an explicit ``height`` dimension with dims
   ``("height", "y", "x")``.
 - `compute(..., height=<h>)` returns a singleton height slice (`height=[h]`).
@@ -317,7 +317,7 @@ Primary interface:
 atlas.landscape.data["valid_mask"]
 ```
 
-Adding rasters (region-scoped derived data):
+Adding rasters (area-scoped derived data):
 
 ```python
 op = atlas.landscape.add(name="my_raster", source_path="/path/to/raster.tif")
@@ -326,7 +326,7 @@ da_mat = op.materialize()
 atlas.landscape.clear_staged()
 ```
 
-Rasterizing vector sources (region-scoped derived data):
+Rasterizing vector sources (area-scoped derived data):
 
 ```python
 op = atlas.landscape.rasterize(
@@ -339,7 +339,7 @@ da_stage = op.data
 da_mat = op.materialize()
 ```
 
-Distance-to-feature compute (region-scoped derived data):
+Distance-to-feature compute (area-scoped derived data):
 
 ```python
 run = atlas.landscape.compute(
@@ -359,7 +359,7 @@ Normative:
 - `rasterize(...)` accepts path-like vector sources or `geopandas.GeoDataFrame`.
 - `rasterize(column=None)` burns coverage (`1.0`); `column="<numeric_column>"` burns numeric column values.
 - Staged variables must surface in `atlas.landscape.data[name]` before materialization.
-- If a region selection is active, added rasters must be written to the **derived region store** for that region.
+- If a area selection is active, added rasters must be written to the **derived area store** for that area.
 - `clear_staged()` must remove staged landscape overlays from `atlas.landscape.data`.
 - Staged landscape overlays are transient: `select(...)`, `build()`, `build_canonical()`, and `build_clc()` clear them.
 - Successful landscape `.materialize()` clears the staged overlay for that variable.
@@ -380,7 +380,7 @@ Normative:
 - Distance computation is eager by design for correctness (global Euclidean distance transform).
 - `if_exists="error"` is atomic preflight for batch conflicts (no writes if any conflict).
 - `if_exists="noop"` for distance requires exact spec match via `cleo:distance_spec_json`; missing/invalid/different spec must raise and require `if_exists="replace"`.
-- Distance variables materialized into region stores are region-local artifacts and are not guaranteed to persist when region stores are rebuilt from base stores.
+- Distance variables materialized into area stores are area-local artifacts and are not guaranteed to persist when area stores are rebuilt from base stores.
 
 ---
 
@@ -464,17 +464,17 @@ Base stores:
 - `<ROOT>/wind.zarr`
 - `<ROOT>/landscape.zarr`
 
-Derived region stores:
-- `<ROOT>/regions/<region_id>/wind.zarr`
-- `<ROOT>/regions/<region_id>/landscape.zarr`
+Derived area stores:
+- `<ROOT>/areas/<area_id>/wind.zarr`
+- `<ROOT>/areas/<area_id>/landscape.zarr`
 
 Results stores:
 - `<ROOT>/results/<run_id>/<name>.zarr`
 - metadata/provenance fields are stored in Zarr attrs (no required `meta.json` file).
 
-Region ID rules:
-- If `atlas.region` is `None`, materialized wind metrics are written to the base wind store (`<ROOT>/wind.zarr`).
-- Otherwise `region_id` is the provided NUTS id (e.g. `"AT13"`).
+Area ID rules:
+- If `atlas.area` is `None`, materialized wind metrics are written to the base wind store (`<ROOT>/wind.zarr`).
+- Otherwise `area_id` is the provided NUTS id (e.g. `"AT13"`).
 
 ---
 
@@ -483,7 +483,7 @@ Region ID rules:
 - Each store must have an **inputs identity** (`inputs_id`) computed from deterministic inputs:
   - country, CRS, resolution, upstream data fingerprints,
   - for wind base store: the configured turbine list (or `"default"`),
-  - for region derived stores: region selection id + region-shape fingerprint.
+  - for area derived stores: area selection id + area-shape fingerprint.
 - Identity computation must be stable across runs:
   - no timestamps,
   - stable ordering (e.g. turbine list order preserved),
@@ -518,12 +518,12 @@ Therefore:
 
 ## B4. Region reuse (no duplication of base stores)
 
-- Base stores are country-wide and reusable across any number of regions.
-- Region selection only affects derived region stores and compute masking.
+- Base stores are country-wide and reusable across any number of areas.
+- Area selection only affects derived area stores and compute masking.
 - It must be possible to:
   - materialize base stores once (e.g. Austria),
-  - switch region selection (e.g. `AT12`, then `AT13`),
-  - compute/materialize metrics for each region into separate derived region stores.
+  - switch area selection (e.g. `AT12`, then `AT13`),
+  - compute/materialize metrics for each area into separate derived area stores.
 
 ---
 
@@ -551,7 +551,7 @@ Landscape materialization must source elevation deterministically using:
 
 ## B7. I/O Layer Boundaries (normative)
 
-- `cleo/unification/**` is the canonical location for raw geospatial/base-store/region-store I/O.
+- `cleo/unification/**` is the canonical location for raw geospatial/base-store/area-store I/O.
 - `cleo/results.py` is the canonical location for results-store persistence/open/export internals.
 - `cleo/exports.py` is the canonical location for consolidated analysis export I/O (schema-versioned Zarr exports).
 - `cleo/atlas_policies/**` is policy-only and must not perform direct raw/store/filesystem I/O.

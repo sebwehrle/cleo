@@ -290,7 +290,7 @@ class TestEconomicsIntegration:
             om_variable_eur_per_kwh=0.01,
         )
 
-        clone = atlas.select(region=None, inplace=False)
+        clone = atlas.select(area=None, inplace=False)
 
         assert clone is not None
         assert clone.economics_configured == {

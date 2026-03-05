@@ -511,7 +511,7 @@ def _write_height_slice_to_store(
     store_sizes: dict[str, int],
 ) -> None:
     """
-    Write a single height slice using region write.
+    Write a single height slice using region-based windowed Zarr write.
 
     :param store_path: Path to zarr store.
     :param metric: Metric name.
@@ -634,8 +634,8 @@ class DomainResult:
         """
         Materialize the metric into the active wind store and surface in atlas.wind.data.
 
-        Per contract A8: writes the result into the derived region store for the
-        current region selection (or base store if no region), and surfaces it
+        Per contract A8: writes the result into the derived area store for the
+        current area selection (or base store if no area), and surfaces it
         immediately as atlas.wind.data[metric_name].
 
         :param overwrite: If ``True`` (default), overwrite existing variable.

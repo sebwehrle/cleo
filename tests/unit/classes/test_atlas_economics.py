@@ -264,7 +264,7 @@ class TestEconomicsClonePreservation:
         atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
         atlas.configure_economics(discount_rate=0.05, bos_cost_share=0.25)
 
-        clone = atlas.select(region=None, inplace=False)
+        clone = atlas.select(area=None, inplace=False)
 
         assert clone is not None
         assert clone.economics_configured is not None

@@ -7,7 +7,7 @@ from pathlib import Path
 from cleo.atlas import Atlas
 
 
-def test_get_nuts_country_missing_shapefile_is_actionable(tmp_path, monkeypatch):
+def test_get_nuts_area_country_missing_shapefile_is_actionable(tmp_path, monkeypatch):
     atlas = Atlas.__new__(Atlas)
     atlas._path = Path(tmp_path)
     atlas.country = "AUT"
@@ -22,4 +22,4 @@ def test_get_nuts_country_missing_shapefile_is_actionable(tmp_path, monkeypatch)
         FileNotFoundError,
         match="NUTS shapefile not found.*Automatic NUTS download/extract was attempted",
     ):
-        atlas.get_nuts_country()
+        atlas.get_nuts_area_country()

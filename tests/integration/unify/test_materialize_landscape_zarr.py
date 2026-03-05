@@ -53,12 +53,12 @@ class MockAtlas:
         path: Path,
         country: str = "AUT",
         crs: str = "epsg:3035",
-        region: str | None = None,
+        area: str | None = None,
     ):
         self.path = path
         self.country = country
         self.crs = crs
-        self.region = region
+        self.area = area
         self.turbines_configured = None
         self.chunk_policy = {"y": 1024, "x": 1024}
         self.fingerprint_method = "path_mtime_size"
@@ -71,8 +71,8 @@ class MockAtlas:
         # Copy default turbine for wind materialization
         _copy_default_turbine(path)
 
-    def get_nuts_region(self, region: str):
-        """Return a GeoDataFrame for the specified NUTS region."""
+    def get_nuts_area(self, area: str):
+        """Return a GeoDataFrame for the specified NUTS area."""
         nuts_dir = self.path / "data" / "nuts"
         if not nuts_dir.exists():
             raise FileNotFoundError(f"NUTS shapefile not found under {nuts_dir}")
@@ -82,10 +82,10 @@ class MockAtlas:
             raise FileNotFoundError(f"NUTS shapefile not found under {nuts_dir}")
 
         gdf = gpd.read_file(shp_files[0])
-        # Filter by NAME_LATN matching region
-        region_gdf = gdf[gdf["NAME_LATN"] == region]
+        # Filter by NAME_LATN matching area
+        region_gdf = gdf[gdf["NAME_LATN"] == area]
         if region_gdf.empty:
-            raise ValueError(f"Region {region} not found in NUTS shapefile")
+            raise ValueError(f"Region {area} not found in NUTS shapefile")
         return region_gdf
 
 
@@ -112,7 +112,7 @@ def _create_gwa_raster(
     else:
         data = np.random.rand(*shape).astype(np.float32) * 10 + 1
 
-    # Add nodata region in upper-left corner to test mask
+    # Add nodata area in upper-left corner to test mask
     if add_nodata_region:
         data[:3, :3] = np.nan
 
@@ -188,12 +188,12 @@ def _create_nuts_shapefile(
     bounds: tuple[float, float, float, float],
     crs_epsg: int = 3035,
 ) -> None:
-    """Create a minimal NUTS shapefile with one region.
+    """Create a minimal NUTS shapefile with one area.
 
     Args:
         nuts_dir: Directory to write the shapefile.
-        region_name: Latin name for the region.
-        bounds: (minx, miny, maxx, maxy) for the region polygon.
+        region_name: Latin name for the area.
+        bounds: (minx, miny, maxx, maxy) for the area polygon.
         crs_epsg: CRS EPSG code.
     """
     nuts_dir.mkdir(parents=True, exist_ok=True)
@@ -379,11 +379,11 @@ class TestMaterializeLandscapeZarr:
             unifier.materialize_landscape(atlas)
 
     def test_with_aoi_region(self, tmp_path: Path) -> None:
-        """Landscape is correctly clipped when atlas.region is set."""
+        """Landscape is correctly clipped when atlas.area is set."""
         # Create smaller AOI covering only part of the wind grid
         aoi_bounds = (4020000, 2620000, 4080000, 2680000)
 
-        atlas = MockAtlas(tmp_path, region="TestRegion")
+        atlas = MockAtlas(tmp_path, area="TestRegion")
 
         # Create NUTS shapefile
         _create_nuts_shapefile(

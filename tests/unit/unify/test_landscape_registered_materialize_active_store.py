@@ -16,27 +16,27 @@ requires_rioxarray()
 
 
 class _AtlasStub:
-    """Atlas-like stub with active region store routing."""
+    """Atlas-like stub with active area store routing."""
 
     def __init__(self, root: Path) -> None:
         self.path = root
         self.country = "AUT"
         self.crs = "epsg:3035"
-        self.region = None
+        self.area = None
         self.chunk_policy = {"y": 32, "x": 32}
         self.fingerprint_method = "path_mtime_size"
-        self._region_name = "R1"
-        self._region_id = "R1"
+        self._area_name = "R1"
+        self._area_id = "R1"
         self.wind_store_path = root / "wind.zarr"
         self.landscape_store_path = root / "landscape.zarr"
 
     def _active_wind_store_path(self) -> Path:
-        """Return active wind store path for selected region."""
-        return self.path / "regions" / self._region_id / "wind.zarr"
+        """Return active wind store path for selected area."""
+        return self.path / "areas" / self._area_id / "wind.zarr"
 
     def _active_landscape_store_path(self) -> Path:
-        """Return active landscape store path for selected region."""
-        return self.path / "regions" / self._region_id / "landscape.zarr"
+        """Return active landscape store path for selected area."""
+        return self.path / "areas" / self._area_id / "landscape.zarr"
 
 
 def _make_wind_store(path: Path, *, grid_id: str) -> None:
@@ -97,7 +97,7 @@ def _write_source_raster(path: Path) -> None:
 
 
 def test_registered_landscape_materialization_targets_active_region_store(tmp_path: Path) -> None:
-    """Registered-variable flow should use active region stores, not base stores."""
+    """Registered-variable flow should use active area stores, not base stores."""
     atlas = _AtlasStub(tmp_path)
 
     _make_wind_store(atlas.wind_store_path, grid_id="BASE")

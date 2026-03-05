@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 
-class RegionMetaLike(Protocol):
-    """Typed contract required by region cleanup policy."""
+class AreaMetaLike(Protocol):
+    """Typed contract required by area cleanup policy."""
 
     created_at: datetime.datetime
     is_complete: bool
@@ -38,21 +38,21 @@ def _is_older_than_threshold(
     return cmp_store < cmp_threshold
 
 
-def resolve_region_cleanup_id(
+def resolve_area_cleanup_id(
     *,
-    region: object,
-    resolve_region_name: Callable[[str], tuple[str, str, int]],
+    area: object,
+    resolve_area_name: Callable[[str], tuple[str, str, int]],
 ) -> str | None:
-    """Normalize optional region filter to a resolved region ID."""
-    if region is None:
+    """Normalize optional area filter to a resolved area ID."""
+    if area is None:
         return None
-    if not isinstance(region, str):
-        raise ValueError(f"region must be a string or None, got {type(region).__name__}")
-    region_stripped = region.strip()
-    if not region_stripped:
-        raise ValueError("region cannot be empty or whitespace-only")
-    _name_norm, region_id, _level = resolve_region_name(region_stripped)
-    return region_id
+    if not isinstance(area, str):
+        raise ValueError(f"area must be a string or None, got {type(area).__name__}")
+    area_stripped = area.strip()
+    if not area_stripped:
+        raise ValueError("area cannot be empty or whitespace-only")
+    _name_norm, area_id, _level = resolve_area_name(area_stripped)
+    return area_id
 
 
 def select_result_stores_for_cleanup(
@@ -80,23 +80,23 @@ def select_result_stores_for_cleanup(
     return selected, scanned
 
 
-def select_region_dirs_for_cleanup(
+def select_area_dirs_for_cleanup(
     *,
-    region_dirs: list[Path],
+    area_dirs: list[Path],
     include_incomplete: bool,
     threshold_dt: datetime.datetime | None,
-    read_region_meta: Callable[[Path], RegionMetaLike],
+    read_area_meta: Callable[[Path], AreaMetaLike],
 ) -> tuple[list[Path], int]:
-    """Choose region directories to delete using completeness and age policy."""
+    """Choose area directories to delete using completeness and age policy."""
     selected: list[Path] = []
-    scanned = len(region_dirs)
+    scanned = len(area_dirs)
 
-    for region_dir in region_dirs:
-        meta = read_region_meta(region_dir)
+    for area_dir in area_dirs:
+        meta = read_area_meta(area_dir)
         if not include_incomplete and not meta.is_complete:
             continue
         if threshold_dt is not None and not _is_older_than_threshold(meta.created_at, threshold_dt):
             continue
-        selected.append(region_dir)
+        selected.append(area_dir)
 
     return selected, scanned

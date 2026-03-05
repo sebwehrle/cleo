@@ -52,7 +52,7 @@ class MockAtlasForExport:
         self.path = path
         self.country = country
         self._crs = crs
-        self.region = None
+        self.area = None
         self.turbines_configured = None
         self.chunk_policy = {"y": 1024, "x": 1024}
         self.fingerprint_method = "path_mtime_size"
@@ -114,7 +114,7 @@ class MockAtlasForExport:
     def landscape_zarr(self) -> xr.Dataset:
         return self.landscape_data
 
-    def get_nuts_region(self, region: str):
+    def get_nuts_area(self, area: str):
         return None
 
     def build_canonical(self) -> None:

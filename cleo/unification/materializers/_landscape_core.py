@@ -28,7 +28,7 @@ from cleo.unification.manifest import (
     write_manifest_sources,
     write_manifest_variables,
 )
-from cleo.unification.nuts_io import _read_nuts_region_catalog
+from cleo.unification.nuts_io import _read_nuts_area_catalog
 from cleo.unification.raster_io import (
     _build_copdem_elevation,
     _open_local_elevation,
@@ -141,7 +141,7 @@ def _compute_landscape_inputs_id(
         ("wind:grid_id", wind_ref.grid_id),
         ("wind:inputs_id", wind_ref.inputs_id),
         ("mask_policy", "nan+valid_mask_in_landscape"),
-        ("region", _stable_json(getattr(atlas, "region", None))),
+        ("area", _stable_json(getattr(atlas, "area", None))),
         ("chunk_policy", _stable_json(unifier.chunk_policy)),
     ]
 
@@ -206,8 +206,8 @@ def _write_landscape_store(
         # Write optional wind attrs
         _write_wind_propagated_attrs(g, wind_ref.dataset)
 
-        # Write region catalog
-        _write_region_catalog_attr(g, atlas)
+        # Write area catalog
+        _write_area_catalog_attr(g, atlas)
 
         # Write manifest
         init_manifest(tmp)
@@ -259,20 +259,20 @@ def _write_wind_propagated_attrs(g: zarr.Group, wind_ds: xr.Dataset) -> None:
         g.attrs[attr_name] = val
 
 
-def _write_region_catalog_attr(g: zarr.Group, atlas) -> None:
-    """Write region catalog to store attrs if available."""
+def _write_area_catalog_attr(g: zarr.Group, atlas) -> None:
+    """Write area catalog to store attrs if available."""
     try:
-        region_catalog = _read_nuts_region_catalog(atlas)
+        area_catalog = _read_nuts_area_catalog(atlas)
     except (FileNotFoundError, OSError, ValueError, TypeError, KeyError):
         logger.debug(
-            "Failed to load NUTS region catalog for landscape attrs; continuing without.",
+            "Failed to load NUTS area catalog for landscape attrs; continuing without.",
             extra={"atlas_path": str(atlas.path), "country": getattr(atlas, "country", None)},
             exc_info=True,
         )
-        region_catalog = []
+        area_catalog = []
 
-    if region_catalog:
-        g.attrs["cleo_region_catalog_json"] = _stable_json(region_catalog)
+    if area_catalog:
+        g.attrs["cleo_area_catalog_json"] = _stable_json(area_catalog)
 
 
 def _write_landscape_manifest(

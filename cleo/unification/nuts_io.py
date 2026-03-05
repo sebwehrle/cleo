@@ -22,20 +22,20 @@ def _read_vector_file(path: Path | str) -> gpd.GeoDataFrame:
     return gpd.read_file(path)
 
 
-def _read_nuts_region_catalog(
+def _read_nuts_area_catalog(
     atlas_or_path,
     country: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Read NUTS region catalog for the atlas country from raw NUTS files.
+    """Read NUTS area catalog for the atlas country from raw NUTS files.
 
     Returns rows with keys: ``name``, ``name_norm``, ``nuts_id``, ``level``.
-    Only levels 1, 2, and 3 are included.
+    Levels 0, 1, 2, and 3 are included.
 
     :param atlas_or_path:
         Atlas-like object exposing ``path``/``country`` or a filesystem path.
     :param country:
         ISO3 country code when ``atlas_or_path`` is a path-like value.
-    :returns: Deterministically sorted region catalog rows.
+    :returns: Deterministically sorted area catalog rows.
     :raises FileNotFoundError: If no NUTS shapefile is available.
     """
     if country is None:
@@ -59,11 +59,11 @@ def _read_nuts_region_catalog(
     if alpha_2 is None:
         return []
 
-    country_regions = nuts[nuts["CNTR_CODE"] == alpha_2]
+    country_areas = nuts[nuts["CNTR_CODE"] == alpha_2]
 
     out: list[dict[str, Any]] = []
     seen: set[tuple[int, str]] = set()
-    for _, row in country_regions.iterrows():
+    for _, row in country_areas.iterrows():
         name = str(row.get("NAME_LATN", "")).strip()
         nuts_id = str(row.get("NUTS_ID", "")).strip()
         level_raw = row.get("LEVL_CODE")
@@ -73,7 +73,7 @@ def _read_nuts_region_catalog(
             level = int(level_raw)
         except (TypeError, ValueError):
             continue
-        if level not in (1, 2, 3):
+        if level not in (0, 1, 2, 3):
             continue
 
         key = (level, nuts_id)

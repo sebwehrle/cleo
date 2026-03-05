@@ -200,6 +200,7 @@ class TestWriteRegionCatalogAttr:
         g = zarr.open_group(store_path, mode="w")
 
         mock_atlas = MagicMock()
+        mock_atlas.country = "AUT"
         catalog = [{"nuts_id": "AT", "name": "Austria"}]
 
         with patch(
@@ -210,6 +211,7 @@ class TestWriteRegionCatalogAttr:
 
         assert "cleo_area_catalog_json" in g.attrs
         assert "AT" in g.attrs["cleo_area_catalog_json"]
+        assert g.attrs["cleo_area_catalog_country_iso3"] == "AUT"
 
     def test_handles_missing_catalog(self, tmp_path: Path) -> None:
         """Handles FileNotFoundError gracefully."""

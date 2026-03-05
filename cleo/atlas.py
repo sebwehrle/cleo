@@ -152,6 +152,7 @@ class Atlas:
         # Canonical store readiness flag
         self._canonical_ready = False
         self._nuts_area_catalog_cache: tuple[dict, ...] | None = None
+        self._nuts_area_catalog_cache_country: str | None = None
 
     def __repr__(self) -> str:
         """Audit-safe repr: no IO, no mutation, bounded length."""
@@ -388,7 +389,11 @@ class Atlas:
         return validate_nuts_level_policy(level, valid_levels=self._VALID_NUTS_LEVELS)
 
     def _load_nuts_area_catalog(self) -> list[dict]:
-        """Load NUTS area catalog from store attrs (fast) or raw NUTS files (fallback)."""
+        """Load NUTS area catalog from attrs/raw sources for the current country.
+
+        :returns: Catalog rows for ``self.country`` only.
+        :rtype: list[dict]
+        """
 
         def _log_debug(msg: str) -> None:
             logger.debug(
@@ -401,8 +406,12 @@ class Atlas:
             self._ensure_nuts_shapefile(auto_download=True)
             return _read_nuts_area_catalog(self.path, self.country)
 
-        catalog, cache = load_nuts_area_catalog_policy(
+        expected_country_iso3 = str(self.country).strip().upper()
+
+        catalog, cache, cache_country_iso3 = load_nuts_area_catalog_policy(
             cached_rows=self._nuts_area_catalog_cache,
+            cached_country_iso3=self._nuts_area_catalog_cache_country,
+            expected_country_iso3=expected_country_iso3,
             landscape_store_path=self.landscape_store_path,
             valid_levels=self._VALID_NUTS_LEVELS,
             read_store_attrs=read_zarr_group_attrs,
@@ -410,6 +419,7 @@ class Atlas:
             log_debug=_log_debug,
         )
         self._nuts_area_catalog_cache = cache
+        self._nuts_area_catalog_cache_country = cache_country_iso3
         return catalog
 
     @property

@@ -26,6 +26,7 @@ def _mock_region_catalog(tmp_path: Path) -> None:
         }
     ]
     g.attrs["cleo_area_catalog_json"] = json.dumps(catalog, sort_keys=True, separators=(",", ":"))
+    g.attrs["cleo_area_catalog_country_iso3"] = "AUT"
 
 
 class TestAtlasConstructorContractA2:

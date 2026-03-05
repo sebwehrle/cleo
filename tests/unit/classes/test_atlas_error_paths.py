@@ -30,6 +30,7 @@ def test_load_nuts_area_catalog_falls_back_when_catalog_json_is_invalid(
     atlas = Atlas(tmp_path, "AUT", "epsg:3035")
     g = zarr.open_group(str(tmp_path / "landscape.zarr"), mode="w")
     g.attrs["cleo_area_catalog_json"] = "{invalid-json"
+    g.attrs["cleo_area_catalog_country_iso3"] = "AUT"
 
     fallback_catalog = [
         {"name": "Wien", "name_norm": "wien", "nuts_id": "AT13", "level": 2},

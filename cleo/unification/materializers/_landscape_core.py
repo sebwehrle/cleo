@@ -40,6 +40,8 @@ from cleo.unification.materializers._helpers import (
 )
 
 logger = logging.getLogger(__name__)
+_AREA_CATALOG_ATTR = "cleo_area_catalog_json"
+_AREA_CATALOG_COUNTRY_ATTR = "cleo_area_catalog_country_iso3"
 
 
 @dataclass
@@ -260,7 +262,13 @@ def _write_wind_propagated_attrs(g: zarr.Group, wind_ds: xr.Dataset) -> None:
 
 
 def _write_area_catalog_attr(g: zarr.Group, atlas) -> None:
-    """Write area catalog to store attrs if available."""
+    """Write area catalog attrs for the current atlas country.
+
+    :param g: Target zarr root group.
+    :type g: zarr.Group
+    :param atlas: Atlas-like object exposing ``country``.
+    :type atlas: Any
+    """
     try:
         area_catalog = _read_nuts_area_catalog(atlas)
     except (FileNotFoundError, OSError, ValueError, TypeError, KeyError):
@@ -272,7 +280,8 @@ def _write_area_catalog_attr(g: zarr.Group, atlas) -> None:
         area_catalog = []
 
     if area_catalog:
-        g.attrs["cleo_area_catalog_json"] = _stable_json(area_catalog)
+        g.attrs[_AREA_CATALOG_ATTR] = _stable_json(area_catalog)
+        g.attrs[_AREA_CATALOG_COUNTRY_ATTR] = str(getattr(atlas, "country", "")).strip().upper()
 
 
 def _write_landscape_manifest(

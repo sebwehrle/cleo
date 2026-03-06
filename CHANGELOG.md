@@ -13,10 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `__version__` attribute accessible via `cleo.__version__`
 - `CITATION.cff` for academic citation support
 - Smoke tests in `tests/smoke/` for import verification
+- GDAL/PROJ installation instructions in README (Ubuntu, macOS, Conda)
+- Troubleshooting section in README covering common issues (GDAL setup, CLC auth, memory, GWA downloads, chunk warnings)
 - This changelog
 
 ### Changed
 - Added type hints to key public methods: `Atlas.__init__`, `Atlas.build`, `Atlas.flatten`, `Atlas.export_analysis_dataset_zarr`
+- Extracted parameter validation helpers in `configure_economics()` for more consistent error messages
+
+### Security
+- Added secret scanning to CI workflow via `detect-secrets`
+- Added Dependabot for automated dependency updates (conservative settings)
+- Hardened `.gitignore` with secret file patterns
+- Added security documentation for CLMS authentication in `cleo/clc.py`
 
 ## [0.0.1] - 2024-12-01
 

@@ -15,6 +15,34 @@ For detailed environment requirements and dependency policies, see `docs/CONTRAC
 
 ## Installation
 
+### System Dependencies (GDAL/PROJ)
+
+CLEO requires GDAL and PROJ system libraries for geospatial operations. Install these before installing CLEO:
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get update
+sudo apt-get install -y libgdal-dev gdal-bin libproj-dev proj-bin
+```
+
+**macOS (Homebrew):**
+```bash
+brew install gdal proj
+```
+
+**Conda (any platform):**
+```bash
+conda install -c conda-forge gdal proj
+```
+
+**Verify installation:**
+```bash
+gdalinfo --version   # Should show GDAL version
+proj                 # Should show PROJ usage
+```
+
+### Package Installation
+
 ```bash
 python -m pip install -e .
 ```
@@ -502,6 +530,101 @@ print(df)
 ```bash
 python -m pytest -q
 ```
+
+## Troubleshooting
+
+### GDAL/PROJ Installation Issues
+
+**Error: `rasterio` or `pyproj` fails to install**
+
+Ensure GDAL/PROJ system libraries are installed before pip install:
+```bash
+# Ubuntu/Debian
+sudo apt-get install -y libgdal-dev gdal-bin libproj-dev proj-bin
+
+# macOS
+brew install gdal proj
+
+# Then retry
+pip install rasterio pyproj
+```
+
+**Error: `GDAL not found` or `Could not find PROJ`**
+
+Set environment variables to help pip find the libraries:
+```bash
+# Find GDAL config
+export GDAL_CONFIG=$(which gdal-config)
+
+# On macOS with Homebrew
+export CFLAGS="-I$(brew --prefix)/include"
+export LDFLAGS="-L$(brew --prefix)/lib"
+```
+
+### CLC Authentication Issues
+
+**Error: `CLMS authentication cannot be resolved`**
+
+CLEO needs CLMS credentials to download CLC data. See the [CLC Authentication Setup](#clc-authentication-setup-clms) section.
+
+Quick fix: Set one of these environment variables:
+```bash
+export CLEO_CLMS_SERVICE_KEY_PATH="/path/to/clms_service_key.json"
+# or
+export CLEO_CLMS_ACCESS_TOKEN="<your-access-token>"
+```
+
+**Alternative: Manual download**
+
+Download CLC data manually from [Copernicus Land Monitoring Service](https://land.copernicus.eu/en/products/corine-land-cover) and pass the URL or local path:
+```python
+atlas.build_clc(url="/path/to/clc_raster.tif")
+```
+
+### Memory Issues
+
+**Error: `MemoryError` or system becomes unresponsive during `build()` or `compute()`**
+
+CLEO processes large rasters. For memory-constrained systems:
+
+1. **Use smaller chunk sizes:**
+   ```python
+   atlas = Atlas(..., chunk_policy={"y": 512, "x": 512})
+   ```
+
+2. **Process by area instead of full country:**
+   ```python
+   atlas.select(area="Wien", inplace=True)
+   atlas.build()
+   ```
+
+3. **Use processes backend for better memory isolation:**
+   ```python
+   atlas = Atlas(..., compute_backend="processes", compute_workers=2)
+   ```
+
+### GWA Download Issues
+
+**Error: `Required GWA file not found`**
+
+CLEO auto-downloads missing GWA data on first `build()`. If download fails:
+
+1. Check internet connectivity
+2. Verify the country code is valid (ISO 3166-1 alpha-3)
+3. Manual download: Get GWA data from [Global Wind Atlas](https://globalwindatlas.info/en/download/gis-files) and place in `<workdir>/data/raw/<ISO3>/`
+
+### Chunk Policy Warnings
+
+**Warning: `Stored chunk policy {...} differs from configured policy`**
+
+This warning appears when opening a store with different chunk settings than it was created with. Options:
+
+1. **Ignore** - CLEO uses stored chunks for optimal read performance
+2. **Rebuild stores** - Delete `wind.zarr`/`landscape.zarr` and re-run `atlas.build()` with desired chunk policy
+3. **Set matching policy:**
+   ```python
+   atlas = Atlas(..., chunk_policy={"y": 512, "x": 512})  # Match stored chunks
+   ```
 
 ## Citation
 

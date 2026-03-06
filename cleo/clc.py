@@ -203,6 +203,14 @@ def _load_clms_service_key_payload() -> dict[str, str] | None:
 def _clms_access_token() -> str:
     """Resolve CLMS access token from environment or service-key login.
 
+    Security notes:
+        - Prefer file-based keys (``CLEO_CLMS_SERVICE_KEY_PATH``) over inline JSON
+          to avoid credentials in shell history or process listings.
+        - Set restrictive permissions on key files: ``chmod 600 <keyfile>``.
+        - Never commit service keys to version control; add patterns to ``.gitignore``.
+        - For CI/CD, use secret injection (e.g., GitHub Secrets to env vars).
+        - Credentials are only transmitted over HTTPS to the CLMS API.
+
     :returns: Access token string.
     :rtype: str
     :raises RuntimeError: If CLMS authentication cannot be resolved.

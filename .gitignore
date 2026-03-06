@@ -37,3 +37,16 @@ site/
 # Local config (not tracked)
 AGENTS.md
 CLAUDE.md
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*credentials*.json
+*secret*.json
+service_key*.json
+clms_service_key.json
+
+# Secret scanning artifacts
+.secrets-scan-results.json

@@ -12,7 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DEFAULT_CHUNK_POLICY` constant exported from `cleo.unification.store_io`
 - `__version__` attribute accessible via `cleo.__version__`
 - `CITATION.cff` for academic citation support
+- Smoke tests in `tests/smoke/` for import verification
 - This changelog
+
+### Changed
+- Added type hints to key public methods: `Atlas.__init__`, `Atlas.build`, `Atlas.flatten`, `Atlas.export_analysis_dataset_zarr`
 
 ## [0.0.1] - 2024-12-01
 

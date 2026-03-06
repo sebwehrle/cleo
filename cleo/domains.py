@@ -39,9 +39,14 @@ cleo.results : Result wrapper and materialization
 
 # %% imports
 import json
+from typing import TYPE_CHECKING
+
 import numpy as np
 import xarray as xr
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from cleo.unification import Unifier
 from cleo.results import DomainResult, normalize_metric_for_active_wind_store
 from cleo.spatial import distance_to_positive_mask
 from cleo.wind_metrics import (
@@ -904,7 +909,7 @@ class LandscapeDomain:
         if if_exists not in valid_if_exists:
             raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
 
-    def _build_unifier(self):
+    def _build_unifier(self) -> "Unifier":
         """
         Build Unifier configured from owning Atlas settings.
 

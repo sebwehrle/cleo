@@ -42,7 +42,10 @@ import xarray as xr
 import pycountry as pct
 from uuid import uuid4
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from cleo.domains import WindDomain, LandscapeDomain
 from cleo.atlas_policies.nuts_catalog import load_nuts_area_catalog as load_nuts_area_catalog_policy
@@ -124,9 +127,9 @@ class Atlas:
 
     def __init__(
         self,
-        path,
-        country,
-        crs,
+        path: str | Path,
+        country: str,
+        crs: str,
         *,
         chunk_policy: dict[str, int] | None = None,
         compute_backend: str = "serial",
@@ -134,7 +137,7 @@ class Atlas:
         area: str | None = None,
         results_root: Path | None = None,
         fingerprint_method: str = "path_mtime_size",
-    ):
+    ) -> None:
         """
         Initialize Atlas workspace and runtime configuration.
 
@@ -206,7 +209,7 @@ class Atlas:
 
     __str__ = __repr__
 
-    def build(self):
+    def build(self) -> None:
         """Materialize stores: base (country-wide) and area (if selected).
 
         - Always creates/updates base stores (wind.zarr, landscape.zarr)
@@ -275,7 +278,7 @@ class Atlas:
         include_domain_prefix: bool = True,
         cast_binary_to_int: bool = False,
         include_only: Sequence[str] | None = None,
-    ):
+    ) -> "pd.DataFrame":
         """Flatten atlas domain data to a pandas DataFrame for downstream models.
 
         The resulting frame uses a rounded `(y, x)` MultiIndex and one column per
@@ -1013,14 +1016,14 @@ class Atlas:
 
     def export_analysis_dataset_zarr(
         self,
-        path,
+        path: str | Path,
         *,
         domain: str = "both",
-        include_only=None,
+        include_only: Sequence[str] | None = None,
         prefix: bool = True,
         exclude_template: bool = True,
         compute: bool = True,
-    ):
+    ) -> Path:
         """Export consolidated analysis dataset to a Zarr store.
 
         Creates a schema-versioned Zarr store with provenance tracking.

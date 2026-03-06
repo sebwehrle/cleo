@@ -93,6 +93,59 @@ def _safe_basename(path) -> str:
         return "?"
 
 
+def _validate_non_negative_numeric(name: str, value: object) -> float:
+    """Validate that value is numeric, finite, and >= 0.
+
+    :param name: Parameter name for error messages.
+    :param value: Value to validate.
+    :returns: Validated value as float.
+    :raises TypeError: If value is not numeric.
+    :raises ValueError: If value is not finite or is negative.
+    """
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be numeric, got {type(value).__name__}")
+    result = float(value)
+    if not (result >= 0.0 and math.isfinite(result)):
+        raise ValueError(f"{name} must be finite and >= 0, got {result}")
+    return result
+
+
+def _validate_unit_range(name: str, value: object, *, include_max: bool = True) -> float:
+    """Validate that value is numeric, finite, and in unit range [0, 1] or [0, 1).
+
+    :param name: Parameter name for error messages.
+    :param value: Value to validate.
+    :param include_max: If True, range is [0, 1]; if False, range is [0, 1).
+    :returns: Validated value as float.
+    :raises TypeError: If value is not numeric.
+    :raises ValueError: If value is not finite or out of range.
+    """
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be numeric, got {type(value).__name__}")
+    result = float(value)
+    upper_ok = result <= 1.0 if include_max else result < 1.0
+    if not (0.0 <= result and upper_ok and math.isfinite(result)):
+        right = "]" if include_max else ")"
+        raise ValueError(f"{name} must be finite and in range [0, 1{right}, got {result}")
+    return result
+
+
+def _validate_positive_int(name: str, value: object) -> int:
+    """Validate that value is a positive integer.
+
+    :param name: Parameter name for error messages.
+    :param value: Value to validate.
+    :returns: Validated value as int.
+    :raises TypeError: If value is not an int.
+    :raises ValueError: If value is not positive.
+    """
+    if not isinstance(value, int):
+        raise TypeError(f"{name} must be int, got {type(value).__name__}")
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
+    return value
+
+
 class NutsAreaName(str):
     """String-like NUTS area name carrying its NUTS level metadata."""
 
@@ -1253,57 +1306,28 @@ class Atlas:
         config: dict[str, float | int] = {}
 
         if discount_rate is not None:
-            if not isinstance(discount_rate, (int, float)):
-                raise TypeError(f"discount_rate must be numeric, got {type(discount_rate).__name__}")
-            discount_rate = float(discount_rate)
-            if not (0.0 <= discount_rate < 1.0 and math.isfinite(discount_rate)):
-                raise ValueError(f"discount_rate must be finite and in range [0, 1), got {discount_rate}")
-            config["discount_rate"] = discount_rate
+            config["discount_rate"] = _validate_unit_range("discount_rate", discount_rate, include_max=False)
 
         if lifetime_a is not None:
-            if not isinstance(lifetime_a, int):
-                raise TypeError(f"lifetime_a must be int, got {type(lifetime_a).__name__}")
-            if lifetime_a <= 0:
-                raise ValueError(f"lifetime_a must be positive, got {lifetime_a}")
-            config["lifetime_a"] = lifetime_a
+            config["lifetime_a"] = _validate_positive_int("lifetime_a", lifetime_a)
 
         if om_fixed_eur_per_kw_a is not None:
-            if not isinstance(om_fixed_eur_per_kw_a, (int, float)):
-                raise TypeError(f"om_fixed_eur_per_kw_a must be numeric, got {type(om_fixed_eur_per_kw_a).__name__}")
-            om_fixed_eur_per_kw_a = float(om_fixed_eur_per_kw_a)
-            if not (om_fixed_eur_per_kw_a >= 0.0 and math.isfinite(om_fixed_eur_per_kw_a)):
-                raise ValueError(f"om_fixed_eur_per_kw_a must be finite and >= 0, got {om_fixed_eur_per_kw_a}")
-            config["om_fixed_eur_per_kw_a"] = om_fixed_eur_per_kw_a
+            config["om_fixed_eur_per_kw_a"] = _validate_non_negative_numeric(
+                "om_fixed_eur_per_kw_a", om_fixed_eur_per_kw_a
+            )
 
         if om_variable_eur_per_kwh is not None:
-            if not isinstance(om_variable_eur_per_kwh, (int, float)):
-                raise TypeError(
-                    f"om_variable_eur_per_kwh must be numeric, got {type(om_variable_eur_per_kwh).__name__}"
-                )
-            om_variable_eur_per_kwh = float(om_variable_eur_per_kwh)
-            if not (om_variable_eur_per_kwh >= 0.0 and math.isfinite(om_variable_eur_per_kwh)):
-                raise ValueError(f"om_variable_eur_per_kwh must be finite and >= 0, got {om_variable_eur_per_kwh}")
-            config["om_variable_eur_per_kwh"] = om_variable_eur_per_kwh
+            config["om_variable_eur_per_kwh"] = _validate_non_negative_numeric(
+                "om_variable_eur_per_kwh", om_variable_eur_per_kwh
+            )
 
         if bos_cost_share is not None:
-            if not isinstance(bos_cost_share, (int, float)):
-                raise TypeError(f"bos_cost_share must be numeric, got {type(bos_cost_share).__name__}")
-            bos_cost_share = float(bos_cost_share)
-            if not (0.0 <= bos_cost_share <= 1.0 and math.isfinite(bos_cost_share)):
-                raise ValueError(f"bos_cost_share must be finite and in range [0, 1], got {bos_cost_share}")
-            config["bos_cost_share"] = bos_cost_share
+            config["bos_cost_share"] = _validate_unit_range("bos_cost_share", bos_cost_share, include_max=True)
 
         if grid_connect_cost_eur_per_kw is not None:
-            if not isinstance(grid_connect_cost_eur_per_kw, (int, float)):
-                raise TypeError(
-                    f"grid_connect_cost_eur_per_kw must be numeric, got {type(grid_connect_cost_eur_per_kw).__name__}"
-                )
-            grid_connect_cost_eur_per_kw = float(grid_connect_cost_eur_per_kw)
-            if not (grid_connect_cost_eur_per_kw >= 0.0 and math.isfinite(grid_connect_cost_eur_per_kw)):
-                raise ValueError(
-                    f"grid_connect_cost_eur_per_kw must be finite and >= 0, got {grid_connect_cost_eur_per_kw}"
-                )
-            config["grid_connect_cost_eur_per_kw"] = grid_connect_cost_eur_per_kw
+            config["grid_connect_cost_eur_per_kw"] = _validate_non_negative_numeric(
+                "grid_connect_cost_eur_per_kw", grid_connect_cost_eur_per_kw
+            )
 
         if config:
             if self._economics_configured is None:

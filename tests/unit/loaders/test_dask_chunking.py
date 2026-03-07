@@ -220,9 +220,9 @@ class TestRasterioLazyLoading:
 
             # Test 1: Open WITHOUT chunks - should be NumPy-backed
             da_eager = rxr.open_rasterio(f.name)
-            assert not dask_utils.is_dask_backed(
-                da_eager
-            ), "Expected NumPy-backed when no chunks passed to open_rasterio"
+            assert not dask_utils.is_dask_backed(da_eager), (
+                "Expected NumPy-backed when no chunks passed to open_rasterio"
+            )
 
             # Test 2: Open WITH chunks - should be dask-backed (THIS IS THE FIX)
             chunks = dask_utils.chunks_for_rasterio(enabled=True, chunks={"y": 32, "x": 32})

@@ -194,17 +194,17 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
 
     # === Deterministic fixture guards ===
     # Guard 1: valid_mask must have at least one True
-    assert (
-        bool(land_ds["valid_mask"].any().compute()) is True
-    ), "Fixture sanity: valid_mask must have at least one True pixel"
+    assert bool(land_ds["valid_mask"].any().compute()) is True, (
+        "Fixture sanity: valid_mask must have at least one True pixel"
+    )
 
     # Guard 2: weibull_A at height=100 must have at least one non-NaN on valid_mask
     weibull_A_var = "weibull_A" if "weibull_A" in wind_ds.data_vars else "weibull_a"
     weibull_A_100 = wind_ds[weibull_A_var].sel(height=100)
     valid_weibull = land_ds["valid_mask"] & weibull_A_100.notnull()
-    assert (
-        bool(valid_weibull.any().compute()) is True
-    ), f"Fixture sanity: {weibull_A_var} at height=100 must have valid data on valid_mask"
+    assert bool(valid_weibull.any().compute()) is True, (
+        f"Fixture sanity: {weibull_A_var} at height=100 must have valid data on valid_mask"
+    )
 
     # === Guard 3: Default turbine discovery (contract v1.3) ===
     # Verify that without configure_turbines(), default discovery finds ALL turbines in resources/
@@ -215,9 +215,9 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     resources_dir = atlas.path / "resources"
     expected_turbines = _get_expected_turbine_ids(resources_dir)
     actual_turbines = tuple(sorted(atlas.wind.turbines))
-    assert (
-        actual_turbines == expected_turbines
-    ), f"Default discovery mismatch:\n  actual:   {actual_turbines}\n  expected: {expected_turbines}"
+    assert actual_turbines == expected_turbines, (
+        f"Default discovery mismatch:\n  actual:   {actual_turbines}\n  expected: {expected_turbines}"
+    )
     assert len(actual_turbines) > 0, "At least one turbine YAML must exist in resources/"
 
     # === Turbine selection (persistent, contract v1) ===
@@ -240,9 +240,9 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
 
     # Must not be all-NaN on valid cells
     ok = land_ds["valid_mask"] & cf.notnull().all(dim="turbine")
-    assert (
-        bool(ok.any().compute()) is True
-    ), "capacity_factors should have at least one valid (non-NaN) value on valid_mask"
+    assert bool(ok.any().compute()) is True, (
+        "capacity_factors should have at least one valid (non-NaN) value on valid_mask"
+    )
 
     # === Contract v1: compute().materialize() pattern ===
     # Test the canonical examples: select + compute + materialize writes to wind.zarr
@@ -257,9 +257,9 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     ).materialize()
 
     # Verify metric appears in atlas.wind.data after materialize
-    assert (
-        "capacity_factors" in atlas.wind.data
-    ), "materialize() must write metric into wind.zarr and surface in atlas.wind.data"
+    assert "capacity_factors" in atlas.wind.data, (
+        "materialize() must write metric into wind.zarr and surface in atlas.wind.data"
+    )
     assert atlas.wind.selected_turbines == (tid,), "Selection must remain persistent after compute/materialize"
 
     # === Persist ===

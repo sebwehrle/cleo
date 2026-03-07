@@ -379,9 +379,9 @@ class TestRegionStores:
         region_data = atlas.wind.data
         region_y_size = region_data.sizes["y"]
 
-        assert (
-            region_y_size < base_y_size
-        ), f"Region data y ({region_y_size}) should be smaller than base ({base_y_size})"
+        assert region_y_size < base_y_size, (
+            f"Region data y ({region_y_size}) should be smaller than base ({base_y_size})"
+        )
 
     def test_region_stores_rebuild_when_base_inputs_id_changes(self, region_atlas: Atlas) -> None:
         """Region store freshness tracks base inputs; stale area stores must rebuild."""
@@ -449,9 +449,9 @@ class TestRegionMaterialization:
         ).materialize()
 
         # Verify metric appears in atlas.wind.data (area store)
-        assert (
-            "capacity_factors" in atlas.wind.data
-        ), "capacity_factors should appear in atlas.wind.data after materialize()"
+        assert "capacity_factors" in atlas.wind.data, (
+            "capacity_factors should appear in atlas.wind.data after materialize()"
+        )
 
         # Verify it was written to area store, NOT base store
         region_wind_path = atlas.path / "areas" / atlas._area_id / "wind.zarr"

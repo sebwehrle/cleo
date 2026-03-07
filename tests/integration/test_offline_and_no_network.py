@@ -60,9 +60,9 @@ def test_atlas_init_does_not_modify_root_logger(tmp_path, monkeypatch):
     handlers_after = list(root_logger.handlers)
     handler_ids_after = {id(h) for h in handlers_after}
 
-    assert (
-        handler_ids_before == handler_ids_after
-    ), f"Root logger handlers changed. Before: {len(handlers_before)}, After: {len(handlers_after)}"
+    assert handler_ids_before == handler_ids_after, (
+        f"Root logger handlers changed. Before: {len(handlers_before)}, After: {len(handlers_after)}"
+    )
 
 
 def test_atlas_build_deferred(tmp_path, monkeypatch):

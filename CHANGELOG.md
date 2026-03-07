@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Normalize test-suite formatting so Ruff format checks pass in CI
+- Pin Ruff to `0.15.2` in dev dependencies and CI so local and GitHub formatting checks use the same version
 
 ### Security
 - Added secret scanning to CI workflow via `detect-secrets`

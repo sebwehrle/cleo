@@ -193,9 +193,9 @@ def test_download_copdem_tiles_for_bbox(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert len(calls) == 3, f"Expected 3 calls, got {len(calls)}"
 
     actual_tile_ids = [call[1] for call in calls]
-    assert (
-        actual_tile_ids == expected_tile_ids
-    ), f"Tile IDs mismatch:\nExpected: {expected_tile_ids}\nGot: {actual_tile_ids}"
+    assert actual_tile_ids == expected_tile_ids, (
+        f"Tile IDs mismatch:\nExpected: {expected_tile_ids}\nGot: {actual_tile_ids}"
+    )
 
     for iso3_arg, _, overwrite_arg in calls:
         assert iso3_arg == iso3

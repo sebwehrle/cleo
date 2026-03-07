@@ -285,12 +285,12 @@ class TestMaterializeLandscapeCopdemPath:
         sources = json.loads(sources_json)
         source_ids = [s["source_id"] for s in sources]
 
-        assert (
-            "elevation:local" in source_ids
-        ), f"manifest should use elevation:local when local file exists, got: {source_ids}"
-        assert (
-            "elevation:copdem" not in source_ids
-        ), "manifest should NOT include elevation:copdem when local file exists"
+        assert "elevation:local" in source_ids, (
+            f"manifest should use elevation:local when local file exists, got: {source_ids}"
+        )
+        assert "elevation:copdem" not in source_ids, (
+            "manifest should NOT include elevation:copdem when local file exists"
+        )
 
     def test_copdem_metadata_in_manifest(self, tmp_path: Path) -> None:
         """CopDEM metadata (provider, version, tile_ids) is recorded in manifest."""

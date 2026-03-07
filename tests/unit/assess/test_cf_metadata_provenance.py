@@ -63,7 +63,7 @@ class TestCFMetadataProvenance:
         """CF output carries cleo:loss_factor attr."""
         result = capacity_factors_v1(
             **minimal_cf_inputs,
-            mode="direct_cf_quadrature",
+            method="rotor_node_average",
             loss_factor=0.95,
         )
 
@@ -74,7 +74,7 @@ class TestCFMetadataProvenance:
         """CF output carries cleo:loss_factor=1.0 when not specified."""
         result = capacity_factors_v1(
             **minimal_cf_inputs,
-            mode="direct_cf_quadrature",
+            method="rotor_node_average",
         )
 
         assert "cleo:loss_factor" in result.attrs
@@ -84,21 +84,21 @@ class TestCFMetadataProvenance:
         """CF output carries cleo:turbines_json attr."""
         result = capacity_factors_v1(
             **minimal_cf_inputs,
-            mode="direct_cf_quadrature",
+            method="rotor_node_average",
         )
 
         assert "cleo:turbines_json" in result.attrs
         turbines = json.loads(result.attrs["cleo:turbines_json"])
         assert turbines == ["T1", "T2"]
 
-    def test_cf_algo_version_is_3(self, minimal_cf_inputs):
-        """CF output algo_version is 3 (v3 added loss_factor and turbines_json)."""
+    def test_cf_algo_version_is_4(self, minimal_cf_inputs):
+        """CF output algo_version is 4 (v4 stores method/interpolation metadata)."""
         result = capacity_factors_v1(
             **minimal_cf_inputs,
-            mode="direct_cf_quadrature",
+            method="rotor_node_average",
         )
 
-        assert result.attrs["cleo:algo_version"] == "3"
+        assert result.attrs["cleo:algo_version"] == "4"
 
 
 class TestLCOECFSpecMetadata:
@@ -116,7 +116,8 @@ class TestLCOECFSpecMetadata:
             dims=("turbine", "y", "x"),
             coords={"turbine": list(turbine_ids), "y": y, "x": x},
         )
-        cf.attrs["cleo:cf_mode"] = "hub"
+        cf.attrs["cleo:cf_method"] = "hub_height_weibull"
+        cf.attrs["cleo:interpolation"] = "ak_logz"
         cf.attrs["cleo:air_density"] = 0
         cf.attrs["cleo:rews_n"] = 12
         cf.attrs["cleo:loss_factor"] = 0.95
@@ -136,7 +137,8 @@ class TestLCOECFSpecMetadata:
 
         assert "cleo:cf_spec_json" in result.attrs
         cf_spec = json.loads(result.attrs["cleo:cf_spec_json"])
-        assert cf_spec["mode"] == "hub"
+        assert cf_spec["method"] == "hub_height_weibull"
+        assert cf_spec["interpolation"] == "ak_logz"
         assert cf_spec["air_density"] is False
         assert cf_spec["rews_n"] == 12
         assert cf_spec["loss_factor"] == 0.95
@@ -152,7 +154,8 @@ class TestLCOECFSpecMetadata:
             dims=("turbine", "y", "x"),
             coords={"turbine": list(turbine_ids), "y": y, "x": x},
         )
-        cf.attrs["cleo:cf_mode"] = "hub"
+        cf.attrs["cleo:cf_method"] = "hub_height_weibull"
+        cf.attrs["cleo:interpolation"] = "ak_logz"
 
         result = lcoe_v1_from_capacity_factors(
             cf=cf,

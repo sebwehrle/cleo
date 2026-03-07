@@ -204,7 +204,9 @@ def convert_dataset_variable(
 # None means the variable is dimensionless or unit is not applicable.
 CANONICAL_UNITS: dict[str, str | None] = {
     # Wind metrics
+    "wind_speed": "m/s",
     "mean_wind_speed": "m/s",
+    "rotor_equivalent_wind_speed": "m/s",
     "rews_mps": "m/s",
     "capacity_factors": "1",  # dimensionless fraction
     # Economics metrics
@@ -229,7 +231,6 @@ CANONICAL_UNITS: dict[str, str | None] = {
     "rho": "kg/m**3",  # air density
     # Power curve
     "power_curve": "1",  # dimensionless (capacity factor)
-    "wind_speed": "m/s",  # coordinate
 }
 
 

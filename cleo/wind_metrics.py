@@ -1,13 +1,14 @@
 # %% imports
+from dataclasses import dataclass
 import json
 import types
 import numpy as np
 import xarray as xr
 
 from cleo.assess import (
-    mean_wind_speed_from_weibull,
     capacity_factors_v1,
     rews_mps_v1,
+    resolve_capacity_factor_interpolation,
 )
 from cleo.economics import (
     lcoe_v1_from_capacity_factors,
@@ -15,6 +16,7 @@ from cleo.economics import (
     optimal_power_kw,
     optimal_energy_gwh_a,
 )
+from cleo.vertical import evaluate_weibull_at_heights
 
 
 def _extract_turbine_power_kw(
@@ -89,51 +91,434 @@ def _extract_overnight_cost_eur_per_kw(
     return np.array(cost_list, dtype=np.float64)
 
 
-def _wind_metric_mean_wind_speed(
+_CF_METHOD_DEFAULT = "rotor_node_average"
+_WIND_SPEED_METHOD_DEFAULT = "height_weibull_mean"
+_WIND_SPEED_METHOD_HEIGHT = "height_weibull_mean"
+_WIND_SPEED_METHOD_ROTOR = "rotor_equivalent"
+_WIND_SPEED_METHODS = frozenset({_WIND_SPEED_METHOD_HEIGHT, _WIND_SPEED_METHOD_ROTOR})
+_INTERPOLATIONS = frozenset({"auto", "ak_logz", "mu_cv_loglog"})
+
+
+@dataclass(frozen=True)
+class _ResolvedWindAssessmentInputs:
+    """Resolved store-backed inputs for wind assessment kernels.
+
+    :param A_stack: Weibull scale stack on ``(height, y, x)``.
+    :type A_stack: xarray.DataArray
+    :param k_stack: Weibull shape stack on ``(height, y, x)``.
+    :type k_stack: xarray.DataArray
+    :param turbines_meta: Decoded turbine metadata from ``cleo_turbines_json``.
+    :type turbines_meta: list[dict]
+    :param hub_heights_m: Hub heights in meters for the selected turbines.
+    :type hub_heights_m: numpy.ndarray
+    :param rotor_diameters_m: Rotor diameters in meters for the selected turbines,
+        when required by the caller.
+    :type rotor_diameters_m: numpy.ndarray | None
+    :param rho_stack: Optional air-density stack on ``(height, y, x)``.
+    :type rho_stack: xarray.DataArray | None
+    :param vertical_policy: Optional decoded vertical-policy overrides.
+    :type vertical_policy: dict | None
+    :param u_grid: Optional wind-speed integration grid.
+    :type u_grid: numpy.ndarray | None
+    :param power_curves: Optional selected turbine power curves.
+    :type power_curves: numpy.ndarray | None
+    """
+
+    A_stack: xr.DataArray
+    k_stack: xr.DataArray
+    turbines_meta: list[dict]
+    hub_heights_m: np.ndarray
+    rotor_diameters_m: np.ndarray | None
+    rho_stack: xr.DataArray | None
+    vertical_policy: dict | None
+    u_grid: np.ndarray | None = None
+    power_curves: np.ndarray | None = None
+
+
+def _require_land_valid_mask(land: xr.Dataset | None, *, metric_name: str) -> xr.DataArray:
+    """Return ``valid_mask`` for a wind metric or raise a metric-specific error.
+
+    :param land: Active landscape dataset.
+    :type land: xarray.Dataset | None
+    :param metric_name: Wind metric name used for error text.
+    :type metric_name: str
+    :returns: Valid-mask data array.
+    :rtype: xarray.DataArray
+    :raises ValueError: If the landscape store or ``valid_mask`` is missing.
+    """
+    if land is None or "valid_mask" not in land:
+        raise ValueError(f"landscape store with valid_mask required for {metric_name}")
+    return land["valid_mask"]
+
+
+def _resolve_weibull_stacks(wind: xr.Dataset) -> tuple[xr.DataArray, xr.DataArray]:
+    """Resolve canonical Weibull stacks from the active wind dataset.
+
+    :param wind: Active wind dataset.
+    :type wind: xarray.Dataset
+    :returns: Tuple ``(A_stack, k_stack)`` with ``height`` dimension.
+    :rtype: tuple[xarray.DataArray, xarray.DataArray]
+    :raises ValueError: If required Weibull variables are missing or malformed.
+    """
+    var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
+    var_k = "weibull_k"
+    if var_A not in wind or var_k not in wind:
+        raise ValueError(f"wind store must have {var_A} and {var_k}")
+    A_stack = wind[var_A]
+    if "height" not in A_stack.dims:
+        raise ValueError(f"{var_A} must have height dimension")
+    return A_stack, wind[var_k]
+
+
+def _load_turbines_meta(wind: xr.Dataset) -> list[dict]:
+    """Decode turbine metadata from the active wind store.
+
+    :param wind: Active wind dataset.
+    :type wind: xarray.Dataset
+    :returns: Turbine metadata list from ``cleo_turbines_json``.
+    :rtype: list[dict]
+    :raises ValueError: If required turbine metadata is missing.
+    """
+    if "cleo_turbines_json" not in wind.attrs:
+        raise ValueError("wind store must have cleo_turbines_json attr")
+    if "turbine" not in wind.coords:
+        raise ValueError("wind store must have turbine coordinate")
+    return json.loads(wind.attrs["cleo_turbines_json"])
+
+
+def _resolve_turbine_indices(turbines_meta: list[dict], turbines: tuple[str, ...]) -> list[int]:
+    """Resolve selected turbine IDs to store indices.
+
+    :param turbines_meta: Decoded turbine metadata.
+    :type turbines_meta: list[dict]
+    :param turbines: Requested turbine identifiers.
+    :type turbines: tuple[str, ...]
+    :returns: Indices into the active wind store turbine axis.
+    :rtype: list[int]
+    :raises ValueError: If any turbine ID is missing from the wind store.
+    """
+    turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
+    missing = [tid for tid in turbines if tid not in turbine_id_to_idx]
+    if missing:
+        raise ValueError(f"turbine {missing[0]!r} not in wind store")
+    return [turbine_id_to_idx[tid] for tid in turbines]
+
+
+def _resolve_rotor_diameters(
+    wind: xr.Dataset,
+    *,
+    turbines: tuple[str, ...],
+    turbines_meta: list[dict],
+    tidx: list[int],
+    metric_name: str,
+) -> np.ndarray:
+    """Resolve rotor diameters for selected turbines.
+
+    :param wind: Active wind dataset.
+    :type wind: xarray.Dataset
+    :param turbines: Requested turbine identifiers.
+    :type turbines: tuple[str, ...]
+    :param turbines_meta: Decoded turbine metadata.
+    :type turbines_meta: list[dict]
+    :param tidx: Selected turbine indices into the wind store.
+    :type tidx: list[int]
+    :param metric_name: Metric/method name used for error text.
+    :type metric_name: str
+    :returns: Rotor diameters in meters.
+    :rtype: numpy.ndarray
+    :raises ValueError: If rotor diameter metadata is unavailable.
+    """
+    if "turbine_rotor_diameter" in wind:
+        return wind["turbine_rotor_diameter"].isel(turbine=tidx).to_numpy()
+    if "rotor_diameter" in wind:
+        return wind["rotor_diameter"].isel(turbine=tidx).to_numpy()
+
+    turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
+    diameters: list[float] = []
+    for tid in turbines:
+        meta = turbines_meta[turbine_id_to_idx[tid]]
+        diameter = meta.get("rotor_diameter") or meta.get("rotor_diameter_m")
+        if diameter is None:
+            raise ValueError(
+                f"{metric_name} requires rotor_diameter for turbine {tid!r}; "
+                "not found in wind store or turbine metadata"
+            )
+        diameters.append(float(diameter))
+    return np.array(diameters, dtype=np.float64)
+
+
+def _load_vertical_policy(wind: xr.Dataset) -> dict | None:
+    """Decode optional vertical-policy metadata from the active wind store.
+
+    :param wind: Active wind dataset.
+    :type wind: xarray.Dataset
+    :returns: Decoded vertical policy or ``None`` when absent/invalid.
+    :rtype: dict | None
+    """
+    policy_json = wind.attrs.get("cleo_vertical_policy_json")
+    if not isinstance(policy_json, str) or not policy_json:
+        return None
+    try:
+        return json.loads(policy_json)
+    except json.JSONDecodeError:
+        return None
+
+
+def _resolve_wind_assessment_inputs(
+    wind: xr.Dataset,
+    *,
+    turbines: tuple[str, ...],
+    air_density: bool,
+    metric_name: str,
+    require_power_curve: bool,
+    require_rotor_diameter: bool,
+) -> _ResolvedWindAssessmentInputs:
+    """Resolve store-backed inputs shared by wind assessment orchestrators.
+
+    :param wind: Active wind dataset.
+    :type wind: xarray.Dataset
+    :param turbines: Requested turbine identifiers.
+    :type turbines: tuple[str, ...]
+    :param air_density: Whether density-aware inputs are required.
+    :type air_density: bool
+    :param metric_name: Metric/method label used for error text.
+    :type metric_name: str
+    :param require_power_curve: Whether power-curve data must be resolved.
+    :type require_power_curve: bool
+    :param require_rotor_diameter: Whether rotor diameters must be resolved.
+    :type require_rotor_diameter: bool
+    :returns: Resolved input bundle for the requested assessment path.
+    :rtype: _ResolvedWindAssessmentInputs
+    :raises ValueError: If required wind-store variables are missing.
+    """
+    A_stack, k_stack = _resolve_weibull_stacks(wind)
+    turbines_meta = _load_turbines_meta(wind)
+    tidx = _resolve_turbine_indices(turbines_meta, turbines)
+
+    if require_power_curve and "power_curve" not in wind:
+        raise ValueError("wind store must have power_curve variable")
+
+    rho_stack = None
+    if air_density:
+        if "rho" not in wind:
+            raise ValueError("air_density=True but wind store missing 'rho' variable")
+        rho_stack = wind["rho"]
+
+    power_curves = None
+    u_grid = None
+    if require_power_curve:
+        power_curves = wind["power_curve"].isel(turbine=tidx).to_numpy()
+        u_grid = wind.coords["wind_speed"].to_numpy()
+
+    rotor_diameters_m = None
+    if require_rotor_diameter:
+        rotor_diameters_m = _resolve_rotor_diameters(
+            wind,
+            turbines=turbines,
+            turbines_meta=turbines_meta,
+            tidx=tidx,
+            metric_name=metric_name,
+        )
+
+    return _ResolvedWindAssessmentInputs(
+        A_stack=A_stack,
+        k_stack=k_stack,
+        turbines_meta=turbines_meta,
+        hub_heights_m=wind["turbine_hub_height"].isel(turbine=tidx).to_numpy(),
+        rotor_diameters_m=rotor_diameters_m,
+        rho_stack=rho_stack,
+        vertical_policy=_load_vertical_policy(wind),
+        u_grid=u_grid,
+        power_curves=power_curves,
+    )
+
+
+def resolved_wind_output_name(*, metric: str, params: dict, data: xr.DataArray | None = None) -> str:
+    """Return the staged/materialized variable name for a public wind metric.
+
+    :param metric: Public metric key passed to ``compute(...)``.
+    :type metric: str
+    :param params: Metric parameters used for this result.
+    :type params: dict
+    :param data: Optional computed data array. When provided and named, its
+        variable name takes precedence.
+    :type data: xarray.DataArray | None
+    :returns: Output variable name to use in ``atlas.wind.data`` and stores.
+    :rtype: str
+    """
+    if data is not None and data.name:
+        return str(data.name)
+    if metric != "wind_speed":
+        return metric
+    method = str(params.get("method", _WIND_SPEED_METHOD_DEFAULT))
+    if method == _WIND_SPEED_METHOD_ROTOR:
+        return "rotor_equivalent_wind_speed"
+    return "mean_wind_speed"
+
+
+def _normalize_cf_method_options(
+    *,
+    method: str = _CF_METHOD_DEFAULT,
+    interpolation: str = "auto",
+    air_density: bool = False,
+    rews_n: int = 12,
+    loss_factor: float = 1.0,
+) -> dict[str, object]:
+    """Normalize public capacity-factor method options to canonical internal form."""
+    resolved_interpolation = resolve_capacity_factor_interpolation(method=method, interpolation=interpolation)
+    normalized_rews_n = int(rews_n)
+    if method == "hub_height_weibull":
+        normalized_rews_n = 12
+    return {
+        "method": method,
+        "interpolation": resolved_interpolation,
+        "air_density": bool(air_density),
+        "rews_n": normalized_rews_n,
+        "loss_factor": float(loss_factor),
+    }
+
+
+def _normalize_wind_speed_options(
+    *,
+    method: str = _WIND_SPEED_METHOD_DEFAULT,
+    interpolation: str = "auto",
+    air_density: bool = False,
+    rews_n: int = 12,
+) -> dict[str, object]:
+    """Normalize public wind-speed method options to canonical internal form.
+
+    :param method: Public wind-speed method name.
+    :type method: str
+    :param interpolation: Public interpolation selector.
+    :type interpolation: str
+    :param air_density: Whether density-aware scaling is requested.
+    :type air_density: bool
+    :param rews_n: Rotor quadrature resolution for rotor-equivalent wind speed.
+    :type rews_n: int
+    :returns: Canonicalized wind-speed option dictionary.
+    :rtype: dict[str, object]
+    :raises ValueError: If ``method`` or ``interpolation`` is unsupported.
+    """
+    if method not in _WIND_SPEED_METHODS:
+        raise ValueError(f"Unknown wind_speed method {method!r}. Supported: {sorted(_WIND_SPEED_METHODS)!r}")
+    if interpolation not in _INTERPOLATIONS:
+        raise ValueError(f"Unknown interpolation {interpolation!r}. Supported: {sorted(_INTERPOLATIONS)!r}")
+
+    if method == _WIND_SPEED_METHOD_ROTOR:
+        resolved_interpolation = "mu_cv_loglog" if interpolation == "auto" else interpolation
+    else:
+        resolved_interpolation = "ak_logz" if interpolation == "auto" else interpolation
+
+    return {
+        "method": method,
+        "interpolation": resolved_interpolation,
+        "air_density": bool(air_density),
+        "rews_n": int(rews_n),
+    }
+
+
+def _wind_metric_height_weibull_mean(
     wind: xr.Dataset,
     land: xr.Dataset | None,
     *,
-    height: int,
+    height: int | float,
+    interpolation: str = "auto",
 ) -> xr.DataArray:
-    """Compute mean wind speed from canonical wind Weibull parameters.
-
-    :param wind: Canonical wind dataset with ``weibull_A``/``weibull_k`` and
-        a ``height`` coordinate in meters.
-    :type wind: xarray.Dataset
-    :param land: Optional landscape dataset. When provided with
-        ``valid_mask(y,x)``, invalid pixels are masked to ``NaN``.
-    :type land: xarray.Dataset | None
-    :param height: Query height in meters above ground.
-    :type height: int
-    :returns: Mean wind speed data array with dims ``("height", "y", "x")``.
-        The returned ``height`` axis is a singleton containing the requested
-        level, preserving explicit height semantics for downstream aggregation.
-    :rtype: xarray.DataArray
-    :raises ValueError: If requested height is not available in wind-store
-        Weibull parameter coordinates.
-    """
-    # Get weibull params (canonical store uses weibull_A)
+    """Compute height-specific mean wind speed via the unified vertical evaluator."""
     var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
     var_k = "weibull_k"
-
     A = wind[var_A]
     k = wind[var_k]
 
-    # Validate height exists
-    if "height" not in A.coords:
-        raise ValueError(f"No height dimension in wind store {var_A}")
-    available = [int(h) for h in A.coords["height"].values]
-    if height not in available:
-        raise ValueError(f"height={height} not in wind store; available: {sorted(available)}")
+    options = _normalize_wind_speed_options(method=_WIND_SPEED_METHOD_HEIGHT, interpolation=interpolation)
+    resolved_interpolation = str(options["interpolation"])
+    query_height = float(height)
+    if resolved_interpolation == "ak_logz":
+        heights = np.asarray(A.coords["height"].values, dtype=np.float64)
+        h_min = float(np.min(heights))
+        h_max = float(np.max(heights))
+        if query_height < h_min or query_height > h_max:
+            raise ValueError(
+                f"target_height={query_height} is outside available height range [{h_min}, {h_max}]. "
+                "Extrapolation is not supported."
+            )
 
-    # Keep height as an explicit singleton axis for downstream aggregation.
-    da = mean_wind_speed_from_weibull(A=A.sel(height=[height]), k=k.sel(height=[height]))
+    mu_q, _k_q, _A_q, _A_prime_q = evaluate_weibull_at_heights(
+        A,
+        k,
+        query_heights_m=np.array([query_height], dtype=np.float64),
+        policy=None,
+        interpolation=resolved_interpolation,
+    )
+    da = (
+        mu_q.rename("mean_wind_speed")
+        .assign_coords(height=("query_height", mu_q.coords["query_height"].values))
+        .swap_dims({"query_height": "height"})
+        .drop_vars("query_height")
+    )
 
-    # Apply valid_mask if available
+    da = da.rename("mean_wind_speed")
+    da.attrs["units"] = "m/s"
+    da.attrs["cleo:wind_speed_method"] = _WIND_SPEED_METHOD_HEIGHT
+    da.attrs["cleo:interpolation"] = resolved_interpolation
+
     if land is not None and "valid_mask" in land:
         da = da.where(land["valid_mask"])
 
     return da
+
+
+def _wind_metric_wind_speed(
+    wind: xr.Dataset,
+    land: xr.Dataset | None,
+    *,
+    method: str = _WIND_SPEED_METHOD_DEFAULT,
+    interpolation: str = "auto",
+    height: int | float | None = None,
+    turbines: tuple[str, ...] | None = None,
+    air_density: bool = False,
+    rews_n: int = 12,
+) -> xr.DataArray:
+    """Compute public ``wind_speed`` metric via method-dependent semantics."""
+    options = _normalize_wind_speed_options(
+        method=method,
+        interpolation=interpolation,
+        air_density=air_density,
+        rews_n=rews_n,
+    )
+    resolved_interpolation = str(options["interpolation"])
+
+    if method == _WIND_SPEED_METHOD_HEIGHT:
+        if height is None:
+            raise ValueError("wind_speed(method='height_weibull_mean') requires height=...")
+        if turbines is not None:
+            raise ValueError("wind_speed(method='height_weibull_mean') does not accept turbines=...")
+        if air_density:
+            raise ValueError("wind_speed(method='height_weibull_mean') does not accept air_density=True")
+        return _wind_metric_height_weibull_mean(
+            wind,
+            land,
+            height=height,
+            interpolation=resolved_interpolation,
+        )
+
+    if height is not None:
+        raise ValueError("wind_speed(method='rotor_equivalent') does not accept height=...")
+    if turbines is None:
+        raise ValueError("wind_speed(method='rotor_equivalent') requires turbines=... or atlas.wind.select(...)")
+
+    out = _wind_metric_rews_mps(
+        wind,
+        land,
+        turbines=turbines,
+        air_density=bool(options["air_density"]),
+        rews_n=int(options["rews_n"]),
+        interpolation=resolved_interpolation,
+    )
+    out = out.rename("rotor_equivalent_wind_speed")
+    out.attrs["cleo:wind_speed_method"] = method
+    out.attrs["cleo:interpolation"] = resolved_interpolation
+    return out
 
 
 def _wind_metric_capacity_factors(
@@ -141,9 +526,10 @@ def _wind_metric_capacity_factors(
     land: xr.Dataset | None,
     *,
     turbines: tuple[str, ...],
+    method: str = _CF_METHOD_DEFAULT,
+    interpolation: str = "auto",
     air_density: bool = False,
     loss_factor: float = 1.0,
-    mode: str = "direct_cf_quadrature",
     rews_n: int = 12,
 ) -> xr.DataArray:
     """
@@ -153,114 +539,54 @@ def _wind_metric_capacity_factors(
         wind: Canonical wind dataset (must have weibull_A, weibull_k, power_curve).
         land: Canonical landscape dataset (must have valid_mask).
         turbines: Tuple of turbine IDs to compute.
+        method: Public capacity-factor method family name.
+        interpolation: Public interpolation selector.
         air_density: If True, apply air density correction using rho.
         loss_factor: Loss correction factor (default 1.0).
-        mode: "direct_cf_quadrature" (default), "momentmatch_weibull",
-            "hub", or legacy "rews".
         rews_n: Number of quadrature points for REWS integration.
 
     Returns:
         DataArray with capacity factors, dims (turbine, y, x).
     """
-    # Validate inputs
-    if land is None or "valid_mask" not in land:
-        raise ValueError("landscape store with valid_mask required for capacity_factors")
-
-    var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
-    var_k = "weibull_k"
-
-    if var_A not in wind or var_k not in wind:
-        raise ValueError(f"wind store must have {var_A} and {var_k}")
-    if "power_curve" not in wind:
-        raise ValueError("wind store must have power_curve variable")
-    if "turbine" not in wind.coords:
-        raise ValueError("wind store must have turbine coordinate")
-
-    # Get Weibull stacks
-    A_stack = wind[var_A]
-    k_stack = wind[var_k]
-
-    if "height" not in A_stack.dims:
-        raise ValueError(f"{var_A} must have height dimension")
-
-    # Get wind speed grid
-    u_grid = wind.coords["wind_speed"].to_numpy()
-
-    # Build turbine ID to index mapping from cleo_turbines_json attr
-    if "cleo_turbines_json" not in wind.attrs:
-        raise ValueError("wind store must have cleo_turbines_json attr")
-    turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
-    turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
-
-    # Validate turbines exist
-    available_turbines = set(turbine_id_to_idx.keys())
-    for tid in turbines:
-        if tid not in available_turbines:
-            raise ValueError(f"turbine {tid!r} not in wind store")
-
-    # Get turbine indices
-    tidx = [turbine_id_to_idx[tid] for tid in turbines]
-
-    # Gather turbine parameters (small arrays OK to load eagerly)
-    hub_heights_m = wind["turbine_hub_height"].isel(turbine=tidx).to_numpy()
-    power_curves = wind["power_curve"].isel(turbine=tidx).to_numpy()
-
-    # Air density: get rho_stack if needed
-    rho_stack = None
-    if air_density:
-        if "rho" not in wind:
-            raise ValueError("air_density=True but wind store missing 'rho' variable")
-        rho_stack = wind["rho"]
-
-    # Rotor diameters required for rotor-aware modes.
-    rotor_diameters_m = None
-    if mode in ("rews", "direct_cf_quadrature", "momentmatch_weibull"):
-        # Try wind var first
-        if "turbine_rotor_diameter" in wind:
-            rotor_diameters_m = wind["turbine_rotor_diameter"].isel(turbine=tidx).to_numpy()
-        elif "rotor_diameter" in wind:
-            rotor_diameters_m = wind["rotor_diameter"].isel(turbine=tidx).to_numpy()
-        else:
-            # Try attrs turbines meta
-            diameters = []
-            for tid in turbines:
-                meta = turbines_meta[turbine_id_to_idx[tid]]
-                d = meta.get("rotor_diameter") or meta.get("rotor_diameter_m")
-                if d is None:
-                    raise ValueError(
-                        f"mode={mode!r} requires rotor_diameter for turbine {tid!r}; "
-                        "not found in wind store or turbine metadata"
-                    )
-                diameters.append(float(d))
-            rotor_diameters_m = np.array(diameters, dtype=np.float64)
-
-    vertical_policy = None
-    policy_json = wind.attrs.get("cleo_vertical_policy_json")
-    if isinstance(policy_json, str) and policy_json:
-        try:
-            vertical_policy = json.loads(policy_json)
-        except json.JSONDecodeError:
-            vertical_policy = None
+    valid_mask = _require_land_valid_mask(land, metric_name="capacity_factors")
+    options = _normalize_cf_method_options(
+        method=method,
+        interpolation=interpolation,
+        air_density=air_density,
+        rews_n=rews_n,
+        loss_factor=loss_factor,
+    )
+    resolved_method = str(options["method"])
+    resolved_interpolation = str(options["interpolation"])
+    inputs = _resolve_wind_assessment_inputs(
+        wind,
+        turbines=turbines,
+        air_density=bool(options["air_density"]),
+        metric_name=f"method={resolved_method!r}",
+        require_power_curve=True,
+        require_rotor_diameter=resolved_method != "hub_height_weibull",
+    )
 
     # Call pure numerics function
     result = capacity_factors_v1(
-        A_stack=A_stack,
-        k_stack=k_stack,
-        u_grid=u_grid,
+        A_stack=inputs.A_stack,
+        k_stack=inputs.k_stack,
+        u_grid=inputs.u_grid,
         turbine_ids=turbines,
-        hub_heights_m=hub_heights_m,
-        power_curves=power_curves,
-        mode=mode,
-        rotor_diameters_m=rotor_diameters_m,
-        rho_stack=rho_stack,
-        air_density=air_density,
-        loss_factor=loss_factor,
-        rews_n=rews_n,
-        vertical_policy=vertical_policy,
+        hub_heights_m=inputs.hub_heights_m,
+        power_curves=inputs.power_curves,
+        method=resolved_method,
+        rotor_diameters_m=inputs.rotor_diameters_m,
+        rho_stack=inputs.rho_stack,
+        air_density=bool(options["air_density"]),
+        loss_factor=float(options["loss_factor"]),
+        rews_n=int(options["rews_n"]),
+        interpolation=resolved_interpolation,
+        vertical_policy=inputs.vertical_policy,
     )
 
     # Apply valid_mask AFTER assess call
-    result = result.where(land["valid_mask"])
+    result = result.where(valid_mask)
 
     return result
 
@@ -272,70 +598,50 @@ def _wind_metric_rews_mps(
     turbines: tuple[str, ...],
     air_density: bool = False,
     rews_n: int = 12,
+    interpolation: str = "auto",
 ) -> xr.DataArray:
-    """Compute first-class REWS output (m/s), dims ``(turbine, y, x)``."""
-    if land is None or "valid_mask" not in land:
-        raise ValueError("landscape store with valid_mask required for rews_mps")
-    if "cleo_turbines_json" not in wind.attrs:
-        raise ValueError("wind store must have cleo_turbines_json attr")
+    """Compute first-class rotor-equivalent wind speed.
 
-    var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
-    var_k = "weibull_k"
-    if var_A not in wind or var_k not in wind:
-        raise ValueError(f"wind store must have {var_A} and {var_k}")
-    if "turbine" not in wind.coords:
-        raise ValueError("wind store must have turbine coordinate")
-
-    turbines_meta = json.loads(wind.attrs["cleo_turbines_json"])
-    turbine_id_to_idx = {t["id"]: i for i, t in enumerate(turbines_meta)}
-    for tid in turbines:
-        if tid not in turbine_id_to_idx:
-            raise ValueError(f"turbine {tid!r} not in wind store")
-    tidx = [turbine_id_to_idx[tid] for tid in turbines]
-
-    hub_heights_m = wind["turbine_hub_height"].isel(turbine=tidx).to_numpy()
-    if "turbine_rotor_diameter" in wind:
-        rotor_diameters_m = wind["turbine_rotor_diameter"].isel(turbine=tidx).to_numpy()
-    elif "rotor_diameter" in wind:
-        rotor_diameters_m = wind["rotor_diameter"].isel(turbine=tidx).to_numpy()
-    else:
-        diameters = []
-        for tid in turbines:
-            meta = turbines_meta[turbine_id_to_idx[tid]]
-            d = meta.get("rotor_diameter") or meta.get("rotor_diameter_m")
-            if d is None:
-                raise ValueError(
-                    f"rews_mps requires rotor_diameter for turbine {tid!r}; not found in wind store or turbine metadata"
-                )
-            diameters.append(float(d))
-        rotor_diameters_m = np.array(diameters, dtype=np.float64)
-
-    rho_stack = None
-    if air_density:
-        if "rho" not in wind:
-            raise ValueError("air_density=True but wind store missing 'rho' variable")
-        rho_stack = wind["rho"]
-
-    vertical_policy = None
-    policy_json = wind.attrs.get("cleo_vertical_policy_json")
-    if isinstance(policy_json, str) and policy_json:
-        try:
-            vertical_policy = json.loads(policy_json)
-        except json.JSONDecodeError:
-            vertical_policy = None
+    :param wind: Active wind dataset.
+    :type wind: xarray.Dataset
+    :param land: Active landscape dataset containing ``valid_mask``.
+    :type land: xarray.Dataset | None
+    :param turbines: Selected turbine identifiers.
+    :type turbines: tuple[str, ...]
+    :param air_density: Whether to apply density-aware scaling.
+    :type air_density: bool
+    :param rews_n: Rotor quadrature resolution.
+    :type rews_n: int
+    :param interpolation: Interpolation selector. ``"auto"`` resolves to the
+        rotor-aware default backend.
+    :type interpolation: str
+    :returns: Rotor-equivalent wind speed with dims ``(turbine, y, x)``.
+    :rtype: xarray.DataArray
+    :raises ValueError: If required inputs are missing.
+    """
+    valid_mask = _require_land_valid_mask(land, metric_name="rews_mps")
+    inputs = _resolve_wind_assessment_inputs(
+        wind,
+        turbines=turbines,
+        air_density=air_density,
+        metric_name="rews_mps",
+        require_power_curve=False,
+        require_rotor_diameter=True,
+    )
 
     out = rews_mps_v1(
-        A_stack=wind[var_A],
-        k_stack=wind[var_k],
+        A_stack=inputs.A_stack,
+        k_stack=inputs.k_stack,
         turbine_ids=turbines,
-        hub_heights_m=hub_heights_m,
-        rotor_diameters_m=rotor_diameters_m,
-        rho_stack=rho_stack,
+        hub_heights_m=inputs.hub_heights_m,
+        rotor_diameters_m=inputs.rotor_diameters_m,
+        rho_stack=inputs.rho_stack,
         air_density=air_density,
         rews_n=rews_n,
-        vertical_policy=vertical_policy,
+        interpolation=interpolation,
+        vertical_policy=inputs.vertical_policy,
     )
-    return out.where(land["valid_mask"])
+    return out.where(valid_mask)
 
 
 def _wind_metric_lcoe(
@@ -343,8 +649,9 @@ def _wind_metric_lcoe(
     land: xr.Dataset | None,
     *,
     turbines: tuple[str, ...],
-    mode: str = "hub",
-    rews_n: int = 9,
+    method: str = _CF_METHOD_DEFAULT,
+    interpolation: str = "auto",
+    rews_n: int = 12,
     air_density: bool = False,
     loss_factor: float = 1.0,
     bos_cost_share: float = 0.0,
@@ -390,7 +697,8 @@ def _wind_metric_lcoe(
             wind,
             land,
             turbines=turbines,
-            mode=mode,
+            method=method,
+            interpolation=interpolation,
             rews_n=rews_n,
             air_density=air_density,
             loss_factor=loss_factor,
@@ -425,8 +733,9 @@ def _wind_metric_min_lcoe_turbine(
     land: xr.Dataset | None,
     *,
     turbines: tuple[str, ...],
-    mode: str = "hub",
-    rews_n: int = 9,
+    method: str = _CF_METHOD_DEFAULT,
+    interpolation: str = "auto",
+    rews_n: int = 12,
     air_density: bool = False,
     loss_factor: float = 1.0,
     bos_cost_share: float = 0.0,
@@ -447,7 +756,8 @@ def _wind_metric_min_lcoe_turbine(
         wind,
         land,
         turbines=turbines,
-        mode=mode,
+        method=method,
+        interpolation=interpolation,
         rews_n=rews_n,
         air_density=air_density,
         loss_factor=loss_factor,
@@ -473,8 +783,9 @@ def _wind_metric_optimal_power(
     land: xr.Dataset | None,
     *,
     turbines: tuple[str, ...],
-    mode: str = "hub",
-    rews_n: int = 9,
+    method: str = _CF_METHOD_DEFAULT,
+    interpolation: str = "auto",
+    rews_n: int = 12,
     air_density: bool = False,
     loss_factor: float = 1.0,
     bos_cost_share: float = 0.0,
@@ -495,7 +806,8 @@ def _wind_metric_optimal_power(
         wind,
         land,
         turbines=turbines,
-        mode=mode,
+        method=method,
+        interpolation=interpolation,
         rews_n=rews_n,
         air_density=air_density,
         loss_factor=loss_factor,
@@ -523,8 +835,9 @@ def _wind_metric_optimal_energy(
     land: xr.Dataset | None,
     *,
     turbines: tuple[str, ...],
-    mode: str = "hub",
-    rews_n: int = 9,
+    method: str = _CF_METHOD_DEFAULT,
+    interpolation: str = "auto",
+    rews_n: int = 12,
     air_density: bool = False,
     loss_factor: float = 1.0,
     bos_cost_share: float = 0.0,
@@ -566,7 +879,8 @@ def _wind_metric_optimal_energy(
             wind,
             land,
             turbines=turbines,
-            mode=mode,
+            method=method,
+            interpolation=interpolation,
             rews_n=rews_n,
             air_density=air_density,
             loss_factor=loss_factor,
@@ -605,23 +919,17 @@ def _wind_metric_optimal_energy(
 
 # Wind metrics registry
 _WIND_METRICS = {
-    "mean_wind_speed": {
-        "fn": _wind_metric_mean_wind_speed,
+    "wind_speed": {
+        "fn": _wind_metric_wind_speed,
         "requires_turbines": False,
-        "required": {"height"},
-        "allowed": {"height"},
+        "required": set(),
+        "allowed": {"method", "interpolation", "height", "turbines", "air_density", "rews_n"},
     },
     "capacity_factors": {
         "fn": _wind_metric_capacity_factors,
         "requires_turbines": True,
         "required": set(),
-        "allowed": {"turbines", "air_density", "loss_factor", "mode", "rews_n"},
-    },
-    "rews_mps": {
-        "fn": _wind_metric_rews_mps,
-        "requires_turbines": True,
-        "required": set(),
-        "allowed": {"turbines", "air_density", "rews_n"},
+        "allowed": {"turbines", "method", "interpolation", "air_density", "loss_factor", "rews_n"},
     },
     "lcoe": {
         "fn": _wind_metric_lcoe,
@@ -676,7 +984,8 @@ _WIND_METRICS = {
 
 # CF spec defaults for composed metrics
 _CF_SPEC_DEFAULTS = {
-    "mode": "direct_cf_quadrature",
+    "method": _CF_METHOD_DEFAULT,
+    "interpolation": "auto",
     "air_density": False,
     "rews_n": 12,
     "loss_factor": 1.0,
@@ -693,7 +1002,7 @@ _REQUIRED_ECONOMICS_FIELDS = frozenset(
 )
 
 # Flat kwargs that are rejected for composed metrics (must use grouped specs)
-_FLAT_CF_KWARGS = frozenset({"mode", "air_density", "loss_factor", "rews_n"})
+_FLAT_CF_KWARGS = frozenset({"method", "interpolation", "air_density", "loss_factor", "rews_n"})
 _FLAT_ECONOMICS_KWARGS = frozenset(
     {
         "discount_rate",
@@ -764,7 +1073,8 @@ def resolve_cf_spec(cf: dict | None) -> dict:
 
     Returns:
         Complete CF spec dict with all required keys:
-        - mode: str (default "direct_cf_quadrature")
+        - method: str (default "rotor_node_average")
+        - interpolation: str (default "mu_cv_loglog" after auto resolution)
         - air_density: bool (default False)
         - rews_n: int (default 12)
         - loss_factor: float (default 1.0)
@@ -772,7 +1082,13 @@ def resolve_cf_spec(cf: dict | None) -> dict:
     result = dict(_CF_SPEC_DEFAULTS)
     if cf is not None:
         result.update(cf)
-    return result
+    return _normalize_cf_method_options(
+        method=str(result["method"]),
+        interpolation=str(result["interpolation"]),
+        air_density=bool(result["air_density"]),
+        rews_n=int(result["rews_n"]),
+        loss_factor=float(result["loss_factor"]),
+    )
 
 
 def required_economics_fields() -> frozenset[str]:
@@ -792,7 +1108,7 @@ def flat_cf_kwargs() -> frozenset[str]:
     metrics (lcoe, min_lcoe_turbine, optimal_power, optimal_energy).
 
     Returns:
-        Frozenset containing: mode, air_density, loss_factor, rews_n.
+        Frozenset containing: method, interpolation, air_density, loss_factor, rews_n.
     """
     return _FLAT_CF_KWARGS
 

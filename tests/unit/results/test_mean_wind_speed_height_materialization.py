@@ -1,4 +1,4 @@
-"""Tests for height-aware mean_wind_speed materialization semantics."""
+"""Tests for height-aware wind_speed materialization semantics."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def _seed_wind_store(path: Path, *, include_legacy_mean_wind_speed: bool = False
 
 
 def _mean_ws_result(*, domain: _DomainDouble, height: int, value: float) -> DomainResult:
-    """Build a DomainResult for a singleton-height mean_wind_speed slice.
+    """Build a DomainResult for a singleton-height wind_speed slice.
 
     :param domain: Wind-domain double.
     :type domain: _DomainDouble
@@ -80,7 +80,7 @@ def _mean_ws_result(*, domain: _DomainDouble, height: int, value: float) -> Doma
     :type height: int
     :param value: Constant fill value for the test slice.
     :type value: float
-    :returns: DomainResult configured for ``mean_wind_speed``.
+    :returns: DomainResult configured for ``wind_speed``.
     :rtype: cleo.results.DomainResult
     """
     da = xr.DataArray(
@@ -90,11 +90,13 @@ def _mean_ws_result(*, domain: _DomainDouble, height: int, value: float) -> Doma
         name="mean_wind_speed",
         attrs={"units": "m/s"},
     )
-    return DomainResult(domain, "mean_wind_speed", da, {"height": height})
+    return DomainResult(
+        domain, "wind_speed", da, {"height": height, "method": "height_weibull_mean"}, variable_name="mean_wind_speed"
+    )
 
 
-def test_materialize_mean_wind_speed_keeps_height_dimension(tmp_path: Path) -> None:
-    """First materialization writes ``mean_wind_speed(height,y,x)`` with singleton data slice."""
+def test_materialize_wind_speed_keeps_height_dimension(tmp_path: Path) -> None:
+    """First materialization writes ``wind_speed(height,y,x)`` with singleton data slice."""
     store_path = tmp_path / "wind.zarr"
     _seed_wind_store(store_path)
     domain = _DomainDouble(SimpleNamespace(_active_wind_store_path=lambda: store_path))
@@ -113,7 +115,7 @@ def test_materialize_mean_wind_speed_keeps_height_dimension(tmp_path: Path) -> N
         ds.close()
 
 
-def test_materialize_mean_wind_speed_aggregates_multiple_heights(tmp_path: Path) -> None:
+def test_materialize_wind_speed_aggregates_multiple_heights(tmp_path: Path) -> None:
     """Materializing different heights accumulates values in one variable."""
     store_path = tmp_path / "wind.zarr"
     _seed_wind_store(store_path)
@@ -131,7 +133,7 @@ def test_materialize_mean_wind_speed_aggregates_multiple_heights(tmp_path: Path)
         ds.close()
 
 
-def test_materialize_mean_wind_speed_overwrite_false_blocks_existing_height(tmp_path: Path) -> None:
+def test_materialize_wind_speed_overwrite_false_blocks_existing_height(tmp_path: Path) -> None:
     """``overwrite=False`` rejects writes when requested height already has data."""
     store_path = tmp_path / "wind.zarr"
     _seed_wind_store(store_path)
@@ -143,7 +145,7 @@ def test_materialize_mean_wind_speed_overwrite_false_blocks_existing_height(tmp_
         _mean_ws_result(domain=domain, height=100, value=9.0).materialize(overwrite=False)
 
 
-def test_materialize_mean_wind_speed_fails_on_legacy_2d_store(tmp_path: Path) -> None:
+def test_materialize_wind_speed_fails_on_legacy_2d_store(tmp_path: Path) -> None:
     """Legacy ``mean_wind_speed(y,x)`` in existing stores fails materialization."""
     store_path = tmp_path / "wind.zarr"
     _seed_wind_store(store_path, include_legacy_mean_wind_speed=True)

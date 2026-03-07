@@ -637,7 +637,6 @@ def compute_air_density_correction(
     # 7) Call pure compute function
     result = compute_air_density_correction_core(
         elevation=elevation,
-        template=template,
     )
 
     return result

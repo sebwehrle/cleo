@@ -33,7 +33,7 @@ def _make_stacks() -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
     return A, k, rho
 
 
-def test_capacity_factors_direct_cf_quadrature_runs() -> None:
+def test_capacity_factors_rotor_node_average_runs() -> None:
     A, k, rho = _make_stacks()
     u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
     power_curves = np.array([np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0)], dtype=np.float64)
@@ -44,14 +44,14 @@ def test_capacity_factors_direct_cf_quadrature_runs() -> None:
         turbine_ids=("T1",),
         hub_heights_m=np.array([120.0], dtype=np.float64),
         power_curves=power_curves,
-        mode="direct_cf_quadrature",
+        method="rotor_node_average",
         rotor_diameters_m=np.array([220.0], dtype=np.float64),
         rho_stack=rho,
         air_density=True,
         rews_n=6,
     )
     assert out.name == "capacity_factors"
-    assert out.attrs["cleo:cf_mode"] == "direct_cf_quadrature"
+    assert out.attrs["cleo:cf_method"] == "rotor_node_average"
     assert np.all(np.isfinite(out.values))
 
 
@@ -72,7 +72,7 @@ def test_rews_mps_v1_runs_and_returns_units() -> None:
     assert np.all(np.isfinite(out.values))
 
 
-def test_capacity_factors_momentmatch_weibull_runs() -> None:
+def test_capacity_factors_rotor_moment_matched_weibull_runs() -> None:
     A, k, rho = _make_stacks()
     u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
     power_curves = np.array([np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0)], dtype=np.float64)
@@ -83,14 +83,14 @@ def test_capacity_factors_momentmatch_weibull_runs() -> None:
         turbine_ids=("T1",),
         hub_heights_m=np.array([120.0], dtype=np.float64),
         power_curves=power_curves,
-        mode="momentmatch_weibull",
+        method="rotor_moment_matched_weibull",
         rotor_diameters_m=np.array([220.0], dtype=np.float64),
         rho_stack=rho,
         air_density=True,
         rews_n=6,
     )
     assert out.name == "capacity_factors"
-    assert out.attrs["cleo:cf_mode"] == "momentmatch_weibull"
+    assert out.attrs["cleo:cf_method"] == "rotor_moment_matched_weibull"
     assert np.all(np.isfinite(out.values))
 
 
@@ -110,7 +110,7 @@ def test_capacity_factors_momentmatch_vs_direct_close_on_constant_profile() -> N
         air_density=True,
         rews_n=12,
     )
-    direct = capacity_factors_v1(mode="direct_cf_quadrature", **kwargs)
-    mm = capacity_factors_v1(mode="momentmatch_weibull", **kwargs)
+    direct = capacity_factors_v1(method="rotor_node_average", **kwargs)
+    mm = capacity_factors_v1(method="rotor_moment_matched_weibull", **kwargs)
     diff = np.abs((direct - mm).values)
     assert float(np.nanmax(diff)) <= 0.02

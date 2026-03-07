@@ -207,13 +207,16 @@ def lcoe_v1_from_capacity_factors(
 
     out = xr.concat(lcoe_list, dim="turbine", coords="minimal").rename("lcoe")
     out.attrs["units"] = "EUR/MWh"
-    out.attrs["cleo:cf_mode"] = cf.attrs.get("cleo:cf_mode")
+    out.attrs["cleo:cf_method"] = cf.attrs.get("cleo:cf_method")
+    if "cleo:interpolation" in cf.attrs:
+        out.attrs["cleo:interpolation"] = cf.attrs["cleo:interpolation"]
     out.attrs["cleo:hours_per_year"] = float(hours_per_year)
     out.attrs["cleo:turbine_ids_json"] = _turbine_ids_json(turbine_ids)
     out.attrs["cleo:economics_json"] = _stable_json(economics_payload)
     # Build cf_spec_json from CF attrs for provenance
     cf_spec_payload = {
-        "mode": cf.attrs.get("cleo:cf_mode"),
+        "method": cf.attrs.get("cleo:cf_method"),
+        "interpolation": cf.attrs.get("cleo:interpolation"),
         "air_density": bool(cf.attrs.get("cleo:air_density", 0)),
         "rews_n": int(cf.attrs.get("cleo:rews_n", 12)),
         "loss_factor": float(cf.attrs.get("cleo:loss_factor", 1.0)),
@@ -267,7 +270,9 @@ def min_lcoe_turbine_idx(
     idx = xr.where(all_invalid, np.int32(-1), idx).astype(np.int32).rename("min_lcoe_turbine")
 
     idx.attrs["cleo:turbine_ids_json"] = _turbine_ids_json(turbine_ids)
-    idx.attrs["cleo:cf_mode"] = lcoe.attrs.get("cleo:cf_mode")
+    idx.attrs["cleo:cf_method"] = lcoe.attrs.get("cleo:cf_method")
+    if "cleo:interpolation" in lcoe.attrs:
+        idx.attrs["cleo:interpolation"] = lcoe.attrs["cleo:interpolation"]
     idx.attrs["cleo:hours_per_year"] = lcoe.attrs.get("cleo:hours_per_year")
     if "cleo:economics_json" in lcoe.attrs:
         idx.attrs["cleo:economics_json"] = lcoe.attrs["cleo:economics_json"]
@@ -302,7 +307,9 @@ def optimal_power_kw(
     p_sel = _select_turbine_by_index(values=p_da, idx=idx, name="optimal_power")
     p_sel = p_sel.where(~all_invalid)
     p_sel.attrs["units"] = "kW"
-    p_sel.attrs["cleo:cf_mode"] = lcoe.attrs.get("cleo:cf_mode")
+    p_sel.attrs["cleo:cf_method"] = lcoe.attrs.get("cleo:cf_method")
+    if "cleo:interpolation" in lcoe.attrs:
+        p_sel.attrs["cleo:interpolation"] = lcoe.attrs["cleo:interpolation"]
     p_sel.attrs["cleo:turbine_ids_json"] = _turbine_ids_json_from_lcoe(lcoe)
     p_sel.attrs["cleo:selection_basis"] = "min_lcoe_turbine_idx"
     if "cleo:economics_json" in lcoe.attrs:
@@ -348,7 +355,9 @@ def optimal_energy_gwh_a(
     energy = (cf_sel * p_sel_kw * float(hours_per_year) / 1e6).rename("optimal_energy")
     energy = energy.where(~all_invalid)
     energy.attrs["units"] = "GWh/a"
-    energy.attrs["cleo:cf_mode"] = lcoe.attrs.get("cleo:cf_mode")
+    energy.attrs["cleo:cf_method"] = lcoe.attrs.get("cleo:cf_method")
+    if "cleo:interpolation" in lcoe.attrs:
+        energy.attrs["cleo:interpolation"] = lcoe.attrs["cleo:interpolation"]
     energy.attrs["cleo:hours_per_year"] = float(hours_per_year)
     energy.attrs["cleo:turbine_ids_json"] = _turbine_ids_json_from_lcoe(lcoe)
     energy.attrs["cleo:selection_basis"] = "min_lcoe_turbine_idx"

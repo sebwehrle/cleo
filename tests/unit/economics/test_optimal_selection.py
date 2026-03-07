@@ -25,7 +25,7 @@ def _sample_lcoe() -> xr.DataArray:
         coords={"turbine": ["t0", "t1"], "y": [0, 1], "x": [0, 1]},
         name="lcoe",
     )
-    da.attrs["cleo:cf_mode"] = "hub"
+    da.attrs["cleo:cf_method"] = "hub_height_weibull"
     da.attrs["cleo:economics_json"] = json.dumps({"discount_rate": 0.05}, ensure_ascii=True)
     da.attrs["cleo:turbine_ids_json"] = json.dumps(["t0", "t1"], ensure_ascii=True)
     return da

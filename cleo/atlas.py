@@ -1117,7 +1117,7 @@ class Atlas:
             atlas.export_analysis_dataset_zarr(
                 "output/wind_export.zarr",
                 domain="wind",
-                include_only=["capacity_factors", "mean_wind_speed"],
+                include_only=["capacity_factors", "mean_wind_speed", "rotor_equivalent_wind_speed"],
             )
         """
         from cleo.exports import export_analysis_dataset_zarr
@@ -1232,7 +1232,7 @@ class Atlas:
 
         Affects LCOE-family metrics (lcoe, min_lcoe_turbine, optimal_power,
         optimal_energy). Physics metrics (capacity_factors, mean_wind_speed,
-        rews_mps) are timebase-independent.
+        rotor_equivalent_wind_speed) are timebase-independent.
 
         :param hours_per_year: Hours per year for energy calculations.
             Must be finite and > 0. Default (if not configured) is 8766.0.

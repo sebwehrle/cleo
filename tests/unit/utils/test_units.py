@@ -342,6 +342,7 @@ class TestCanonicalUnitsRegistry:
     def test_registry_contains_wind_metrics(self):
         """Registry has canonical units for wind metrics."""
         assert CANONICAL_UNITS["mean_wind_speed"] == "m/s"
+        assert CANONICAL_UNITS["rotor_equivalent_wind_speed"] == "m/s"
         assert CANONICAL_UNITS["rews_mps"] == "m/s"
         assert CANONICAL_UNITS["capacity_factors"] == "1"
 
@@ -374,6 +375,7 @@ class TestGetCanonicalUnit:
         """Returns canonical unit for known variable."""
         assert get_canonical_unit("lcoe") == "EUR/MWh"
         assert get_canonical_unit("mean_wind_speed") == "m/s"
+        assert get_canonical_unit("rotor_equivalent_wind_speed") == "m/s"
 
     def test_returns_none_for_dimensionless(self):
         """Returns None for dimensionless variables."""

@@ -3,19 +3,36 @@
 # All spatial arrays stay lazy (dask-compatible).
 from dataclasses import dataclass
 import json
+import logging
 import numpy as np
 import xarray as xr
-import logging
 
 from scipy.special import gamma, gammaln
 
-from cleo.vertical import evaluate_weibull_at_heights
+from cleo.vertical import (
+    evaluate_density_at_heights,
+    evaluate_weibull_at_heights,
+    weibull_mean_from_a_k,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # %% Constants
 RHO_0 = 1.225  # Reference air density at sea level (kg/m³)
+CF_METHOD_HUB_HEIGHT = "hub_height_weibull"
+CF_METHOD_HUB_HEIGHT_REWS = "hub_height_weibull_rews_scaled"
+CF_METHOD_ROTOR_NODE_AVERAGE = "rotor_node_average"
+CF_METHOD_ROTOR_MOMENT_MATCHED = "rotor_moment_matched_weibull"
+CF_METHODS = frozenset(
+    {
+        CF_METHOD_HUB_HEIGHT,
+        CF_METHOD_HUB_HEIGHT_REWS,
+        CF_METHOD_ROTOR_NODE_AVERAGE,
+        CF_METHOD_ROTOR_MOMENT_MATCHED,
+    }
+)
+CF_INTERPOLATIONS = frozenset({"auto", "ak_logz", "mu_cv_loglog"})
 
 
 @dataclass(frozen=True)
@@ -60,31 +77,62 @@ class WeightedNodeInflow:
     rews_mps: xr.DataArray | None = None
 
 
+@dataclass(frozen=True)
+class PreparedVerticalProfile:
+    """Prepared vertical Weibull and density quantities for rotor approximation.
+
+    :param query_heights_m: Query heights corresponding to the
+        ``query_height`` axis, in meters.
+    :type query_heights_m: numpy.ndarray
+    :param A: Raw Weibull scale parameter evaluated at query heights, with dims
+        ``(query_height, y, x)``.
+    :type A: xarray.DataArray
+    :param k: Weibull shape parameter evaluated at query heights, with dims
+        ``(query_height, y, x)``.
+    :type k: xarray.DataArray
+    :param A_density_corrected: Optional density-corrected scale parameter
+        ``A'`` on ``(query_height, y, x)`` for paths that prepare density
+        upstream.
+    :type A_density_corrected: xarray.DataArray | None
+    :param rho: Optional air density at query heights on
+        ``(query_height, y, x)``.
+    :type rho: xarray.DataArray | None
+    :param density_scale: Optional integration-time density correction factor
+        ``c=(rho/rho0)**(1/3)`` for hub-height semantics, broadcastable to
+        ``(y, x)``.
+    :type density_scale: xarray.DataArray | None
+    """
+
+    query_heights_m: np.ndarray
+    A: xr.DataArray
+    k: xr.DataArray
+    A_density_corrected: xr.DataArray | None
+    rho: xr.DataArray | None
+    density_scale: xr.DataArray | None = None
+
+
 # %% Pure compute primitives
 
 
 def compute_air_density_correction_core(
     *,
     elevation: xr.DataArray,
-    template: xr.DataArray,
 ) -> xr.DataArray:
     """
     Pure compute function: air density correction factor based on elevation.
 
     This is a stateless, I/O-free computation primitive. The caller is responsible
-    for providing elevation and template DataArrays that are already aligned to the
-    canonical grid.
+    for providing an elevation DataArray that is already aligned to the canonical
+    grid.
 
     Formula: rho_correction = 1.247015 * exp(-0.000104 * elevation) / 1.225
 
     Contract:
-    - elevation and template MUST have identical y/x coords (caller must verify alignment).
     - Output is NaN where elevation is NaN (propagates nodata).
     - Remains lazy: never forces eager evaluation (compute/load/values).
     - Returns a DataArray named "air_density_correction" on the same coords as elevation.
 
     :param elevation: Elevation DataArray (meters a.s.l.) on canonical grid.
-    :param template: Template DataArray for output coords/dims alignment.
     :return: DataArray "air_density_correction" factor, lazy if input is lazy.
     """
     # Core formula: barometric-like correction
@@ -108,17 +156,18 @@ def mean_wind_speed_from_weibull(
     """
     Compute mean wind speed from Weibull A and k parameters.
 
-    Pure compute primitive: no I/O, dask-friendly, returns same shape as inputs.
+    This compatibility wrapper delegates to the single canonical implementation
+    in :mod:`cleo.vertical`.
 
-    Mathematical definition:
-        mean_wind_speed = A * gamma(1 + 1/k)
-
-    :param A: Weibull A (scale) parameter, DataArray with dims (y, x) or (height, y, x)
-    :param k: Weibull k (shape) parameter, DataArray with same dims as A
-    :return: DataArray with mean wind speed (m/s), same dims as inputs
+    :param A: Weibull A (scale) parameter with dims such as ``(y, x)`` or
+        ``(height, y, x)``.
+    :type A: xarray.DataArray
+    :param k: Weibull k (shape) parameter with the same dims as ``A``.
+    :type k: xarray.DataArray
+    :return: Mean wind speed in ``m/s`` with the same dims as ``A`` and ``k``.
+    :rtype: xarray.DataArray
     """
-    mean_ws = A * gamma(1 / k + 1)
-    return mean_ws.rename("mean_wind_speed").assign_attrs(units="m/s")
+    return weibull_mean_from_a_k(A, k)
 
 
 def _interp_power_curve(u_eq: xr.DataArray, u: np.ndarray, p: np.ndarray) -> xr.DataArray:
@@ -297,21 +346,6 @@ def _integrate_cf_no_density(
     return cf * loss_factor
 
 
-def air_density_at_height(rho_stack: xr.DataArray, height_m: float) -> xr.DataArray:
-    """
-    Interpolate air density to a specific height (pure).
-
-    Uses linear interpolation if height dimension exists.
-
-    :param rho_stack: Air density DataArray, optionally with 'height' dim
-    :param height_m: Target height in meters
-    :return: Air density at target height (y, x)
-    """
-    if "height" in rho_stack.dims:
-        return rho_stack.interp(height=height_m, method="linear")
-    return rho_stack
-
-
 def _rotor_nodes_and_weights(
     *,
     hub_height: float,
@@ -347,6 +381,148 @@ def _rotor_nodes_and_weights(
     return z_nodes, weights
 
 
+def resolve_capacity_factor_interpolation(
+    *,
+    method: str,
+    interpolation: str,
+) -> str:
+    """Resolve the effective interpolation backend for a capacity-factor method.
+
+    :param method: Public capacity-factor method family name.
+    :type method: str
+    :param interpolation: Public interpolation selector.
+    :type interpolation: str
+    :returns: Effective interpolation backend name.
+    :rtype: str
+    :raises ValueError: If ``method`` or ``interpolation`` is unsupported.
+    """
+    if method not in CF_METHODS:
+        raise ValueError(f"Unknown capacity-factor method {method!r}. Supported: {sorted(CF_METHODS)!r}")
+    if interpolation not in CF_INTERPOLATIONS:
+        raise ValueError(f"Unknown interpolation {interpolation!r}. Supported: {sorted(CF_INTERPOLATIONS)!r}")
+
+    if method in {CF_METHOD_ROTOR_NODE_AVERAGE, CF_METHOD_ROTOR_MOMENT_MATCHED}:
+        return "mu_cv_loglog" if interpolation == "auto" else interpolation
+
+    if interpolation == "auto":
+        return "ak_logz"
+    return interpolation
+
+
+def _query_heights_for_method(
+    *,
+    method: str,
+    hub_height_m: float,
+    rotor_diameter_m: float | None,
+    rews_n: int,
+) -> np.ndarray:
+    """Resolve vertical query heights required by a capacity-factor method.
+
+    :param method: Capacity-factor method family.
+    :type method: str
+    :param hub_height_m: Turbine hub height in meters.
+    :type hub_height_m: float
+    :param rotor_diameter_m: Rotor diameter in meters when rotor information is
+        required by the method.
+    :type rotor_diameter_m: float | None
+    :param rews_n: Rotor quadrature resolution.
+    :type rews_n: int
+    :returns: Query heights in meters.
+    :rtype: numpy.ndarray
+    :raises ValueError: If the method requires rotor geometry but
+        ``rotor_diameter_m`` is missing.
+    """
+    if method == CF_METHOD_HUB_HEIGHT:
+        return np.array([float(hub_height_m)], dtype=np.float64)
+
+    if rotor_diameter_m is None:
+        raise ValueError(f"rotor_diameter_m required when method={method!r}")
+
+    z_nodes, _weights = _rotor_nodes_and_weights(
+        hub_height=float(hub_height_m),
+        rotor_diameter=float(rotor_diameter_m),
+        rews_n=int(rews_n),
+    )
+    if method == CF_METHOD_HUB_HEIGHT_REWS:
+        return np.concatenate((np.array([float(hub_height_m)], dtype=np.float64), z_nodes))
+    return z_nodes
+
+
+def _prepare_vertical_profile(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    hub_height_m: float,
+    rotor_diameter_m: float | None,
+    rews_n: int,
+    rho_stack: xr.DataArray | None,
+    air_density: bool,
+    method: str,
+    vertical_policy: dict | None,
+    interpolation: str,
+) -> PreparedVerticalProfile:
+    """Prepare a vertical profile for one capacity-factor method.
+
+    :param A_stack: Weibull scale stack ``(height, y, x)``.
+    :type A_stack: xarray.DataArray
+    :param k_stack: Weibull shape stack ``(height, y, x)``.
+    :type k_stack: xarray.DataArray
+    :param hub_height_m: Turbine hub height in meters.
+    :type hub_height_m: float
+    :param rotor_diameter_m: Optional rotor diameter in meters.
+    :type rotor_diameter_m: float | None
+    :param rews_n: Rotor quadrature resolution.
+    :type rews_n: int
+    :param rho_stack: Optional air-density stack.
+    :type rho_stack: xarray.DataArray | None
+    :param air_density: Whether density-aware quantities should be prepared.
+    :type air_density: bool
+    :param method: Capacity-factor method family.
+    :type method: str
+    :param interpolation: Effective interpolation backend.
+    :type interpolation: str
+    :param vertical_policy: Optional vertical-policy overrides.
+    :type vertical_policy: dict | None
+    :returns: Prepared vertical profile.
+    :rtype: PreparedVerticalProfile
+    """
+    query_heights_m = _query_heights_for_method(
+        method=method,
+        hub_height_m=hub_height_m,
+        rotor_diameter_m=rotor_diameter_m,
+        rews_n=rews_n,
+    )
+    _mu_q, k_q, A_q, A_prime_q = evaluate_weibull_at_heights(
+        A_stack,
+        k_stack,
+        query_heights_m=query_heights_m,
+        rho_stack=rho_stack if air_density else None,
+        policy=vertical_policy,
+        interpolation=interpolation,
+    )
+    rho_q = None
+    density_scale = None
+    if rho_stack is not None:
+        rho_q = evaluate_density_at_heights(rho_stack, query_heights_m=query_heights_m, policy=vertical_policy)
+        rho_q = rho_q.rename("rho")
+    if air_density:
+        if rho_q is None:
+            raise ValueError("rho_stack required when air_density=True")
+        density_scale = ((rho_q.isel(query_height=0, drop=True)) / RHO_0) ** (1.0 / 3.0)
+        A_density_corrected = A_prime_q.rename("weibull_A_density_corrected")
+    else:
+        A_density_corrected = None
+
+    return PreparedVerticalProfile(
+        query_heights_m=query_heights_m,
+        A=A_q.rename("weibull_A"),
+        k=k_q.rename("weibull_k"),
+        A_density_corrected=A_density_corrected,
+        rho=rho_q,
+        density_scale=density_scale,
+    )
+
+
 def _build_hub_inflow(
     *,
     A_stack: xr.DataArray,
@@ -354,8 +530,10 @@ def _build_hub_inflow(
     hub_height: float,
     rho_stack: xr.DataArray | None,
     air_density: bool,
+    interpolation: str = "ak_logz",
+    vertical_policy: dict | None = None,
 ) -> SingleWeibullInflow:
-    """Build single-Weibull inflow for ``hub`` mode.
+    """Build single-Weibull inflow for ``hub_height_weibull`` method.
 
     :param A_stack: Weibull scale stack ``(height, y, x)``.
     :type A_stack: xarray.DataArray
@@ -367,18 +545,27 @@ def _build_hub_inflow(
     :type rho_stack: xarray.DataArray | None
     :param air_density: Whether to apply density correction.
     :type air_density: bool
-    :returns: Effective single-Weibull inflow.
+    :param interpolation: Effective interpolation backend.
+    :type interpolation: str
+    :param vertical_policy: Optional vertical-policy overrides.
+    :type vertical_policy: dict | None
+    :returns: Effective single-Weibull inflow with density already prepared in
+        ``A_eff`` when ``air_density=True``.
     :rtype: SingleWeibullInflow
-    :raises ValueError: If density correction is requested without ``rho_stack``.
     """
-    A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, hub_height)
-    density_scale = None
-    if air_density:
-        if rho_stack is None:
-            raise ValueError("rho_stack required when air_density=True")
-        rho_hub = air_density_at_height(rho_stack, hub_height)
-        density_scale = (rho_hub / RHO_0) ** (1.0 / 3.0)
-    return SingleWeibullInflow(A_eff=A_hub, k_eff=k_hub, rews_mps=None, density_scale=density_scale)
+    profile = _prepare_vertical_profile(
+        A_stack=A_stack,
+        k_stack=k_stack,
+        hub_height_m=hub_height,
+        rotor_diameter_m=None,
+        rho_stack=rho_stack,
+        air_density=air_density,
+        method=CF_METHOD_HUB_HEIGHT,
+        rews_n=12,
+        interpolation=interpolation,
+        vertical_policy=vertical_policy,
+    )
+    return _build_hub_inflow_from_profile(profile=profile)
 
 
 def _build_rews_inflow(
@@ -390,8 +577,10 @@ def _build_rews_inflow(
     rews_n: int,
     rho_stack: xr.DataArray | None,
     air_density: bool,
+    interpolation: str = "ak_logz",
+    vertical_policy: dict | None = None,
 ) -> SingleWeibullInflow:
-    """Build single-Weibull inflow for legacy ``rews`` mode.
+    """Build single-Weibull inflow for ``hub_height_weibull_rews_scaled``.
 
     :param A_stack: Weibull scale stack ``(height, y, x)``.
     :type A_stack: xarray.DataArray
@@ -407,26 +596,32 @@ def _build_rews_inflow(
     :type rho_stack: xarray.DataArray | None
     :param air_density: Whether to apply density correction.
     :type air_density: bool
-    :returns: Effective single-Weibull inflow.
+    :param interpolation: Effective interpolation backend.
+    :type interpolation: str
+    :param vertical_policy: Optional vertical-policy overrides.
+    :type vertical_policy: dict | None
+    :returns: Effective single-Weibull inflow with density already prepared in
+        ``A_eff`` when ``air_density=True``.
     :rtype: SingleWeibullInflow
-    :raises ValueError: If density correction is requested without ``rho_stack``.
     """
-    A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, hub_height)
-    rews_factor = _rews_moment_factor(
+    profile = _prepare_vertical_profile(
         A_stack=A_stack,
         k_stack=k_stack,
+        hub_height_m=hub_height,
+        rotor_diameter_m=rotor_diameter,
+        rho_stack=rho_stack,
+        air_density=air_density,
+        method=CF_METHOD_HUB_HEIGHT_REWS,
+        rews_n=rews_n,
+        interpolation=interpolation,
+        vertical_policy=vertical_policy,
+    )
+    return _build_rews_inflow_from_profile(
+        profile=profile,
         hub_height=hub_height,
         rotor_diameter=rotor_diameter,
-        n=rews_n,
+        rews_n=rews_n,
     )
-    A_eff = A_hub * rews_factor
-    density_scale = None
-    if air_density:
-        if rho_stack is None:
-            raise ValueError("rho_stack required when air_density=True")
-        rho_hub = air_density_at_height(rho_stack, hub_height)
-        density_scale = (rho_hub / RHO_0) ** (1.0 / 3.0)
-    return SingleWeibullInflow(A_eff=A_eff, k_eff=k_hub, rews_mps=None, density_scale=density_scale)
 
 
 def _build_direct_inflow(
@@ -440,7 +635,7 @@ def _build_direct_inflow(
     air_density: bool,
     vertical_policy: dict | None,
 ) -> WeightedNodeInflow:
-    """Build weighted node-wise inflow for ``direct_cf_quadrature`` mode.
+    """Build weighted node-wise inflow for ``rotor_node_average`` method.
 
     :param A_stack: Weibull scale stack ``(height, y, x)``.
     :type A_stack: xarray.DataArray
@@ -462,32 +657,24 @@ def _build_direct_inflow(
     :rtype: WeightedNodeInflow
     :raises ValueError: If density correction is requested without ``rho_stack``.
     """
-    if air_density and rho_stack is None:
-        raise ValueError("rho_stack required when air_density=True")
-
-    z_nodes, weights = _rotor_nodes_and_weights(
+    profile = _prepare_vertical_profile(
+        A_stack=A_stack,
+        k_stack=k_stack,
+        hub_height_m=hub_height,
+        rotor_diameter_m=rotor_diameter,
+        rho_stack=rho_stack,
+        air_density=air_density,
+        method=CF_METHOD_ROTOR_NODE_AVERAGE,
+        rews_n=rews_n,
+        interpolation="mu_cv_loglog",
+        vertical_policy=vertical_policy,
+    )
+    return _build_direct_inflow_from_profile(
+        profile=profile,
         hub_height=hub_height,
         rotor_diameter=rotor_diameter,
         rews_n=rews_n,
     )
-    _mu, k_nodes, _A_nodes, A_prime_nodes = evaluate_weibull_at_heights(
-        A_stack,
-        k_stack,
-        query_heights_m=z_nodes,
-        rho_stack=rho_stack if air_density else None,
-        policy=vertical_policy,
-    )
-
-    if "query_height" not in A_prime_nodes.dims or "query_height" not in k_nodes.dims:
-        raise ValueError("evaluate_weibull_at_heights must return query_height dimension for rotor inflow.")
-
-    A_nodes = A_prime_nodes.rename({"query_height": "node"}).assign_coords(node=np.arange(z_nodes.size, dtype=np.int64))
-    k_nodes_out = k_nodes.rename({"query_height": "node"}).assign_coords(node=np.arange(z_nodes.size, dtype=np.int64))
-
-    m3_nodes = np.exp(3.0 * np.log(A_nodes) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_nodes_out), dask="parallelized"))
-    w_da = xr.DataArray(weights, dims=("node",), coords={"node": np.arange(z_nodes.size, dtype=np.int64)})
-    rews = ((m3_nodes * w_da).sum(dim="node") ** (1.0 / 3.0)).rename("rews_mps")
-    return WeightedNodeInflow(weights=weights, A_nodes=A_nodes, k_nodes=k_nodes_out, rews_mps=rews)
 
 
 def _build_momentmatch_inflow(
@@ -501,7 +688,7 @@ def _build_momentmatch_inflow(
     air_density: bool,
     vertical_policy: dict | None,
 ) -> SingleWeibullInflow:
-    """Build single-Weibull inflow for ``momentmatch_weibull`` mode.
+    """Build single-Weibull inflow for ``rotor_moment_matched_weibull``.
 
     :param A_stack: Weibull scale stack ``(height, y, x)``.
     :type A_stack: xarray.DataArray
@@ -523,15 +710,155 @@ def _build_momentmatch_inflow(
     :rtype: SingleWeibullInflow
     :raises ValueError: If density correction is requested without ``rho_stack``.
     """
-    direct_inflow = _build_direct_inflow(
+    profile = _prepare_vertical_profile(
         A_stack=A_stack,
         k_stack=k_stack,
+        hub_height_m=hub_height,
+        rotor_diameter_m=rotor_diameter,
+        rho_stack=rho_stack,
+        air_density=air_density,
+        method=CF_METHOD_ROTOR_MOMENT_MATCHED,
+        rews_n=rews_n,
+        interpolation="mu_cv_loglog",
+        vertical_policy=vertical_policy,
+    )
+    return _build_momentmatch_inflow_from_profile(
+        profile=profile,
         hub_height=hub_height,
         rotor_diameter=rotor_diameter,
         rews_n=rews_n,
-        rho_stack=rho_stack,
-        air_density=air_density,
-        vertical_policy=vertical_policy,
+    )
+
+
+def _build_hub_inflow_from_profile(*, profile: PreparedVerticalProfile) -> SingleWeibullInflow:
+    """Build hub-height inflow from a prepared vertical profile.
+
+    :param profile: Prepared single-height hub profile.
+    :type profile: PreparedVerticalProfile
+    :returns: Effective single-Weibull inflow.
+    :rtype: SingleWeibullInflow
+    :raises ValueError: If the profile does not contain exactly one query height.
+    """
+    if profile.A.sizes.get("query_height") != 1 or profile.k.sizes.get("query_height") != 1:
+        raise ValueError("Hub-height inflow requires a prepared profile with exactly one query height.")
+    A_hub = profile.A.isel(query_height=0, drop=True).rename("weibull_A")
+    k_hub = profile.k.isel(query_height=0, drop=True).rename("weibull_k")
+    return SingleWeibullInflow(A_eff=A_hub, k_eff=k_hub, rews_mps=None, density_scale=profile.density_scale)
+
+
+def _build_rews_inflow_from_profile(
+    *,
+    profile: PreparedVerticalProfile,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+) -> SingleWeibullInflow:
+    """Build REWS-scaled hub inflow from a prepared vertical profile.
+
+    :param profile: Prepared profile containing hub height followed by rotor
+        nodes on the ``query_height`` axis.
+    :type profile: PreparedVerticalProfile
+    :param hub_height: Turbine hub height in meters.
+    :type hub_height: float
+    :param rotor_diameter: Rotor diameter in meters.
+    :type rotor_diameter: float
+    :param rews_n: Rotor quadrature resolution.
+    :type rews_n: int
+    :returns: Effective single-Weibull inflow.
+    :rtype: SingleWeibullInflow
+    """
+    _z_nodes, weights = _rotor_nodes_and_weights(
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
+    )
+    if profile.A.sizes.get("query_height") != int(rews_n) + 1:
+        raise ValueError("REWS-scaled hub inflow requires hub height plus rotor nodes in prepared profile.")
+
+    A_hub = profile.A.isel(query_height=0, drop=True).rename("weibull_A")
+    k_hub = profile.k.isel(query_height=0, drop=True).rename("weibull_k")
+    A_nodes = profile.A.isel(query_height=slice(1, None)).rename({"query_height": "node"})
+    k_nodes = profile.k.isel(query_height=slice(1, None)).rename({"query_height": "node"})
+    node_coord = np.arange(int(rews_n), dtype=np.int64)
+    A_nodes = A_nodes.assign_coords(node=node_coord)
+    k_nodes = k_nodes.assign_coords(node=node_coord)
+
+    log_hub_m3 = 3.0 * np.log(A_hub) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_hub), dask="parallelized")
+    hub_m3 = np.exp(log_hub_m3)
+    log_node_m3 = 3.0 * np.log(A_nodes) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_nodes), dask="parallelized")
+    node_m3 = np.exp(log_node_m3)
+    w_da = xr.DataArray(weights, dims=("node",), coords={"node": node_coord})
+    rotor_m3 = (node_m3 * w_da).sum(dim="node")
+    rews_factor = (rotor_m3 / hub_m3) ** (1.0 / 3.0)
+
+    A_eff = (A_hub * rews_factor).rename("weibull_A")
+    return SingleWeibullInflow(A_eff=A_eff, k_eff=k_hub, rews_mps=None, density_scale=profile.density_scale)
+
+
+def _build_direct_inflow_from_profile(
+    *,
+    profile: PreparedVerticalProfile,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+) -> WeightedNodeInflow:
+    """Build rotor-node inflow from a prepared vertical profile.
+
+    :param profile: Prepared rotor-node profile.
+    :type profile: PreparedVerticalProfile
+    :param hub_height: Turbine hub height in meters.
+    :type hub_height: float
+    :param rotor_diameter: Rotor diameter in meters.
+    :type rotor_diameter: float
+    :param rews_n: Rotor quadrature resolution.
+    :type rews_n: int
+    :returns: Weighted node-wise inflow.
+    :rtype: WeightedNodeInflow
+    """
+    _z_nodes, weights = _rotor_nodes_and_weights(
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
+    )
+    if profile.A.sizes.get("query_height") != int(rews_n) or profile.k.sizes.get("query_height") != int(rews_n):
+        raise ValueError("Rotor-node inflow requires one prepared profile slice per rotor node.")
+
+    node_coord = np.arange(int(rews_n), dtype=np.int64)
+    source_A = profile.A_density_corrected if profile.A_density_corrected is not None else profile.A
+    A_nodes = source_A.rename({"query_height": "node"}).assign_coords(node=node_coord)
+    k_nodes_out = profile.k.rename({"query_height": "node"}).assign_coords(node=node_coord)
+
+    m3_nodes = np.exp(3.0 * np.log(A_nodes) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_nodes_out), dask="parallelized"))
+    w_da = xr.DataArray(weights, dims=("node",), coords={"node": node_coord})
+    rews = ((m3_nodes * w_da).sum(dim="node") ** (1.0 / 3.0)).rename("rews_mps")
+    return WeightedNodeInflow(weights=weights, A_nodes=A_nodes, k_nodes=k_nodes_out, rews_mps=rews)
+
+
+def _build_momentmatch_inflow_from_profile(
+    *,
+    profile: PreparedVerticalProfile,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+) -> SingleWeibullInflow:
+    """Build moment-matched rotor inflow from a prepared vertical profile.
+
+    :param profile: Prepared rotor-node profile.
+    :type profile: PreparedVerticalProfile
+    :param hub_height: Turbine hub height in meters.
+    :type hub_height: float
+    :param rotor_diameter: Rotor diameter in meters.
+    :type rotor_diameter: float
+    :param rews_n: Rotor quadrature resolution.
+    :type rews_n: int
+    :returns: Moment-matched single-Weibull inflow.
+    :rtype: SingleWeibullInflow
+    """
+    direct_inflow = _build_direct_inflow_from_profile(
+        profile=profile,
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
     )
     rews = direct_inflow.rews_mps
 
@@ -630,22 +957,23 @@ def capacity_factors_v1(
     turbine_ids: tuple[str, ...],
     hub_heights_m: np.ndarray,
     power_curves: np.ndarray,
-    mode: str = "direct_cf_quadrature",
+    method: str = CF_METHOD_ROTOR_NODE_AVERAGE,
     rotor_diameters_m: np.ndarray | None = None,
     rho_stack: xr.DataArray | None = None,
     air_density: bool = False,
     loss_factor: float = 1.0,
     rews_n: int = 12,
+    interpolation: str = "auto",
     vertical_policy: dict | None = None,
 ) -> xr.DataArray:
     """
     Compute capacity factors for multiple turbines (pure numerics, turbine-loop).
 
     This is the v1 capacity factor algorithm with support for:
-    - direct rotor-node quadrature mode (default)
-    - moment-matched rotor Weibull mode
-    - hub-height mode
-    - legacy REWS-factor mode
+    - rotor node average (default)
+    - rotor moment-matched Weibull
+    - hub-height Weibull
+    - hub-height Weibull with REWS scaling
 
     Contract: No I/O, no eager evaluation on spatial arrays (stays lazy/dask).
     Turbine-loop implementation (benchmarked best).
@@ -656,19 +984,32 @@ def capacity_factors_v1(
     :param turbine_ids: Tuple of turbine ID strings
     :param hub_heights_m: Hub heights for each turbine (n_turb,)
     :param power_curves: Power curves for each turbine (n_turb, n_ws)
-    :param mode: "direct_cf_quadrature" (default), "momentmatch_weibull", "hub", or legacy "rews"
-    :param rotor_diameters_m: Rotor diameters (required for rotor-aware modes)
+    :param method: Public method family name.
+    :type method: str
+    :param rotor_diameters_m: Rotor diameters (required for rotor-aware methods
+        and REWS-scaled hub-height method).
+    :type rotor_diameters_m: numpy.ndarray | None
     :param rho_stack: Air density DataArray (required if air_density=True)
     :param air_density: If True, apply air density correction
     :param loss_factor: Loss correction factor (default 1.0)
     :param rews_n: Number of quadrature points for REWS integration
+    :param interpolation: Interpolation selector. ``"auto"`` resolves by method
+        family and explicit backends remain available for all method families.
+    :type interpolation: str
     :return: DataArray with capacity factors, dims (turbine, y, x)
     """
-    if mode not in ("hub", "rews", "direct_cf_quadrature", "momentmatch_weibull"):
-        raise ValueError(f"mode must be 'hub', 'rews', 'direct_cf_quadrature', or 'momentmatch_weibull', got {mode!r}")
+    resolved_interpolation = resolve_capacity_factor_interpolation(method=method, interpolation=interpolation)
 
-    if mode in ("rews", "direct_cf_quadrature", "momentmatch_weibull") and rotor_diameters_m is None:
-        raise ValueError(f"rotor_diameters_m required when mode={mode!r}")
+    if (
+        method
+        in {
+            CF_METHOD_HUB_HEIGHT_REWS,
+            CF_METHOD_ROTOR_NODE_AVERAGE,
+            CF_METHOD_ROTOR_MOMENT_MATCHED,
+        }
+        and rotor_diameters_m is None
+    ):
+        raise ValueError(f"rotor_diameters_m required when method={method!r}")
 
     if air_density and rho_stack is None:
         raise ValueError("rho_stack required when air_density=True")
@@ -676,52 +1017,45 @@ def capacity_factors_v1(
     cf_list = []
     for i, turbine_id in enumerate(turbine_ids):
         H = float(hub_heights_m[i])
+        D = None if rotor_diameters_m is None else float(rotor_diameters_m[i])
+        profile = _prepare_vertical_profile(
+            A_stack=A_stack,
+            k_stack=k_stack,
+            hub_height_m=H,
+            rotor_diameter_m=D,
+            rho_stack=rho_stack,
+            air_density=air_density,
+            method=method,
+            rews_n=rews_n,
+            interpolation=resolved_interpolation,
+            vertical_policy=vertical_policy,
+        )
 
-        if mode == "hub":
-            inflow = _build_hub_inflow(
-                A_stack=A_stack,
-                k_stack=k_stack,
-                hub_height=H,
-                rho_stack=rho_stack,
-                air_density=air_density,
-            )
-        elif mode == "rews":
-            assert rotor_diameters_m is not None
-            D = float(rotor_diameters_m[i])
-            inflow = _build_rews_inflow(
-                A_stack=A_stack,
-                k_stack=k_stack,
+        if method == CF_METHOD_HUB_HEIGHT:
+            inflow = _build_hub_inflow_from_profile(profile=profile)
+        elif method == CF_METHOD_HUB_HEIGHT_REWS:
+            assert D is not None
+            inflow = _build_rews_inflow_from_profile(
+                profile=profile,
                 hub_height=H,
                 rotor_diameter=D,
                 rews_n=rews_n,
-                rho_stack=rho_stack,
-                air_density=air_density,
             )
-        elif mode == "direct_cf_quadrature":
-            assert rotor_diameters_m is not None
-            D = float(rotor_diameters_m[i])
-            inflow = _build_direct_inflow(
-                A_stack=A_stack,
-                k_stack=k_stack,
+        elif method == CF_METHOD_ROTOR_NODE_AVERAGE:
+            assert D is not None
+            inflow = _build_direct_inflow_from_profile(
+                profile=profile,
                 hub_height=H,
                 rotor_diameter=D,
                 rews_n=rews_n,
-                rho_stack=rho_stack,
-                air_density=air_density,
-                vertical_policy=vertical_policy,
             )
         else:
-            assert rotor_diameters_m is not None
-            D = float(rotor_diameters_m[i])
-            inflow = _build_momentmatch_inflow(
-                A_stack=A_stack,
-                k_stack=k_stack,
+            assert D is not None
+            inflow = _build_momentmatch_inflow_from_profile(
+                profile=profile,
                 hub_height=H,
                 rotor_diameter=D,
                 rews_n=rews_n,
-                rho_stack=rho_stack,
-                air_density=air_density,
-                vertical_policy=vertical_policy,
             )
 
         cf = integrate_cf_from_inflow(
@@ -741,11 +1075,11 @@ def capacity_factors_v1(
 
     # Set attrs (no compute)
     out.attrs["units"] = "1"  # dimensionless fraction
-    out.attrs["cleo:cf_mode"] = mode
+    out.attrs["cleo:cf_method"] = method
+    out.attrs["cleo:interpolation"] = resolved_interpolation
     out.attrs["cleo:algo"] = "capacity_factors_v1"
-    out.attrs["cleo:algo_version"] = "3"  # v3: added loss_factor and turbines_json
-    if mode in ("rews", "direct_cf_quadrature", "momentmatch_weibull"):
-        out.attrs["cleo:rews_n"] = int(rews_n)
+    out.attrs["cleo:algo_version"] = "4"  # v4: renamed public method metadata and stored interpolation
+    out.attrs["cleo:rews_n"] = int(rews_n)
     out.attrs["cleo:air_density"] = int(air_density)  # int for netCDF4 compat
     out.attrs["cleo:loss_factor"] = float(loss_factor)
     out.attrs["cleo:turbines_json"] = json.dumps(list(turbine_ids), ensure_ascii=True)
@@ -763,11 +1097,42 @@ def rews_mps_v1(
     rho_stack: xr.DataArray | None = None,
     air_density: bool = False,
     rews_n: int = 12,
+    interpolation: str = "auto",
     vertical_policy: dict | None = None,
 ) -> xr.DataArray:
-    """Compute first-class REWS output in m/s, dims ``(turbine, y, x)``."""
+    """Compute first-class REWS output in m/s.
+
+    :param A_stack: Weibull scale stack on ``(height, y, x)``.
+    :type A_stack: xarray.DataArray
+    :param k_stack: Weibull shape stack on ``(height, y, x)``.
+    :type k_stack: xarray.DataArray
+    :param turbine_ids: Turbine identifiers for the output ``turbine`` axis.
+    :type turbine_ids: tuple[str, ...]
+    :param hub_heights_m: Hub heights in meters for each turbine.
+    :type hub_heights_m: numpy.ndarray
+    :param rotor_diameters_m: Rotor diameters in meters for each turbine.
+    :type rotor_diameters_m: numpy.ndarray
+    :param rho_stack: Optional air-density stack on ``(height, y, x)``.
+    :type rho_stack: xarray.DataArray | None
+    :param air_density: Whether to apply density-aware speed scaling.
+    :type air_density: bool
+    :param rews_n: Rotor quadrature resolution.
+    :type rews_n: int
+    :param interpolation: Interpolation selector for the rotor profile.
+        ``"auto"`` resolves to the rotor-aware default backend.
+    :type interpolation: str
+    :param vertical_policy: Optional vertical-policy overrides.
+    :type vertical_policy: dict | None
+    :returns: Rotor-equivalent wind speed with dims ``(turbine, y, x)``.
+    :rtype: xarray.DataArray
+    :raises ValueError: If density correction is requested without ``rho_stack``.
+    """
     if air_density and rho_stack is None:
         raise ValueError("rho_stack required when air_density=True")
+    resolved_interpolation = resolve_capacity_factor_interpolation(
+        method=CF_METHOD_ROTOR_NODE_AVERAGE,
+        interpolation=interpolation,
+    )
 
     rews_list = []
     for i, turbine_id in enumerate(turbine_ids):
@@ -783,6 +1148,7 @@ def rews_mps_v1(
             rotor_diameter=D,
             rews_n=rews_n,
             loss_factor=1.0,
+            interpolation=resolved_interpolation,
             vertical_policy=vertical_policy,
             compute_cf=False,
         )
@@ -795,6 +1161,7 @@ def rews_mps_v1(
     out.attrs["cleo:algo_version"] = "1"
     out.attrs["cleo:rews_n"] = int(rews_n)
     out.attrs["cleo:air_density"] = int(air_density)
+    out.attrs["cleo:interpolation"] = resolved_interpolation
     return out
 
 
@@ -809,23 +1176,32 @@ def _direct_cf_and_rews_for_turbine(
     rotor_diameter: float,
     rews_n: int,
     loss_factor: float,
+    interpolation: str,
     vertical_policy: dict | None,
     compute_cf: bool,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Compute direct rotor CF and REWS for one turbine.
 
-    Delegates rotor inflow construction to ``_build_direct_inflow(...)`` and
+    Delegates rotor inflow construction to the prepared-profile seam and
     integrates CF through ``integrate_cf_from_inflow(...)`` when requested.
     """
-    inflow = _build_direct_inflow(
+    profile = _prepare_vertical_profile(
         A_stack=A_stack,
         k_stack=k_stack,
-        hub_height=hub_height,
-        rotor_diameter=rotor_diameter,
+        hub_height_m=hub_height,
+        rotor_diameter_m=rotor_diameter,
         rews_n=rews_n,
         rho_stack=rho_stack,
         air_density=rho_stack is not None,
+        method=CF_METHOD_ROTOR_NODE_AVERAGE,
         vertical_policy=vertical_policy,
+        interpolation=interpolation,
+    )
+    inflow = _build_direct_inflow_from_profile(
+        profile=profile,
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
     )
     rews = inflow.rews_mps
     if rews is None:
@@ -858,18 +1234,26 @@ def _momentmatch_cf_and_rews_for_turbine(
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Compute rotor CF via moment-matched Weibull and return REWS.
 
-    Delegates rotor inflow construction to ``_build_momentmatch_inflow(...)``
+    Delegates rotor inflow construction to the prepared-profile seam
     and integrates CF through ``integrate_cf_from_inflow(...)``.
     """
-    inflow = _build_momentmatch_inflow(
+    profile = _prepare_vertical_profile(
         A_stack=A_stack,
         k_stack=k_stack,
-        hub_height=hub_height,
-        rotor_diameter=rotor_diameter,
+        hub_height_m=hub_height,
+        rotor_diameter_m=rotor_diameter,
         rews_n=rews_n,
         rho_stack=rho_stack,
         air_density=rho_stack is not None,
+        method=CF_METHOD_ROTOR_MOMENT_MATCHED,
         vertical_policy=vertical_policy,
+        interpolation="mu_cv_loglog",
+    )
+    inflow = _build_momentmatch_inflow_from_profile(
+        profile=profile,
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
     )
     rews = inflow.rews_mps
     if rews is None:

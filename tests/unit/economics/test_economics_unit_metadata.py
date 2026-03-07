@@ -26,7 +26,7 @@ def capacity_factors():
         coords={"turbine": ["TestTurbine.100"], "y": [0, 1], "x": [0, 1]},
         name="capacity_factors",
     )
-    cf.attrs["cleo:cf_mode"] = "direct_cf_quadrature"
+    cf.attrs["cleo:cf_method"] = "rotor_node_average"
     cf.attrs["cleo:air_density"] = 0
     cf.attrs["cleo:rews_n"] = 12
     cf.attrs["cleo:loss_factor"] = 1.0

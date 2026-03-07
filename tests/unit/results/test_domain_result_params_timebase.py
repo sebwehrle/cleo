@@ -59,7 +59,7 @@ class TestDomainResultParamsTimebase:
 
         params = {
             "turbines": ("T1",),
-            "mode": "hub",
+            "method": "hub_height_weibull",
         }
 
         result = DomainResult(mock_domain, "capacity_factors", da, params)
@@ -90,7 +90,7 @@ class TestTimebaseInjectionInCompute:
         """Physics metrics should not allow hours_per_year."""
         from cleo.wind_metrics import get_wind_metric_spec
 
-        physics_metrics = {"mean_wind_speed", "capacity_factors", "rews_mps"}
+        physics_metrics = {"wind_speed", "capacity_factors", "wind_speed"}
 
         for metric in physics_metrics:
             spec = get_wind_metric_spec(metric)
@@ -110,5 +110,5 @@ class TestTimebaseInjectionLogic:
         assert _ECONOMICS_METRICS == expected
 
         # Physics metrics should NOT be present
-        physics = {"mean_wind_speed", "capacity_factors", "rews_mps"}
+        physics = {"wind_speed", "capacity_factors", "wind_speed"}
         assert _ECONOMICS_METRICS.isdisjoint(physics)

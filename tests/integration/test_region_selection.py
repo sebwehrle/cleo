@@ -502,7 +502,7 @@ class TestRegionMaterialization:
         atlas.wind.select(turbines=turbines)
 
         # Compute + materialize and verify surfaced output.
-        cf = atlas.wind.compute("capacity_factors", mode="direct_cf_quadrature", air_density=False).materialize()
+        cf = atlas.wind.compute("capacity_factors", method="rotor_node_average", air_density=False).materialize()
         assert "capacity_factors" in atlas.wind.data
         assert cf.size > 0
         assert bool(cf.notnull().any().compute()) is True

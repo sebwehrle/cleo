@@ -84,7 +84,7 @@ def test_flat_cf_kwargs_returns_frozenset() -> None:
 
     result = flat_cf_kwargs()
     assert isinstance(result, frozenset)
-    assert "mode" in result
+    assert "method" in result
     assert "air_density" in result
 
 
@@ -104,7 +104,7 @@ def test_resolve_cf_spec_with_none() -> None:
 
     result = resolve_cf_spec(None)
     assert isinstance(result, dict)
-    assert result["mode"] == "direct_cf_quadrature"
+    assert result["method"] == "rotor_node_average"
     assert result["air_density"] is False
     assert result["rews_n"] == 12
     assert result["loss_factor"] == 1.0
@@ -114,8 +114,8 @@ def test_resolve_cf_spec_with_overrides() -> None:
     """resolve_cf_spec() must apply overrides."""
     from cleo.wind_metrics import resolve_cf_spec
 
-    result = resolve_cf_spec({"mode": "hub", "air_density": True})
-    assert result["mode"] == "hub"
+    result = resolve_cf_spec({"method": "hub_height_weibull", "air_density": True})
+    assert result["method"] == "hub_height_weibull"
     assert result["air_density"] is True
     assert result["rews_n"] == 12  # default preserved
     assert result["loss_factor"] == 1.0  # default preserved

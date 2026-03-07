@@ -32,7 +32,7 @@ class TestUnknownKwargRejection:
         "metric,base_kwargs",
         [
             ("capacity_factors", {"turbines": ["FakeTurbine.T1.1000"]}),
-            ("mean_wind_speed", {"height": 100}),
+            ("wind_speed", {"height": 100}),
             (
                 "lcoe",
                 {
@@ -58,7 +58,7 @@ class TestUnknownKwargRejection:
                 bad_param=42,
             )
         error_msg = str(exc_info.value)
-        assert "air_density" in error_msg or "mode" in error_msg
+        assert "air_density" in error_msg or "method" in error_msg
 
     def test_error_message_hides_internal_params(self, mock_domain: WindDomain) -> None:
         """hours_per_year is internal and should not appear in allowed list."""
@@ -81,7 +81,7 @@ class TestUnknownKwargRejection:
                 "capacity_factors",
                 turbines=["FakeTurbine.T1.1000"],
                 air_density=True,
-                mode="hub",
+                method="hub_height_weibull",
                 loss_factor=0.95,
             )
         except ValueError as e:
@@ -137,7 +137,7 @@ class TestTimebaseRejection:
                 },
             ),
             ("capacity_factors", {"turbines": ["FakeTurbine.T1.1000"]}),
-            ("mean_wind_speed", {"height": 100}),
+            ("wind_speed", {"height": 100}),
         ],
     )
     def test_compute_rejects_hours_per_year(self, mock_domain: WindDomain, metric: str, base_kwargs: dict) -> None:

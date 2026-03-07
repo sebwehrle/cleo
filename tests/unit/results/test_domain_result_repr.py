@@ -19,20 +19,21 @@ class _DomainStub:
 
 
 def test_domain_result_repr_staged_guides_next_steps() -> None:
-    metric = "mean_wind_speed"
+    metric = "wind_speed"
     domain = _DomainStub(metric, staged=True)
     da = xr.DataArray(
         np.array([[1.0]], dtype=np.float32),
         dims=("y", "x"),
-        name=metric,
+        name="mean_wind_speed",
     )
-    result = DomainResult(domain, metric, da, {})
+    domain._computed_overlays = {"mean_wind_speed": object()}
+    result = DomainResult(domain, metric, da, {"method": "height_weibull_mean"}, variable_name="mean_wind_speed")
 
     text = repr(result)
-    assert "DomainResult(metric='mean_wind_speed', state='staged'" in text
+    assert "DomainResult(metric='wind_speed', state='staged'" in text
     assert "target='atlas.wind.data[\"mean_wind_speed\"]'" in text
     assert "Lazy data: .data" in text
-    assert ".materialize(overwrite=True, allow_mode_change=False)" in text
+    assert ".materialize(overwrite=True, allow_method_change=False)" in text
     assert ".persist(run_id=None, metric_name=None)" in text
 
 
@@ -44,10 +45,10 @@ def test_domain_result_repr_capacity_factors_includes_mode_when_present() -> Non
         dims=("turbine", "y", "x"),
         coords={"turbine": ["Enercon.E40.500"]},
         name=metric,
-        attrs={"cleo:cf_mode": "direct_cf_quadrature"},
+        attrs={"cleo:cf_method": "rotor_node_average"},
     )
     result = DomainResult(domain, metric, da, {})
 
     text = repr(result)
     assert "DomainResult(metric='capacity_factors', state='computed'" in text
-    assert "mode='direct_cf_quadrature'" in text
+    assert "method='rotor_node_average'" in text

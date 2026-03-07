@@ -4,7 +4,7 @@ Tests are offline-only: uses local test fixtures with no network calls.
 
 Tests verify:
 - Unknown metric raises ValueError with supported list
-- mean_wind_speed works and is not all-NaN
+- wind_speed(method="height_weibull_mean") works and is not all-NaN
 - capacity_factors requires turbines (enforcement)
 - capacity_factors works and is not all-NaN
 """
@@ -241,11 +241,11 @@ class TestWindDomainCompute:
 
         # Should list supported metrics
         error_msg = str(exc_info.value)
-        assert "mean_wind_speed" in error_msg
+        assert "wind_speed" in error_msg
         assert "Supported" in error_msg
 
-    def test_mean_wind_speed_works_and_not_all_nan(self, tmp_path: Path) -> None:
-        """mean_wind_speed metric computes valid values."""
+    def test_height_weibull_mean_wind_speed_works_and_not_all_nan(self, tmp_path: Path) -> None:
+        """wind_speed(method='height_weibull_mean') computes valid values."""
         atlas = MockAtlas(tmp_path)
         _create_all_required_gwa_files(atlas)
         _create_elevation_raster(atlas)
@@ -263,12 +263,12 @@ class TestWindDomainCompute:
         assert bool(ok.any().compute()) is True, "Fixture must have valid cells"
 
         # Compute mean wind speed (compute() returns DomainResult, use .data for DataArray)
-        da = atlas.wind.compute("mean_wind_speed", height=100).data
+        da = atlas.wind.compute("wind_speed", method="height_weibull_mean", height=100).data
 
         # Assert not all NaN
         assert (
             bool(da.notnull().any().compute()) is True
-        ), "mean_wind_speed should have at least one valid (non-NaN) value"
+        ), "height-based wind_speed should have at least one valid (non-NaN) value"
 
 
 class TestCapacityFactorsEnforcement:
@@ -315,22 +315,22 @@ class TestCapacityFactorsEnforcement:
         with pytest.raises(ValueError, match="materialize-only parameter"):
             atlas.wind.compute(
                 "capacity_factors",
-                mode="direct_cf_quadrature",
-                allow_mode_change=True,
+                method="rotor_node_average",
+                allow_method_change=True,
             )
 
         with pytest.raises(ValueError, match=r"pass them to \.materialize\(\.\.\.\)"):
             atlas.wind.compute(
                 "capacity_factors",
-                mode="direct_cf_quadrature",
+                method="rotor_node_average",
                 overwrite=True,
             )
 
-        with pytest.raises(ValueError, match="allow_mode_change"):
+        with pytest.raises(ValueError, match="allow_method_change"):
             atlas.wind.compute(
                 "capacity_factors",
-                mode="direct_cf_quadrature",
-                allow_mode_change=True,
+                method="rotor_node_average",
+                allow_method_change=True,
                 overwrite=True,
             )
 
@@ -350,7 +350,7 @@ class TestCapacityFactorsEnforcement:
         with pytest.raises(ValueError, match="does not accept inplace"):
             atlas.wind.compute(
                 "capacity_factors",
-                mode="direct_cf_quadrature",
+                method="rotor_node_average",
                 inplace=True,
             )
 
@@ -469,8 +469,8 @@ class TestDomainResultMaterializeOverwrite:
         second_air_density = atlas.wind.data["capacity_factors"].attrs.get("cleo:air_density")
         assert second_air_density == 1, "materialize(overwrite=True) must update attrs (air_density=1)"
 
-    def test_materialize_overwrite_true_with_mode_change(self, tmp_path: Path) -> None:
-        """materialize(overwrite=True, allow_mode_change=True) allows changing cf mode."""
+    def test_materialize_overwrite_true_with_method_change(self, tmp_path: Path) -> None:
+        """materialize(overwrite=True, allow_method_change=True) allows changing CF method."""
         turbine_names = ["Enercon.E40.500"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)
@@ -485,21 +485,24 @@ class TestDomainResultMaterializeOverwrite:
         # Select turbine
         atlas.wind.select(turbines=turbine_names)
 
-        # Cache capacity_factors with mode="hub"
-        atlas.wind.compute("capacity_factors", mode="hub").materialize()
+        # Cache capacity_factors with hub-height method
+        atlas.wind.compute("capacity_factors", method="hub_height_weibull").materialize()
 
-        # Verify first mode
-        assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_mode") == "hub"
+        # Verify first method
+        assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_method") == "hub_height_weibull"
 
-        # Cache with mode="rews" should fail without allow_mode_change
-        with pytest.raises(ValueError, match="allow_mode_change"):
-            atlas.wind.compute("capacity_factors", mode="rews").materialize()
+        # Cache with REWS-scaled hub-height method should fail without allow_method_change
+        with pytest.raises(ValueError, match="allow_method_change"):
+            atlas.wind.compute("capacity_factors", method="hub_height_weibull_rews_scaled").materialize()
 
-        # Cache with mode="rews" and allow_mode_change=True should succeed
-        atlas.wind.compute("capacity_factors", mode="rews").materialize(overwrite=True, allow_mode_change=True)
+        # Cache with REWS-scaled hub-height method and allow_method_change=True should succeed
+        atlas.wind.compute("capacity_factors", method="hub_height_weibull_rews_scaled").materialize(
+            overwrite=True,
+            allow_method_change=True,
+        )
 
-        # Verify mode changed
-        assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_mode") == "rews"
+        # Verify method changed
+        assert atlas.wind.data["capacity_factors"].attrs.get("cleo:cf_method") == "hub_height_weibull_rews_scaled"
 
     def test_materialize_overwrite_false_raises_if_exists(self, tmp_path: Path) -> None:
         """materialize(overwrite=False) raises if variable already exists."""
@@ -538,7 +541,7 @@ class TestDomainResultMaterializeOverwrite:
 
         # Compute only first turbine; materialize() expands to full turbine axis in store.
         atlas.wind.select(turbines=[turbine_names[0]])
-        materialized = atlas.wind.compute("capacity_factors", mode="hub").materialize()
+        materialized = atlas.wind.compute("capacity_factors", method="hub_height_weibull").materialize()
         surfaced = atlas.wind.data["capacity_factors"]
 
         assert materialized.identical(surfaced)
@@ -561,7 +564,7 @@ class TestTransientOverlay:
         unifier.materialize_landscape(atlas)
 
         atlas.wind.select(turbines=[turbine_names[0]])
-        result = atlas.wind.compute("capacity_factors", mode="hub")
+        result = atlas.wind.compute("capacity_factors", method="hub_height_weibull")
 
         assert "capacity_factors" in atlas.wind.data
         staged = atlas.wind.data["capacity_factors"]
@@ -594,7 +597,7 @@ class TestTransientOverlay:
         unifier.materialize_wind(atlas)
         unifier.materialize_landscape(atlas)
 
-        atlas.wind.compute("mean_wind_speed", height=100)
+        atlas.wind.compute("wind_speed", method="height_weibull_mean", height=100)
         assert "mean_wind_speed" in atlas.wind.data
 
         store = xr.open_zarr(atlas.wind_store_path, consolidated=False)
@@ -622,7 +625,7 @@ class TestComputeBackendParity:
         unifier.materialize_landscape(atlas)
 
         atlas.wind.select(turbines=turbine_names)
-        da = atlas.wind.compute("capacity_factors", mode="hub").data
+        da = atlas.wind.compute("capacity_factors", method="hub_height_weibull").data
 
         serial = dask_compute(da, backend="serial").values
         threads = dask_compute(da, backend="threads").values
@@ -641,8 +644,41 @@ class TestComputeBackendParity:
 class TestVerticalRewsIntegration:
     """Integration gates for PR4 closure: tall-rotor and within-200 envelope."""
 
-    def test_tall_rotor_direct_cf_and_rews_mps_are_finite(self, tmp_path: Path) -> None:
-        """Tall rotor (z_top > 200 m) computes in direct mode without structural failure."""
+    def test_within_200_rotor_methods_accept_explicit_ak_logz(self, tmp_path: Path) -> None:
+        """Rotor-aware public methods accept explicit ``ak_logz`` when all queried heights are in-range."""
+        turbine_names = ["Enercon.E40.500", "Enercon.E82.3000"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        atlas.wind.select(turbines=turbine_names)
+        cf = atlas.wind.compute(
+            "capacity_factors",
+            method="rotor_node_average",
+            interpolation="ak_logz",
+            rews_n=12,
+        ).data
+        rews = atlas.wind.compute(
+            "wind_speed",
+            method="rotor_equivalent",
+            interpolation="ak_logz",
+            rews_n=12,
+        ).data
+
+        assert cf.attrs["cleo:interpolation"] == "ak_logz"
+        assert rews.attrs["cleo:interpolation"] == "ak_logz"
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            assert bool(cf.notnull().any().compute()) is True
+            assert bool(rews.notnull().any().compute()) is True
+
+    def test_tall_rotor_rotor_node_average_and_rotor_equivalent_are_finite(self, tmp_path: Path) -> None:
+        """Tall rotor (z_top > 200 m) computes rotor-aware CF and wind speed without structural failure."""
         turbine_id = "Test.TallRotor3000"
         atlas = MockAtlas(tmp_path, turbines=[turbine_id])
         _create_all_required_gwa_files(atlas)
@@ -660,17 +696,51 @@ class TestVerticalRewsIntegration:
 
         atlas.wind.select(turbines=[turbine_id])
 
-        cf = atlas.wind.compute("capacity_factors", mode="direct_cf_quadrature", rews_n=12).data
-        rews = atlas.wind.compute("rews_mps", rews_n=12).data
+        cf = atlas.wind.compute("capacity_factors", method="rotor_node_average", rews_n=12).data
+        rews = atlas.wind.compute("wind_speed", method="rotor_equivalent", rews_n=12).data
 
-        assert cf.attrs.get("cleo:cf_mode") == "direct_cf_quadrature"
+        assert cf.attrs.get("cleo:cf_method") == "rotor_node_average"
         with warnings.catch_warnings():
             warnings.simplefilter("error", RuntimeWarning)
             assert bool(cf.notnull().any().compute()) is True
             assert bool(rews.notnull().any().compute()) is True
 
-    def test_within_200_direct_vs_legacy_rews_acceptance_envelope(self, tmp_path: Path) -> None:
-        """Within-200 envelope check between direct_cf_quadrature and legacy rews mode."""
+    def test_tall_rotor_explicit_ak_logz_raises_for_rotor_methods(self, tmp_path: Path) -> None:
+        """Explicit ``ak_logz`` keeps no-extrapolation semantics for tall rotor-aware methods."""
+        turbine_id = "Test.TallRotor3000"
+        atlas = MockAtlas(tmp_path, turbines=[turbine_id])
+        _create_all_required_gwa_files(atlas)
+        _create_elevation_raster(atlas)
+        _write_custom_turbine_yaml(
+            atlas,
+            turbine_id=turbine_id,
+            hub_height=140.0,
+            rotor_diameter=240.0,
+        )
+
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        atlas.wind.select(turbines=[turbine_id])
+
+        with pytest.raises(ValueError, match="query height above supported maximum"):
+            atlas.wind.compute(
+                "capacity_factors",
+                method="rotor_node_average",
+                interpolation="ak_logz",
+                rews_n=12,
+            ).data
+        with pytest.raises(ValueError, match="query height above supported maximum"):
+            atlas.wind.compute(
+                "wind_speed",
+                method="rotor_equivalent",
+                interpolation="ak_logz",
+                rews_n=12,
+            ).data
+
+    def test_within_200_rotor_node_average_vs_rews_scaled_acceptance_envelope(self, tmp_path: Path) -> None:
+        """Within-200 envelope check between rotor-node-average and REWS-scaled hub-height methods."""
         turbine_names = ["Enercon.E40.500", "Enercon.E82.3000"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)
@@ -684,12 +754,12 @@ class TestVerticalRewsIntegration:
         atlas.wind.select(turbines=turbine_names)
         cf_direct = atlas.wind.compute(
             "capacity_factors",
-            mode="direct_cf_quadrature",
+            method="rotor_node_average",
             rews_n=12,
         ).data
         cf_legacy = atlas.wind.compute(
             "capacity_factors",
-            mode="rews",
+            method="hub_height_weibull_rews_scaled",
             rews_n=12,
         ).data
 

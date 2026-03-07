@@ -1,7 +1,7 @@
 """Contract: physics metrics carry no timebase metadata.
 
 This test documents and enforces that physics metrics (capacity_factors,
-mean_wind_speed, rews_mps) do NOT carry cleo:hours_per_year attrs.
+wind_speed, wind_speed) do NOT carry cleo:hours_per_year attrs.
 
 This is important because:
 1. Physics outputs are timebase-independent (CF is a fraction, not energy)
@@ -65,7 +65,7 @@ def test_capacity_factors_has_no_hours_per_year_attr():
         turbine_ids=inputs["turbine_ids"],
         hub_heights_m=inputs["hub_heights_m"],
         power_curves=inputs["power_curves"],
-        mode="hub",
+        method="hub_height_weibull",
     )
 
     assert "cleo:hours_per_year" not in result.attrs, "capacity_factors must NOT carry timebase metadata"
@@ -84,7 +84,7 @@ def test_mean_wind_speed_has_no_hours_per_year_attr():
 
     result = mean_wind_speed_from_weibull(A=A, k=k)
 
-    assert "cleo:hours_per_year" not in result.attrs, "mean_wind_speed must NOT carry timebase metadata"
+    assert "cleo:hours_per_year" not in result.attrs, "wind_speed must NOT carry timebase metadata"
 
 
 def test_rews_mps_has_no_hours_per_year_attr():
@@ -101,7 +101,7 @@ def test_rews_mps_has_no_hours_per_year_attr():
         rews_n=5,
     )
 
-    assert "cleo:hours_per_year" not in result.attrs, "rews_mps must NOT carry timebase metadata"
+    assert "cleo:hours_per_year" not in result.attrs, "wind_speed must NOT carry timebase metadata"
 
 
 def test_physics_metrics_have_no_timebase_related_attrs():
@@ -115,7 +115,7 @@ def test_physics_metrics_have_no_timebase_related_attrs():
         turbine_ids=inputs["turbine_ids"],
         hub_heights_m=inputs["hub_heights_m"],
         power_curves=inputs["power_curves"],
-        mode="hub",
+        method="hub_height_weibull",
     )
 
     # Check no timebase-related attrs

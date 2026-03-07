@@ -198,7 +198,7 @@ class TestEconomicsIntegration:
         lcoe2 = atlas.wind.compute(
             "lcoe",
             turbines=[tid],
-            cf={"mode": "hub"},  # Different mode
+            cf={"method": "hub_height_weibull"},  # Different mode
             economics=economics,
         ).data.compute()
 
@@ -335,13 +335,13 @@ class TestEconomicsIntegration:
         lcoe = atlas.wind.compute(
             "lcoe",
             turbines=[tid],
-            cf={"mode": "hub", "loss_factor": 0.95},
+            cf={"method": "hub_height_weibull", "loss_factor": 0.95},
             economics=economics,
         ).data
 
         assert "cleo:cf_spec_json" in lcoe.attrs
         cf_spec = json.loads(lcoe.attrs["cleo:cf_spec_json"])
-        assert cf_spec["mode"] == "hub"
+        assert cf_spec["method"] == "hub_height_weibull"
         assert cf_spec["loss_factor"] == 0.95
 
     def test_flat_economics_kwargs_rejected(self, materialized_atlas: Atlas) -> None:
@@ -372,7 +372,7 @@ class TestEconomicsIntegration:
             atlas.wind.compute(
                 "lcoe",
                 turbines=[tid],
-                mode="hub",  # Flat kwarg, should be in cf={}
+                method="hub_height_weibull",  # Flat kwarg, should be in cf={}
                 economics={
                     "discount_rate": 0.05,
                     "lifetime_a": 25,
@@ -384,7 +384,7 @@ class TestEconomicsIntegration:
         error_msg = str(exc_info.value)
         # Error message comes from allowed set validation
         assert "Unknown parameter" in error_msg
-        assert "mode" in error_msg
+        assert "method" in error_msg
 
     def test_bos_cost_share_affects_lcoe(self, materialized_atlas: Atlas) -> None:
         """bos_cost_share parameter affects LCOE values."""
@@ -515,7 +515,7 @@ class TestLcoeFamilyMetricsIntegration:
             result = atlas.wind.compute(
                 metric,
                 turbines=[tid],
-                cf={"mode": "hub"},
+                cf={"method": "hub_height_weibull"},
                 economics=full_economics,
             ).data
 

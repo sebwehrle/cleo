@@ -30,18 +30,18 @@ class TestResolveCfSpec:
         """When cf is None, returns all defaults."""
         result = resolve_cf_spec(None)
 
-        assert result == _CF_SPEC_DEFAULTS
-        assert result["mode"] == "direct_cf_quadrature"
+        assert result["method"] == "rotor_node_average"
+        assert result["interpolation"] == "mu_cv_loglog"
         assert result["air_density"] is False
         assert result["rews_n"] == 12
         assert result["loss_factor"] == 1.0
 
     def testresolve_cf_spec_merges_partial_override(self):
         """Partial cf dict merges with defaults."""
-        cf = {"mode": "hub"}
+        cf = {"method": "hub_height_weibull"}
         result = resolve_cf_spec(cf)
 
-        assert result["mode"] == "hub"
+        assert result["method"] == "hub_height_weibull"
         assert result["air_density"] is False  # default
         assert result["rews_n"] == 12  # default
         assert result["loss_factor"] == 1.0  # default
@@ -49,22 +49,34 @@ class TestResolveCfSpec:
     def testresolve_cf_spec_full_override(self):
         """Full cf dict overrides all defaults."""
         cf = {
-            "mode": "rews",
+            "method": "hub_height_weibull_rews_scaled",
             "air_density": True,
             "rews_n": 7,
             "loss_factor": 0.9,
         }
         result = resolve_cf_spec(cf)
 
-        assert result == cf
+        assert result["method"] == "hub_height_weibull_rews_scaled"
+        assert result["interpolation"] == "ak_logz"
+        assert result["air_density"] is True
+        assert result["rews_n"] == 7
+        assert result["loss_factor"] == 0.9
+
+    def testresolve_cf_spec_rotor_explicit_interpolation_is_preserved(self):
+        """Explicit rotor-aware interpolation survives grouped-spec normalization."""
+        cf = {"method": "rotor_node_average", "interpolation": "ak_logz"}
+        result = resolve_cf_spec(cf)
+
+        assert result["method"] == "rotor_node_average"
+        assert result["interpolation"] == "ak_logz"
 
     def testresolve_cf_spec_returns_copy(self):
         """Returned dict is independent of defaults."""
         result = resolve_cf_spec(None)
-        result["mode"] = "hub"
+        result["method"] = "hub_height_weibull"
 
         # Defaults should be unchanged
-        assert _CF_SPEC_DEFAULTS["mode"] == "direct_cf_quadrature"
+        assert _CF_SPEC_DEFAULTS["method"] == "rotor_node_average"
 
 
 class TestGroupedSpecConstants:
@@ -79,7 +91,7 @@ class TestGroupedSpecConstants:
 
     def test_flat_cf_kwargs_complete(self):
         """All flat CF kwargs that should be rejected are defined."""
-        assert "mode" in _FLAT_CF_KWARGS
+        assert "method" in _FLAT_CF_KWARGS
         assert "air_density" in _FLAT_CF_KWARGS
         assert "loss_factor" in _FLAT_CF_KWARGS
         assert "rews_n" in _FLAT_CF_KWARGS
@@ -140,7 +152,7 @@ class TestLcoeDirectCallWithGroupedSpec:
             wind,
             land,
             turbines=("T1",),
-            mode="hub",
+            method="hub_height_weibull",
             air_density=False,
             loss_factor=1.0,
             rews_n=12,
@@ -162,7 +174,7 @@ class TestLcoeDirectCallWithGroupedSpec:
             wind,
             land,
             turbines=("T1",),
-            mode="hub",
+            method="hub_height_weibull",
             bos_cost_share=0.3,
             om_fixed_eur_per_kw_a=20.0,
             om_variable_eur_per_kwh=0.008,

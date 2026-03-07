@@ -28,7 +28,14 @@ What this does:
 
 ```python
 atlas.wind.select(turbines=["Enercon.E40.500"])
-atlas.wind.compute("capacity_factors", mode="direct_cf_quadrature", air_density=False, rews_n=12, loss_factor=1.0).materialize()
+atlas.wind.compute(
+    "capacity_factors",
+    method="rotor_node_average",
+    interpolation="auto",
+    air_density=False,
+    rews_n=12,
+    loss_factor=1.0,
+).materialize()
 ```
 
 Result location:

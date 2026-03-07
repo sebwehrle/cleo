@@ -8,7 +8,14 @@ Compute wind metrics through the atlas and materialize results back into `atlas.
 
 ```python
 atlas.wind.select(turbines=["Enercon.E40.500"])
-atlas.wind.compute("capacity_factors", mode="direct_cf_quadrature", air_density=False, rews_n=12, loss_factor=1.0).materialize()
+atlas.wind.compute(
+    "capacity_factors",
+    method="rotor_node_average",
+    interpolation="auto",
+    air_density=False,
+    rews_n=12,
+    loss_factor=1.0,
+).materialize()
 
 wind_ds = atlas.wind.data
 ```
@@ -23,9 +30,10 @@ wind_ds = atlas.wind.data
 
 ### Metric knobs
 
-- `mean_wind_speed`: `height`
-- `capacity_factors`: `mode`, `air_density`, `rews_n`, `loss_factor`, plus turbine selection
-- `rews_mps`: `air_density`, `rews_n`, plus turbine selection
+- `wind_speed`: `method`, plus:
+  - `height` for `method="height_weibull_mean"`
+  - `air_density`, `rews_n`, `interpolation` for `method="rotor_equivalent"`
+- `capacity_factors`: `method`, `interpolation`, `air_density`, `rews_n`, `loss_factor`, plus turbine selection
 - LCOE-family (`lcoe`, `min_lcoe_turbine`, `optimal_power`, `optimal_energy`): grouped `cf={...}` and `economics={...}`
 
 ### LCOE-family grouped spec shape
@@ -33,7 +41,13 @@ wind_ds = atlas.wind.data
 ```python
 atlas.wind.compute(
     "lcoe",
-    cf={"mode": "direct_cf_quadrature", "air_density": False, "rews_n": 12, "loss_factor": 1.0},
+    cf={
+        "method": "rotor_node_average",
+        "interpolation": "auto",
+        "air_density": False,
+        "rews_n": 12,
+        "loss_factor": 1.0,
+    },
     economics={
         "discount_rate": 0.05,
         "lifetime_a": 25,
@@ -46,7 +60,7 @@ atlas.wind.compute(
 
 ## Methods by metric (explicit)
 
-### 1. `mean_wind_speed`
+### 1. `wind_speed(method="height_weibull_mean")`
 
 How it is computed:
 
@@ -67,31 +81,31 @@ How it is computed (common pipeline):
 1. Resolve selected turbines and extract turbine metadata from store attrs and turbine variables:
    hub heights, power curves, rotor diameters.
 2. Read Weibull parameter stacks (`A(height,y,x)`, `k(height,y,x)`) and wind-speed grid.
-3. Run turbine-by-turbine CF numerics (`capacity_factors_v1`) with selected mode.
+3. Run turbine-by-turbine CF numerics (`capacity_factors_v1`) with the selected method.
 4. Apply `loss_factor` during CF integration.
 5. Apply `valid_mask` so output is defined only on valid cells.
 
-Mode-specific method details:
+Method-specific details:
 
-- `direct_cf_quadrature` (default):
+- `rotor_node_average` (default):
   1. Construct rotor sample nodes along hub +/- rotor_radius using Gauss-Legendre nodes.
   2. Apply rotor-chord weighting so node weights represent swept-area contribution.
   3. At each node height, evaluate vertical Weibull parameters using vertical policy.
   4. For each node, integrate expected normalized power against Weibull PDF on wind-speed grid.
   5. Area-weight the node CF values and sum to final CF.
 
-- `momentmatch_weibull`:
+- `rotor_moment_matched_weibull`:
   1. Sample rotor nodes as above.
   2. Compute rotor-averaged first and third wind-speed moments (`m1`, `m3`).
   3. Solve an equivalent Weibull shape `k_rot` from ratio `m3 / m1^3`.
   4. Recover equivalent scale `A_rot` from `m1` and `k_rot`.
   5. Integrate CF once using this equivalent Weibull.
 
-- `hub`:
+- `hub_height_weibull`:
   1. Interpolate Weibull parameters to hub height only.
   2. Integrate expected normalized power once at hub-height distribution.
 
-- `rews` (legacy):
+- `hub_height_weibull_rews_scaled`:
   1. Interpolate Weibull at hub height.
   2. Compute REWS moment factor from rotor/hub cubic moments.
   3. Scale hub Weibull `A` by this factor.
@@ -102,20 +116,22 @@ Air-density behavior (`air_density=True`):
 - Uses `rho` field from wind store.
 - Applies speed-equivalent scaling based on `(rho / rho0)^(1/3)` within vertical evaluation path.
 
-### 3. `rews_mps`
+### 3. `wind_speed(method="rotor_equivalent")`
 
 How it is computed:
 
 1. Resolve turbines and rotor geometry (hub height, rotor diameter).
-2. Reuse direct rotor quadrature core used by CF method, but in REWS-only mode.
+2. Reuse the rotor quadrature core used by the rotor-aware CF methods, but in wind-speed-only mode.
 3. Compute rotor-equivalent wind speed from rotor-averaged cubic moment:
    `REWS = (E_rotor[U^3])^(1/3)`.
 4. Apply `valid_mask`.
 
 What this means operationally:
 
-- Output is physical wind speed (`m/s`) per turbine and cell.
+- Output is physical wind speed (`m/s`) per turbine and cell, materialized as `rotor_equivalent_wind_speed`.
 - No power-curve expectation is returned here (CF part is skipped internally).
+- `interpolation="auto"` resolves to `mu_cv_loglog`; explicit `ak_logz` is
+  also available when you want strict no-extrapolation rotor-height queries.
 
 ### 4. `lcoe`
 

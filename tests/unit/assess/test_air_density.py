@@ -35,9 +35,7 @@ def test_air_density_correction_formula() -> None:
         coords={"y": [0, 1], "x": [0, 1]},
         name="elevation",
     )
-    template = elevation.copy()
-
-    result = compute_air_density_correction_core(elevation=elevation, template=template)
+    result = compute_air_density_correction_core(elevation=elevation)
 
     # Expected formula: 1.247015 * exp(-0.000104 * elevation) / 1.225
     expected = 1.247015 * np.exp(-0.000104 * elevation_values) / 1.225
@@ -57,9 +55,7 @@ def test_air_density_correction_preserves_coords() -> None:
         coords={"y": y_coords, "x": x_coords},
         name="elevation",
     )
-    template = elevation.copy()
-
-    result = compute_air_density_correction_core(elevation=elevation, template=template)
+    result = compute_air_density_correction_core(elevation=elevation)
 
     np.testing.assert_array_equal(result.coords["y"].values, y_coords)
     np.testing.assert_array_equal(result.coords["x"].values, x_coords)
@@ -75,9 +71,7 @@ def test_air_density_correction_propagates_nan() -> None:
         coords={"y": [0, 1], "x": [0, 1]},
         name="elevation",
     )
-    template = elevation.copy()
-
-    result = compute_air_density_correction_core(elevation=elevation, template=template)
+    result = compute_air_density_correction_core(elevation=elevation)
 
     assert np.isnan(result.values[0, 1]), "NaN should propagate from elevation to output"
     assert np.isfinite(result.values[0, 0]), "Finite values should remain finite"
@@ -94,9 +88,7 @@ def test_air_density_correction_lazy_dask() -> None:
         coords={"y": range(10), "x": range(10)},
         name="elevation",
     )
-    template = elevation.copy()
-
-    result = compute_air_density_correction_core(elevation=elevation, template=template)
+    result = compute_air_density_correction_core(elevation=elevation)
 
     # Check that result is dask-backed (lazy)
     assert hasattr(result.data, "compute"), "Result should be dask-backed"
@@ -111,9 +103,7 @@ def test_air_density_correction_sea_level() -> None:
         coords={"y": [0, 1], "x": [0, 1]},
         name="elevation",
     )
-    template = elevation.copy()
-
-    result = compute_air_density_correction_core(elevation=elevation, template=template)
+    result = compute_air_density_correction_core(elevation=elevation)
 
     # At sea level: 1.247015 * exp(0) / 1.225 = 1.247015 / 1.225 ≈ 1.018
     expected_sea_level = 1.247015 / 1.225
@@ -134,10 +124,8 @@ def test_air_density_correction_high_altitude() -> None:
         coords={"y": [0, 1], "x": [0, 1]},
         name="elevation",
     )
-    template = elevation_low.copy()
-
-    result_low = compute_air_density_correction_core(elevation=elevation_low, template=template)
-    result_high = compute_air_density_correction_core(elevation=elevation_high, template=template)
+    result_low = compute_air_density_correction_core(elevation=elevation_low)
+    result_high = compute_air_density_correction_core(elevation=elevation_high)
 
     # Higher altitude should have lower air density correction factor
     assert np.all(result_high.values < result_low.values), "Higher altitude should have lower air density correction"

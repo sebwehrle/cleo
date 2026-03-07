@@ -121,7 +121,7 @@ class TestUnitMetadataSurvivesRoundTrip:
         """Capacity factors have units attr after materialization."""
         atlas = materialized_atlas
 
-        result = atlas.wind.compute("capacity_factors", mode="hub")
+        result = atlas.wind.compute("capacity_factors", method="hub_height_weibull")
         result.materialize()
 
         # Reload from store
@@ -129,14 +129,14 @@ class TestUnitMetadataSurvivesRoundTrip:
         assert "units" in cf.attrs
         assert cf.attrs["units"] == "1"
 
-    def test_rews_mps_has_units_after_materialize(self, materialized_atlas: Atlas) -> None:
+    def test_rotor_equivalent_wind_speed_has_units_after_materialize(self, materialized_atlas: Atlas) -> None:
         """REWS has units attr after materialization."""
         atlas = materialized_atlas
 
-        result = atlas.wind.compute("rews_mps")
+        result = atlas.wind.compute("wind_speed", method="rotor_equivalent")
         result.materialize()
 
-        rews = atlas.wind.data["rews_mps"]
+        rews = atlas.wind.data["rotor_equivalent_wind_speed"]
         assert "units" in rews.attrs
         assert rews.attrs["units"] == "m/s"
 
@@ -144,7 +144,7 @@ class TestUnitMetadataSurvivesRoundTrip:
         """Mean wind speed has units attr after compute."""
         atlas = materialized_atlas
 
-        result = atlas.wind.compute("mean_wind_speed", height=100)
+        result = atlas.wind.compute("wind_speed", height=100)
 
         assert "units" in result.data.attrs
         assert result.data.attrs["units"] == "m/s"
@@ -153,7 +153,7 @@ class TestUnitMetadataSurvivesRoundTrip:
         """Unit metadata survives persist and open_result round-trip."""
         atlas = materialized_atlas
 
-        result = atlas.wind.compute("capacity_factors", mode="hub")
+        result = atlas.wind.compute("capacity_factors", method="hub_height_weibull")
         store_path = result.persist(run_id="test_units")
 
         # Open persisted result (returns Dataset, access the variable)
@@ -167,7 +167,7 @@ class TestUnitMetadataSurvivesRoundTrip:
         """Unit metadata survives NetCDF export."""
         atlas = materialized_atlas
 
-        result = atlas.wind.compute("capacity_factors", mode="hub")
+        result = atlas.wind.compute("capacity_factors", method="hub_height_weibull")
         store_path = result.persist(run_id="test_export")
 
         # Export to NetCDF
@@ -257,7 +257,7 @@ class TestDomainConvertUnitsEndToEnd:
         atlas = materialized_atlas
 
         # Compute mean wind speed
-        atlas.wind.compute("mean_wind_speed", height=100)
+        atlas.wind.compute("wind_speed", method="height_weibull_mean", height=100)
 
         # Convert in place
         atlas.wind.convert_units("mean_wind_speed", "km/h", inplace=True)
@@ -271,7 +271,7 @@ class TestDomainConvertUnitsEndToEnd:
         atlas = materialized_atlas
 
         # Compute mean wind speed
-        atlas.wind.compute("mean_wind_speed", height=100)
+        atlas.wind.compute("wind_speed", method="height_weibull_mean", height=100)
 
         # Convert without inplace
         result = atlas.wind.convert_units("mean_wind_speed", "km/h")
@@ -409,7 +409,7 @@ class TestCanonicalUnitsEnforced:
         """Computed metrics use canonical 'units' key, not legacy 'unit'."""
         atlas = materialized_atlas
 
-        result = atlas.wind.compute("capacity_factors", mode="hub")
+        result = atlas.wind.compute("capacity_factors", method="hub_height_weibull")
 
         # Should have canonical key
         assert UNIT_ATTR_KEY in result.data.attrs

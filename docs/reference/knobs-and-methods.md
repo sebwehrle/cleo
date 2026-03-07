@@ -56,9 +56,8 @@ CLEO is designed around a single mutable `Atlas` workspace object.
 
 | Metric | Required knobs | Optional knobs | Output location semantics |
 |---|---|---|---|
-| `mean_wind_speed` | `height` | none | Staged in `atlas.wind.data["mean_wind_speed"]`; `materialize()` writes/updates height slices in active wind store. |
-| `capacity_factors` | turbines (via persistent selection or `turbines=`) | `mode`, `air_density`, `loss_factor`, `rews_n` | Same staging/materialization semantics. |
-| `rews_mps` | turbines (via persistent selection or `turbines=`) | `air_density`, `rews_n` | Same staging/materialization semantics. |
+| `wind_speed` | `method="height_weibull_mean"` with `height`, or `method="rotor_equivalent"` with turbines | `interpolation`; plus `air_density`, `rews_n` for `rotor_equivalent` | Height-based calls stage `atlas.wind.data["mean_wind_speed"]`; rotor-equivalent calls stage `atlas.wind.data["rotor_equivalent_wind_speed"]`. |
+| `capacity_factors` | turbines (via persistent selection or `turbines=`) | `method`, `interpolation`, `air_density`, `loss_factor`, `rews_n` | Same staging/materialization semantics. |
 | `lcoe` | turbines + grouped specs | `cf={...}`, `economics={...}` | Same staging/materialization semantics; economics/timebase attrs added. |
 | `min_lcoe_turbine` | turbines + grouped specs | `cf={...}`, `economics={...}` | Same staging/materialization semantics. |
 | `optimal_power` | turbines + grouped specs | `cf={...}`, `economics={...}` | Same staging/materialization semantics. |
@@ -70,7 +69,8 @@ CLEO is designed around a single mutable `Atlas` workspace object.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `mode` | `"direct_cf_quadrature"` | Capacity-factor method variant. |
+| `method` | `"rotor_node_average"` | Capacity-factor method family. |
+| `interpolation` | `"auto"` | Interpolation backend selector (family-resolved by default). |
 | `air_density` | `False` | Apply density correction via `rho` if available. |
 | `rews_n` | `12` | Quadrature/sample nodes for REWS-related integrations. |
 | `loss_factor` | `1.0` | Multiplicative loss factor on CF output. |
@@ -96,7 +96,7 @@ Notes:
 
 ## Wind methods by metric (explicit)
 
-### `mean_wind_speed`
+### `wind_speed(method="height_weibull_mean")`
 
 Algorithm:
 
@@ -118,30 +118,30 @@ Common steps:
 
 1. Resolve turbines and read per-turbine metadata (hub height, power curve, rotor diameter).
 2. Read `A(height,y,x)` and `k(height,y,x)` plus wind-speed grid.
-3. Execute selected CF mode numerics turbine-by-turbine.
+3. Execute the selected CF method numerics turbine-by-turbine.
 4. Apply `loss_factor` in integration and `valid_mask` on output.
 
-Mode details:
+Method details:
 
-- `direct_cf_quadrature`:
+- `rotor_node_average`:
   1. Build rotor node heights from Gauss-Legendre nodes.
   2. Weight nodes with rotor-chord area weighting.
   3. Evaluate vertical Weibull at each node via vertical policy.
   4. Integrate expected normalized power at each node over wind-speed PDF.
   5. Area-weight sum node CF values.
 
-- `momentmatch_weibull`:
+- `rotor_moment_matched_weibull`:
   1. Sample rotor nodes as above.
   2. Compute rotor-averaged first and third moments (`m1`, `m3`).
   3. Solve equivalent Weibull `k_rot` from `m3 / m1^3`.
   4. Derive `A_rot` from `m1` and `k_rot`.
   5. Integrate CF once using equivalent Weibull.
 
-- `hub`:
+- `hub_height_weibull`:
   1. Interpolate Weibull parameters to hub height.
   2. Integrate expected normalized power once at hub-height distribution.
 
-- `rews` (legacy):
+- `hub_height_weibull_rews_scaled`:
   1. Compute REWS moment factor from rotor/hub cubic moments.
   2. Scale hub Weibull `A` by factor.
   3. Integrate expected normalized power at adjusted distribution.
@@ -150,17 +150,26 @@ Air density (`air_density=True`):
 
 - Uses local `rho`; speed-equivalent scaling enters via `(rho / rho0)^(1/3)`.
 
+Interpolation:
+
+- `auto` resolves by method family:
+  - hub-height methods -> `ak_logz`
+  - rotor-aware methods -> `mu_cv_loglog`
+- explicit `ak_logz` is allowed for rotor-aware methods and preserves
+  no-extrapolation semantics across the queried rotor heights
+- explicit `mu_cv_loglog` uses the vertical-policy path
+
 Output:
 
 - Units: `1`
 - Dims: `turbine`, `y`, `x`
 
-### `rews_mps`
+### `wind_speed(method="rotor_equivalent")`
 
 Algorithm:
 
 1. Resolve turbines and rotor geometry.
-2. Run direct rotor quadrature core in REWS-only mode.
+2. Run the rotor quadrature core in wind-speed-only mode.
 3. Compute `REWS = (E_rotor[U^3])^(1/3)`.
 4. Apply `valid_mask`.
 
@@ -168,6 +177,11 @@ Output:
 
 - Units: `m/s`
 - Dims: `turbine`, `y`, `x`
+- Materialized variable name: `rotor_equivalent_wind_speed`
+- Interpolation:
+  - `auto` resolves to `mu_cv_loglog`
+  - explicit `ak_logz` is allowed and preserves no-extrapolation semantics
+  - explicit `mu_cv_loglog` uses the vertical-policy path
 
 ### `lcoe`
 

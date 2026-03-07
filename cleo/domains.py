@@ -14,8 +14,7 @@ WindDomain
 Handles wind resource metrics including:
 
 - ``capacity_factors``: Turbine-specific capacity factors
-- ``mean_wind_speed``: Height-specific mean wind speeds
-- ``rews_mps``: Rotor-equivalent wind speed
+- ``wind_speed``: Height-specific or rotor-equivalent wind speed
 - ``lcoe``: Levelized cost of electricity
 - ``min_lcoe_turbine``: Optimal turbine selection
 - ``optimal_power``, ``optimal_energy``: Optimal turbine outputs
@@ -53,6 +52,7 @@ from cleo.wind_metrics import (
     list_wind_metrics,
     get_wind_metric_spec,
     resolve_cf_spec,
+    resolved_wind_output_name,
     required_economics_fields,
     flat_cf_kwargs,
     flat_economics_kwargs,
@@ -93,7 +93,7 @@ def _cf_spec_matches(
 
     Args:
         existing_cf: Existing capacity factors DataArray from store.
-        requested_spec: Resolved CF spec dict (mode, air_density, rews_n, loss_factor).
+        requested_spec: Resolved CF spec dict (method, interpolation, air_density, rews_n, loss_factor).
         turbines: Requested turbine IDs tuple.
 
     Returns:
@@ -101,7 +101,7 @@ def _cf_spec_matches(
     """
     # Required metadata keys
     required_keys = [
-        "cleo:cf_mode",
+        "cleo:cf_method",
         "cleo:air_density",
         "cleo:rews_n",
         "cleo:loss_factor",
@@ -114,7 +114,17 @@ def _cf_spec_matches(
             return False
 
     # Check exact match of CF parameters
-    if existing_cf.attrs["cleo:cf_mode"] != requested_spec["mode"]:
+    if existing_cf.attrs["cleo:cf_method"] != requested_spec["method"]:
+        return False
+
+    stored_interpolation = existing_cf.attrs.get("cleo:interpolation")
+    if stored_interpolation is None:
+        stored_method = existing_cf.attrs["cleo:cf_method"]
+        if stored_method in {"hub_height_weibull", "hub_height_weibull_rews_scaled"}:
+            stored_interpolation = "ak_logz"
+        else:
+            stored_interpolation = "mu_cv_loglog"
+    if stored_interpolation != requested_spec["interpolation"]:
         return False
 
     # air_density is stored as int (0/1) for netCDF compat
@@ -122,7 +132,10 @@ def _cf_spec_matches(
     if stored_air_density != requested_spec["air_density"]:
         return False
 
-    if existing_cf.attrs["cleo:rews_n"] != requested_spec["rews_n"]:
+    if (
+        requested_spec["method"] != "hub_height_weibull"
+        and existing_cf.attrs["cleo:rews_n"] != requested_spec["rews_n"]
+    ):
         return False
 
     if existing_cf.attrs["cleo:loss_factor"] != requested_spec["loss_factor"]:
@@ -165,13 +178,13 @@ def _reject_inplace_kwarg(kwargs: dict, method_name: str) -> None:
 
 def _reject_materialize_only_kwargs(kwargs: dict) -> None:
     """Reject kwargs that belong to materialize(), not compute()."""
-    materialize_only = tuple(key for key in ("overwrite", "allow_mode_change") if key in kwargs)
+    materialize_only = tuple(key for key in ("overwrite", "allow_method_change") if key in kwargs)
     if materialize_only:
         keys_text = ", ".join(repr(key) for key in materialize_only)
         raise ValueError(
             f"materialize-only parameter(s) {keys_text} were passed to compute(...); "
             "pass them to .materialize(...), e.g. "
-            "atlas.wind.compute(...).materialize(overwrite=True, allow_mode_change=True)."
+            "atlas.wind.compute(...).materialize(overwrite=True, allow_method_change=True)."
         )
 
 
@@ -236,7 +249,7 @@ def _resolve_composed_metric_kwargs(
         raise ValueError(
             f"For {metric!r}, CF parameters must be passed via cf={{...}}, "
             f"not as flat kwargs. Found: {sorted(flat_cf_present)}. "
-            f'Use: compute({metric!r}, cf={{"mode": ..., "air_density": ...}}, ...)'
+            f'Use: compute({metric!r}, cf={{"method": ..., "air_density": ...}}, ...)'
         )
 
     flat_econ_present = set(kwargs.keys()) & flat_economics_kwargs()
@@ -707,7 +720,7 @@ class WindDomain:
 
         Returns a DomainResult wrapper supporting .data/.materialize()/.persist() pattern.
         Also stages a lazy normalized overlay so the metric is visible immediately
-        in ``atlas.wind.data[metric]`` before materialization.
+        in ``atlas.wind.data[resolved_variable_name]`` before materialization.
 
         :param metric: Metric name (see supported metrics below).
         :param kwargs: Metric-specific parameters. For metrics requiring
@@ -715,16 +728,18 @@ class WindDomain:
             :meth:`select`.
 
         Supported metrics:
-            - "mean_wind_speed": requires height (int).
+            - "wind_speed": public wind-speed surface.
+              - ``method="height_weibull_mean"`` requires ``height``.
+              - ``method="rotor_equivalent"`` requires turbines (from select() or kwarg).
             - "capacity_factors": requires turbines (from select() or kwarg).
-              Optional: mode ("direct_cf_quadrature" [default], "momentmatch_weibull",
-              "hub", "rews"), rews_n (int, default 12), air_density (bool),
-              loss_factor (float).
-            - "rews_mps": requires turbines (from select() or kwarg).
-              Optional: rews_n (int, default 12), air_density (bool).
+              Optional: method (``"rotor_node_average"`` [default],
+              ``"rotor_moment_matched_weibull"``, ``"hub_height_weibull"``,
+              ``"hub_height_weibull_rews_scaled"``), interpolation, rews_n,
+              air_density, loss_factor.
             - "lcoe": requires turbines. Uses grouped spec API:
-              - ``cf={...}``: CF parameters (mode, air_density, loss_factor, rews_n).
-                Defaults: mode="direct_cf_quadrature", air_density=False, rews_n=12, loss_factor=1.0.
+              - ``cf={...}``: CF parameters (method, interpolation, air_density,
+                loss_factor, rews_n). Defaults: method="rotor_node_average",
+                interpolation="auto", air_density=False, rews_n=12, loss_factor=1.0.
               - ``economics={...}``: Economics parameters (discount_rate, lifetime_a,
                 om_fixed_eur_per_kw_a, om_variable_eur_per_kwh, bos_cost_share).
                 Required: discount_rate, lifetime_a, om_fixed_eur_per_kw_a, om_variable_eur_per_kwh.
@@ -742,14 +757,14 @@ class WindDomain:
             atlas.configure_economics(discount_rate=0.05, lifetime_a=25)
             atlas.wind.compute(
                 "lcoe",
-                cf={"mode": "hub", "air_density": True},
+                cf={"method": "hub_height_weibull", "air_density": True},
                 economics={"om_fixed_eur_per_kw_a": 20, "om_variable_eur_per_kwh": 0.008},
             )
 
         :returns: :class:`cleo.results.DomainResult` with ``.data``/``.materialize()``/``.persist()``.
         :raises ValueError: If metric is unknown, params are missing, or turbine
             validation fails.
-        :raises ValueError: If materialize-only kwargs (``overwrite`` / ``allow_mode_change``)
+        :raises ValueError: If materialize-only kwargs (``overwrite`` / ``allow_method_change``)
             are passed to ``compute(...)`` instead of ``.materialize(...)``.
         :raises ValueError: If ``inplace`` is passed; ``compute(...)`` does not
             mutate stores directly.
@@ -770,7 +785,11 @@ class WindDomain:
         resolved_cf = _resolve_composed_metric_kwargs(kwargs, metric, spec, self._atlas)
 
         # Resolve turbines if required
-        if spec["requires_turbines"]:
+        wind_speed_method = kwargs.get("method")
+        requires_turbines = spec["requires_turbines"] or (
+            metric == "wind_speed" and wind_speed_method == "rotor_equivalent"
+        )
+        if requires_turbines:
             _resolve_turbines_for_metric(kwargs, self)
 
         # Inject economics params and check CF reuse
@@ -784,14 +803,16 @@ class WindDomain:
             land = None
 
         da = spec["fn"](wind, land, **kwargs)
+        variable_name = resolved_wind_output_name(metric=metric, params=kwargs, data=da)
         staged = normalize_metric_for_active_wind_store(
             metric=metric,
+            variable_name=variable_name,
             da=da,
             existing_ds=self._store_data(),
         )
-        self._computed_overlays[metric] = staged
+        self._computed_overlays[variable_name] = staged
 
-        return DomainResult(self, metric, da, dict(kwargs))
+        return DomainResult(self, metric, da, dict(kwargs), variable_name=variable_name)
 
 
 class LandscapeAddResult:

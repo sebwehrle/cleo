@@ -111,11 +111,20 @@ atlas.build()
 atlas.wind.select(turbines=["Enercon.E40.500"])
 
 # Compute + materialize into active wind store
-atlas.wind.compute("capacity_factors", mode="direct_cf_quadrature", air_density=True).materialize()
+atlas.wind.compute(
+    "capacity_factors",
+    method="rotor_node_average",
+    interpolation="auto",
+    air_density=True,
+).materialize()
 
 # Compute another metric (lazy result)
-mean_ws = atlas.wind.compute("mean_wind_speed", height=100).data
-# mean_ws dims: ("height","y","x") with a singleton height=[100]
+mean_ws = atlas.wind.compute(
+    "wind_speed",
+    method="height_weibull_mean",
+    height=100,
+).data
+# mean_ws name: "mean_wind_speed", dims: ("height","y","x")
 ```
 
 ## Workspace Layout
@@ -245,17 +254,17 @@ Atlas(
   - conversion is dask-friendly (lazy arrays stay lazy).
 - `atlas.wind.compute(metric, **kwargs)`
   - metric entrypoint for all wind metrics.
-  - rejects materialize-only kwargs `overwrite` and `allow_mode_change`; pass those to `.materialize(...)`.
-  - stages a lazy normalized overlay into `atlas.wind.data[metric]` before store writes.
+  - rejects materialize-only kwargs `overwrite` and `allow_method_change`; pass those to `.materialize(...)`.
+  - stages a lazy normalized overlay into `atlas.wind.data[<resolved_variable_name>]` before store writes.
   - staged wind overlays are cleared by `atlas.select(...)`, `atlas.build()`, `atlas.build_canonical()`, and `atlas.build_clc()`.
 
 `compute(...)` returns `DomainResult`:
 
 - `.data`
   - computed `xarray.DataArray` (lazy when backed by dask).
-- `.materialize(overwrite=True, allow_mode_change=False)`
+- `.materialize(overwrite=True, allow_method_change=False)`
   - writes metric to active wind store and reloads surfaced domain state.
-  - `allow_mode_change` is required to replace existing `capacity_factors` with a different `cleo:cf_mode`.
+  - `allow_method_change` is required to replace existing `capacity_factors` with a different `cleo:cf_method`.
   - `mean_wind_speed` is materialized per requested height slice into one
     aggregated `mean_wind_speed(height,y,x)` variable.
   - `overwrite=False` for `mean_wind_speed` blocks only if that requested
@@ -267,22 +276,46 @@ Atlas(
 
 ### Supported Wind Metrics
 
-- `mean_wind_speed`
-  - Required: `height` (int)
-  - Output dims: `("height","y","x")` (singleton height from `compute(...)`)
-  - Repeated `.materialize()` calls at different heights aggregate into one
-    `mean_wind_speed(height,y,x)` variable in active wind store.
+- `wind_speed`
+  - Public selector with method-dependent output variable names.
+  - `method="height_weibull_mean"`
+    - Required: `height`
+    - Output variable: `mean_wind_speed`
+    - Output dims: `("height","y","x")`
+    - Repeated `.materialize()` calls at different heights aggregate into one
+      `mean_wind_speed(height,y,x)` variable in active wind store.
+  - `method="rotor_equivalent"`
+    - Requires turbines via selection or `turbines=[...]`
+    - Output variable: `rotor_equivalent_wind_speed`
+    - Output dims: `("turbine","y","x")`
+    - Options: `rews_n`, `air_density`, `interpolation="auto"|"ak_logz"|"mu_cv_loglog"`
+    - `auto` resolves to `mu_cv_loglog`; explicit `ak_logz` is allowed and
+      preserves no-extrapolation semantics across the rotor heights.
 - `capacity_factors`
   - Requires turbines via selection or `turbines=[...]`
-  - Options: `mode="direct_cf_quadrature"|"momentmatch_weibull"|"hub"|"rews"`, `rews_n`, `air_density`, `loss_factor`
-- `rews_mps`
-  - Requires turbines via selection or `turbines=[...]`
-  - Options: `rews_n`, `air_density`
+  - Options:
+    - `method="rotor_node_average"|"rotor_moment_matched_weibull"|"hub_height_weibull"|"hub_height_weibull_rews_scaled"`
+    - `interpolation="auto"|"ak_logz"|"mu_cv_loglog"`
+    - `auto` resolves by method family: hub-height methods -> `ak_logz`,
+      rotor-aware methods -> `mu_cv_loglog`
+    - explicit `ak_logz` keeps no-extrapolation semantics and may raise if a
+      requested rotor node falls outside the available GWA height range
+    - `rews_n`, `air_density`, `loss_factor`
+  - Example:
+    ```python
+    atlas.wind.select(turbines=["Enercon.E40.500"])
+    cf = atlas.wind.compute(
+        "capacity_factors",
+        method="rotor_node_average",
+        interpolation="ak_logz",
+        rews_n=12,
+    ).data
+    ```
 - `lcoe`
   - Requires turbines via selection or `turbines=[...]`
   - Uses grouped spec API:
-    - `cf={...}`: CF parameters. Keys: `mode`, `air_density`, `rews_n`, `loss_factor`.
-      Defaults: `mode="direct_cf_quadrature"`, `air_density=False`, `rews_n=12`, `loss_factor=1.0`.
+    - `cf={...}`: CF parameters. Keys: `method`, `interpolation`, `air_density`, `rews_n`, `loss_factor`.
+      Defaults: `method="rotor_node_average"`, `interpolation="auto"`, `air_density=False`, `rews_n=12`, `loss_factor=1.0`.
     - `economics={...}`: Economics parameters. Required: `discount_rate`, `lifetime_a`,
       `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`. Optional: `bos_cost_share` (default 0.0).
     - Economics can be pre-configured at Atlas level via `atlas.configure_economics(...)`.
@@ -292,7 +325,7 @@ Atlas(
     atlas.configure_economics(discount_rate=0.05, lifetime_a=25)
     atlas.wind.compute(
         "lcoe",
-        cf={"mode": "hub"},
+        cf={"method": "hub_height_weibull"},
         economics={"om_fixed_eur_per_kw_a": 20, "om_variable_eur_per_kwh": 0.008},
     )
     ```
@@ -476,7 +509,7 @@ For LCOE unit changes, export and post-process manually.
 Example:
 
 ```python
-run = atlas.wind.compute("capacity_factors", mode="hub", air_density=True)
+run = atlas.wind.compute("capacity_factors", method="hub_height_weibull", air_density=True)
 store_path = run.persist(run_id="baseline")
 opened = atlas.open_result(store_path.parent.name, "capacity_factors")
 atlas.export_result_netcdf(store_path.parent.name, "capacity_factors", "cf.nc")
@@ -513,8 +546,8 @@ df = benchmark_metric_variants(
     atlas,
     "capacity_factors",
     variants=[
-        {"label": "baseline", "kwargs": {"mode": "direct_cf_quadrature"}},
-        {"label": "candidate_rews7", "kwargs": {"mode": "rews", "rews_n": 7}},
+        {"label": "baseline", "kwargs": {"method": "rotor_node_average"}},
+        {"label": "candidate_rews7", "kwargs": {"method": "hub_height_weibull_rews_scaled", "rews_n": 7}},
     ],
     repeats=3,
     warmup=1,

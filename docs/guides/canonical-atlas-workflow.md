@@ -31,7 +31,7 @@ Use `inplace=True` as default. Clone-style selection with `inplace=False` is sup
 ### 3. Compute -> materialize -> continue
 
 ```python
-atlas.wind.compute("mean_wind_speed", height=100).materialize()
+atlas.wind.compute("wind_speed", method="height_weibull_mean", height=100).materialize()
 atlas.landscape.compute(metric="distance", source="settlements").materialize()
 
 wind_ds = atlas.wind.data
@@ -41,7 +41,7 @@ land_ds = atlas.landscape.data
 ### 4. Persist only when you need run artifacts
 
 ```python
-run_path = atlas.wind.compute("mean_wind_speed", height=100).persist(metric_name="mean_wind_speed")
+run_path = atlas.wind.compute("wind_speed", method="height_weibull_mean", height=100).persist()
 ```
 
 - `materialize(...)`: writes to active domain store and updates atlas-facing data.

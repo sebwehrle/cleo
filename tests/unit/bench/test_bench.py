@@ -59,7 +59,7 @@ def test_benchmark_case_schema_and_cache_flag():
     atlas = _Atlas()
     df = benchmark_case(
         atlas,
-        "mean_wind_speed",
+        "wind_speed",
         repeats=2,
         warmup=1,
         cache=True,
@@ -96,7 +96,7 @@ def test_benchmark_case_schema_and_cache_flag():
         ]
     ).issubset(df.columns)
     assert set(df["label"]) == {"baseline"}
-    assert set(df["metric"]) == {"mean_wind_speed"}
+    assert set(df["metric"]) == {"wind_speed"}
     assert set(df["cache"]) == {True}
     assert set(df["ctx_scheduler"]) == {"processes"}
     assert set(df["ctx_workers"]) == {4}
@@ -108,7 +108,7 @@ def test_benchmark_case_schema_and_cache_flag():
 
 def test_benchmark_case_captures_failures():
     atlas = _Atlas(fail=True)
-    df = benchmark_case(atlas, "mean_wind_speed", repeats=1, warmup=0)
+    df = benchmark_case(atlas, "wind_speed", repeats=1, warmup=0)
 
     assert len(df) == 1
     assert bool(df.loc[0, "ok"]) is False
@@ -188,9 +188,9 @@ def test_benchmark_compare_speedup_column(monkeypatch: pytest.MonkeyPatch):
 def test_benchmark_case_validates_repeat_and_warmup():
     atlas = _Atlas()
     with pytest.raises(ValueError, match="repeats must be > 0"):
-        benchmark_case(atlas, "mean_wind_speed", repeats=0)
+        benchmark_case(atlas, "wind_speed", repeats=0)
     with pytest.raises(ValueError, match="warmup must be >= 0"):
-        benchmark_case(atlas, "mean_wind_speed", warmup=-1)
+        benchmark_case(atlas, "wind_speed", warmup=-1)
 
 
 def test_benchmark_compare_validates_repeat_and_warmup():
@@ -205,7 +205,7 @@ def test_benchmark_case_context_key_collision_raises():
     with pytest.raises(ValueError, match="collide after normalization"):
         benchmark_case(
             atlas,
-            "mean_wind_speed",
+            "wind_speed",
             context={"workers-per-node": 2, "workers_per_node": 4},
         )
 
@@ -214,7 +214,7 @@ def test_benchmark_case_sets_rss_delta_none_without_psutil(monkeypatch: pytest.M
     atlas = _Atlas()
     monkeypatch.setattr("cleo.bench.psutil", None)
 
-    df = benchmark_case(atlas, "mean_wind_speed", repeats=1, warmup=0)
+    df = benchmark_case(atlas, "wind_speed", repeats=1, warmup=0)
 
     assert len(df) == 1
     assert df["rss_delta_mb"].isna().all()
@@ -271,8 +271,8 @@ def test_benchmark_metric_variants_schema_and_speedup(monkeypatch: pytest.Monkey
         atlas=object(),
         metric="capacity_factors",
         variants=[
-            {"label": "baseline", "kwargs": {"mode": "hub"}},
-            {"label": "candidate", "kwargs": {"mode": "hub", "rews_n": 7}},
+            {"label": "baseline", "kwargs": {"method": "hub_height_weibull"}},
+            {"label": "candidate", "kwargs": {"method": "hub_height_weibull", "rews_n": 7}},
         ],
         baseline_label="baseline",
     )
@@ -418,7 +418,7 @@ def test_build_benchmark_governance_record_is_deterministic():
         region_mask_payload={"mask": [1, 0, 1]},
         benchmark_turbine_set_id="ts_v1",
         turbine_set_payload=["T1", "T2"],
-        policy_snapshot={"cf_mode": "direct_cf_quadrature"},
+        policy_snapshot={"cf_mode": "rotor_node_average"},
         benchmark_random_seed=None,
     )
     rec2 = build_benchmark_governance_record(
@@ -428,7 +428,7 @@ def test_build_benchmark_governance_record_is_deterministic():
         region_mask_payload={"mask": [1, 0, 1]},
         benchmark_turbine_set_id="ts_v1",
         turbine_set_payload=["T1", "T2"],
-        policy_snapshot={"cf_mode": "direct_cf_quadrature"},
+        policy_snapshot={"cf_mode": "rotor_node_average"},
         benchmark_random_seed=None,
     )
     assert rec1 == rec2

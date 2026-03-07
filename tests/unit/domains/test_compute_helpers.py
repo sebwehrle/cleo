@@ -45,15 +45,15 @@ class TestRejectMaterializeOnlyKwargs:
         with pytest.raises(ValueError, match="materialize-only parameter"):
             _reject_materialize_only_kwargs({"overwrite": True})
 
-    def test_raises_when_allow_mode_change_present(self) -> None:
-        """Raises ValueError when allow_mode_change kwarg is present."""
+    def test_raises_when_allow_method_change_present(self) -> None:
+        """Raises ValueError when allow_method_change kwarg is present."""
         with pytest.raises(ValueError, match="materialize-only parameter"):
-            _reject_materialize_only_kwargs({"allow_mode_change": True})
+            _reject_materialize_only_kwargs({"allow_method_change": True})
 
     def test_raises_with_both_present(self) -> None:
         """Raises ValueError listing both kwargs."""
         with pytest.raises(ValueError, match="materialize-only parameter"):
-            _reject_materialize_only_kwargs({"overwrite": True, "allow_mode_change": True})
+            _reject_materialize_only_kwargs({"overwrite": True, "allow_method_change": True})
 
     def test_passes_when_none_present(self) -> None:
         """Does not raise when materialize-only kwargs are absent."""

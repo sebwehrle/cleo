@@ -228,6 +228,7 @@ def test_integrate_weighted_nodes_matches_direct_helper() -> None:
         rotor_diameter=D,
         rews_n=rews_n,
         loss_factor=loss_factor,
+        interpolation="mu_cv_loglog",
         vertical_policy=None,
         compute_cf=True,
     )
@@ -273,6 +274,7 @@ def test_momentmatch_inflow_matches_current_helper() -> None:
         vertical_policy=None,
     )
     np.testing.assert_allclose(got.values, expected_cf.values, rtol=1e-12, atol=1e-12)
+    assert inflow.rews_mps is not None
     np.testing.assert_allclose(inflow.rews_mps.values, expected_rews.values, rtol=1e-12, atol=1e-12)
 
 
@@ -288,13 +290,34 @@ def test_inflow_based_cf_preserves_algo_version_attr() -> None:
         turbine_ids=("T1",),
         hub_heights_m=np.array([100.0], dtype=np.float64),
         power_curves=power_curves,
-        mode="direct_cf_quadrature",
+        method="rotor_node_average",
         rotor_diameters_m=np.array([80.0], dtype=np.float64),
         rho_stack=rho,
         air_density=True,
         rews_n=8,
     )
-    assert out.attrs["cleo:algo_version"] == "3"
+    assert out.attrs["cleo:algo_version"] == "4"
+
+
+def test_rotor_node_average_explicit_ak_logz_records_interpolation_attr() -> None:
+    """Rotor-node CF accepts explicit ``ak_logz`` and records it in provenance."""
+    A, k, _rho = _make_stacks()
+    u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
+    power_curves = np.array([np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0)], dtype=np.float64)
+    out = capacity_factors_v1(
+        A_stack=A,
+        k_stack=k,
+        u_grid=u_grid,
+        turbine_ids=("T1",),
+        hub_heights_m=np.array([100.0], dtype=np.float64),
+        power_curves=power_curves,
+        method="rotor_node_average",
+        rotor_diameters_m=np.array([80.0], dtype=np.float64),
+        rews_n=8,
+        interpolation="ak_logz",
+    )
+
+    assert out.attrs["cleo:interpolation"] == "ak_logz"
 
 
 def test_cf_reuse_check_works_with_inflow_based_cf() -> None:
@@ -309,7 +332,7 @@ def test_cf_reuse_check_works_with_inflow_based_cf() -> None:
         turbine_ids=("T1",),
         hub_heights_m=np.array([100.0], dtype=np.float64),
         power_curves=power_curves,
-        mode="direct_cf_quadrature",
+        method="rotor_node_average",
         rotor_diameters_m=np.array([80.0], dtype=np.float64),
         rho_stack=rho,
         air_density=False,

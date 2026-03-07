@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import xarray as xr
 
+from cleo.assess import interpolate_weibull_params_to_height
 from cleo.vertical import (
     apply_alpha_fallback,
     build_cv_k_lut,
@@ -118,3 +120,61 @@ def test_evaluate_weibull_at_heights_runs_above_200() -> None:
     assert np.all(np.isfinite(k_q.values))
     assert np.all(np.isfinite(A_q.values))
     assert np.all(np.isfinite(A_p.values))
+
+
+def test_evaluate_weibull_at_heights_ak_logz_matches_hub_height_interpolator() -> None:
+    """``ak_logz`` backend reproduces the hub-height interpolator exactly in-range."""
+    heights = [50.0, 100.0, 150.0, 200.0]
+    A = _stack_from_heights(
+        np.array([[[6.0]], [[7.0]], [[8.0]], [[9.0]]], dtype=np.float64),
+        heights,
+    ).rename("weibull_A")
+    k = _stack_from_heights(
+        np.array([[[1.8]], [[2.0]], [[2.2]], [[2.4]]], dtype=np.float64),
+        heights,
+    ).rename("weibull_k")
+    rho = _stack_from_heights(
+        np.array([[[1.22]], [[1.21]], [[1.20]], [[1.19]]], dtype=np.float64),
+        heights,
+    ).rename("rho")
+
+    target_height = 125.0
+    mu_q, k_q, A_q, A_p = evaluate_weibull_at_heights(
+        A,
+        k,
+        query_heights_m=np.array([target_height], dtype=np.float64),
+        rho_stack=rho,
+        interpolation="ak_logz",
+    )
+    A_ref, k_ref = interpolate_weibull_params_to_height(A, k, target_height)
+
+    np.testing.assert_allclose(A_q.isel(query_height=0, drop=True).values, A_ref.values, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(k_q.isel(query_height=0, drop=True).values, k_ref.values, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        mu_q.isel(query_height=0, drop=True).values,
+        weibull_mean_from_a_k(A_ref, k_ref).values,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert A_p.sizes["query_height"] == 1
+
+
+def test_evaluate_weibull_at_heights_ak_logz_rejects_extrapolation() -> None:
+    """``ak_logz`` backend keeps no-extrapolation semantics above stack top."""
+    heights = [50.0, 100.0, 150.0, 200.0]
+    A = _stack_from_heights(
+        np.array([[[6.0]], [[7.0]], [[8.0]], [[9.0]]], dtype=np.float64),
+        heights,
+    ).rename("weibull_A")
+    k = _stack_from_heights(
+        np.array([[[1.8]], [[2.0]], [[2.2]], [[2.4]]], dtype=np.float64),
+        heights,
+    ).rename("weibull_k")
+
+    with pytest.raises(ValueError, match="query height above supported maximum"):
+        evaluate_weibull_at_heights(
+            A,
+            k,
+            query_heights_m=np.array([220.0], dtype=np.float64),
+            interpolation="ak_logz",
+        )

@@ -71,10 +71,16 @@ def test_lcoe_and_optimal_metrics_emit_metadata_lineage_contract() -> None:
     wind, land = _make_wind_land()
     params = _lcoe_params()
 
-    lcoe = _wind_metric_lcoe(wind, land, turbines=("T1", "T2"), **params)
-    idx = _wind_metric_min_lcoe_turbine(wind, land, turbines=("T1", "T2"), **params)
-    power = _wind_metric_optimal_power(wind, land, turbines=("T1", "T2"), **params)
-    energy = _wind_metric_optimal_energy(wind, land, turbines=("T1", "T2"), **params)
+    lcoe = _wind_metric_lcoe(wind, land, turbines=("T1", "T2"), method="hub_height_weibull", **params)
+    idx = _wind_metric_min_lcoe_turbine(wind, land, turbines=("T1", "T2"), method="hub_height_weibull", **params)
+    power = _wind_metric_optimal_power(wind, land, turbines=("T1", "T2"), method="hub_height_weibull", **params)
+    energy = _wind_metric_optimal_energy(
+        wind,
+        land,
+        turbines=("T1", "T2"),
+        method="hub_height_weibull",
+        **params,
+    )
 
     assert lcoe.attrs["units"] == "EUR/MWh"
     assert "cleo:economics_json" in lcoe.attrs

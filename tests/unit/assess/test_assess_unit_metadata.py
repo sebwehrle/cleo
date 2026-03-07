@@ -75,7 +75,7 @@ class TestCapacityFactorsUnitsAttr:
             hub_heights_m=turbine_params["hub_heights_m"],
             power_curves=turbine_params["power_curves"],
             rotor_diameters_m=turbine_params["rotor_diameters_m"],
-            mode="direct_cf_quadrature",
+            method="rotor_node_average",
         )
 
         assert "units" in cf.attrs
@@ -85,7 +85,12 @@ class TestCapacityFactorsUnitsAttr:
         """capacity_factors has units attr for all computation modes."""
         A, k = weibull_stack
 
-        for mode in ["direct_cf_quadrature", "hub", "rews", "momentmatch_weibull"]:
+        for mode in [
+            "rotor_node_average",
+            "hub_height_weibull",
+            "hub_height_weibull_rews_scaled",
+            "rotor_moment_matched_weibull",
+        ]:
             cf = capacity_factors_v1(
                 A_stack=A,
                 k_stack=k,
@@ -94,18 +99,18 @@ class TestCapacityFactorsUnitsAttr:
                 hub_heights_m=turbine_params["hub_heights_m"],
                 power_curves=turbine_params["power_curves"],
                 rotor_diameters_m=turbine_params["rotor_diameters_m"],
-                mode=mode,
+                method=mode,
             )
 
-            assert "units" in cf.attrs, f"Missing units attr for mode={mode}"
-            assert cf.attrs["units"] == "1", f"Wrong units for mode={mode}"
+            assert "units" in cf.attrs, f"Missing units attr for method={mode}"
+            assert cf.attrs["units"] == "1", f"Wrong units for method={mode}"
 
 
 class TestRewsMpsUnitsAttr:
-    """Tests for rews_mps units attr."""
+    """Tests for wind_speed units attr."""
 
     def test_rews_mps_has_units_attr(self, weibull_stack, turbine_params):
-        """rews_mps output has 'units' attr."""
+        """wind_speed output has 'units' attr."""
         A, k = weibull_stack
 
         rews = rews_mps_v1(
@@ -121,10 +126,10 @@ class TestRewsMpsUnitsAttr:
 
 
 class TestMeanWindSpeedUnitsAttr:
-    """Tests for mean_wind_speed units attr."""
+    """Tests for wind_speed units attr."""
 
     def test_mean_wind_speed_has_units_attr(self):
-        """mean_wind_speed output has 'units' attr."""
+        """wind_speed output has 'units' attr."""
         A = xr.DataArray([7.0, 8.0], dims=["x"])
         k = xr.DataArray([2.0, 2.1], dims=["x"])
 

@@ -53,7 +53,7 @@ def weibull_mean_from_a_k(A: xr.DataArray, k: xr.DataArray) -> xr.DataArray:
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         log_mu = np.log(A) + xr.apply_ufunc(gammaln, 1.0 + (1.0 / k), dask="parallelized")
         mu = np.exp(log_mu)
-    return mu.rename("mean_wind_speed")
+    return mu.rename("mean_wind_speed").assign_attrs(units="m/s")
 
 
 def weibull_cv_from_k(k: xr.DataArray) -> xr.DataArray:
@@ -157,6 +157,40 @@ def interp_log_linear_ln_z(
     if "ln_height" in lnq_out.coords:
         lnq_out = lnq_out.drop_vars("ln_height")
     return np.exp(lnq_out).rename(q_stack.name)
+
+
+def interp_linear_in_ln_z(
+    q_stack: xr.DataArray,
+    *,
+    query_heights_m: np.ndarray,
+) -> xr.DataArray:
+    """Interpolate quantity linearly in ``q`` versus ``ln(z)`` space."""
+    if "height" not in q_stack.dims:
+        raise ValueError("q_stack must have a 'height' dimension")
+
+    z = np.asarray(q_stack["height"].values, dtype=np.float64)
+    if np.any(z <= 0):
+        raise ValueError("height coordinates must be strictly positive")
+
+    qh = np.asarray(query_heights_m, dtype=np.float64)
+    if np.any(qh <= 0):
+        raise ValueError("query heights must be strictly positive")
+
+    z_min = float(np.min(z))
+    z_max = float(np.max(z))
+    if float(np.min(qh)) < z_min or float(np.max(qh)) > z_max:
+        raise ValueError(
+            f"query heights [{float(np.min(qh))}, {float(np.max(qh))}] exceed stack range [{z_min}, {z_max}]"
+        )
+
+    lnz = np.log(z)
+    q_da = q_stack.assign_coords(ln_height=("height", lnz)).swap_dims({"height": "ln_height"}).sortby("ln_height")
+
+    ln_target = xr.DataArray(np.log(qh), dims=("query_height",), coords={"query_height": qh})
+    q_out = q_da.interp(ln_height=ln_target, method="linear")
+    if "ln_height" in q_out.coords:
+        q_out = q_out.drop_vars("ln_height")
+    return q_out.rename(q_stack.name)
 
 
 def weighted_top_shear_alpha(
@@ -295,7 +329,7 @@ def evaluate_density_at_heights(
     return xr.where(q_coord <= z_top, rho_interp, rho_above)
 
 
-def evaluate_weibull_at_heights(
+def _evaluate_weibull_at_heights_ak_logz(
     weibull_A_stack: xr.DataArray,
     weibull_k_stack: xr.DataArray,
     *,
@@ -303,7 +337,40 @@ def evaluate_weibull_at_heights(
     rho_stack: xr.DataArray | None = None,
     policy: dict | None = None,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
-    """Evaluate ``mu(z), k(z), A(z), A'(z)`` at arbitrary query heights."""
+    """Evaluate Weibull quantities with ``A/k`` interpolation in ``ln(z)`` space."""
+    cfg = resolve_vertical_policy(policy)
+    z_top = float(np.max(np.asarray(weibull_A_stack["height"].values, dtype=np.float64)))
+    qh = enforce_query_height_bounds(
+        query_heights_m,
+        min_supported_m=10.0,
+        max_supported_m=float(min(float(cfg["max_query_height_m"]), z_top)),
+        min_policy=cfg["min_query_height_policy"],
+        max_policy=cfg["max_query_height_policy"],
+    )
+
+    A_q = interp_linear_in_ln_z(weibull_A_stack, query_heights_m=qh).assign_coords(query_height=qh).rename("weibull_A")
+    k_q = interp_linear_in_ln_z(weibull_k_stack, query_heights_m=qh).assign_coords(query_height=qh).rename("weibull_k")
+    mu_q = weibull_mean_from_a_k(A_q, k_q).rename("mean_wind_speed")
+
+    if rho_stack is not None:
+        rho_q = evaluate_density_at_heights(rho_stack, query_heights_m=qh, policy=cfg)
+        c = (rho_q / float(cfg["rho0"])) ** (1.0 / 3.0)
+        A_prime = (A_q * c).rename("weibull_A_density_corrected")
+    else:
+        A_prime = A_q.rename("weibull_A_density_corrected")
+
+    return mu_q, k_q, A_q, A_prime
+
+
+def _evaluate_weibull_at_heights_mu_cv_loglog(
+    weibull_A_stack: xr.DataArray,
+    weibull_k_stack: xr.DataArray,
+    *,
+    query_heights_m: Sequence[float] | np.ndarray,
+    rho_stack: xr.DataArray | None = None,
+    policy: dict | None = None,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    """Evaluate Weibull quantities with ``mu/CV`` interpolation in ``ln(z)`` space."""
     cfg = resolve_vertical_policy(policy)
     z_top = float(np.max(np.asarray(weibull_A_stack["height"].values, dtype=np.float64)))
     qh = enforce_query_height_bounds(
@@ -354,10 +421,10 @@ def evaluate_weibull_at_heights(
     else:
         mu_q = mu_q_in.rename("mean_wind_speed")
 
-    k_top = interp_log_linear_ln_z(cv_stack, query_heights_m=np.array([z_top], dtype=np.float64)).squeeze(
+    k_top_cv = interp_log_linear_ln_z(cv_stack, query_heights_m=np.array([z_top], dtype=np.float64)).squeeze(
         "query_height"
     )
-    k_top = invert_cv_to_k(k_top, cv_lut=cv_lut, k_lut=k_lut)
+    k_top = invert_cv_to_k(k_top_cv, cv_lut=cv_lut, k_lut=k_lut)
     k_q = xr.where(q_coord <= z_top, k_q_in, k_top.expand_dims(query_height=q_coord)).rename("weibull_k")
 
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
@@ -371,6 +438,52 @@ def evaluate_weibull_at_heights(
         A_prime = A_q.rename("weibull_A_density_corrected")
 
     return mu_q, k_q, A_q, A_prime
+
+
+def evaluate_weibull_at_heights(
+    weibull_A_stack: xr.DataArray,
+    weibull_k_stack: xr.DataArray,
+    *,
+    query_heights_m: Sequence[float] | np.ndarray,
+    rho_stack: xr.DataArray | None = None,
+    policy: dict | None = None,
+    interpolation: Literal["mu_cv_loglog", "ak_logz"] = "mu_cv_loglog",
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    """Evaluate ``mu(z), k(z), A(z), A'(z)`` at arbitrary query heights.
+
+    :param weibull_A_stack: Weibull scale stack on ``(height, y, x)``.
+    :type weibull_A_stack: xarray.DataArray
+    :param weibull_k_stack: Weibull shape stack on ``(height, y, x)``.
+    :type weibull_k_stack: xarray.DataArray
+    :param query_heights_m: Query heights in meters.
+    :type query_heights_m: collections.abc.Sequence[float] | numpy.ndarray
+    :param rho_stack: Optional air-density stack on ``(height, y, x)``.
+    :type rho_stack: xarray.DataArray | None
+    :param policy: Optional vertical-policy overrides.
+    :type policy: dict | None
+    :param interpolation: Internal interpolation backend selector.
+    :type interpolation: Literal["mu_cv_loglog", "ak_logz"]
+    :returns: Tuple ``(mu_q, k_q, A_q, A_prime_q)`` on ``query_height``.
+    :rtype: tuple[xarray.DataArray, xarray.DataArray, xarray.DataArray, xarray.DataArray]
+    :raises ValueError: If ``interpolation`` is unsupported.
+    """
+    if interpolation == "ak_logz":
+        return _evaluate_weibull_at_heights_ak_logz(
+            weibull_A_stack,
+            weibull_k_stack,
+            query_heights_m=query_heights_m,
+            rho_stack=rho_stack,
+            policy=policy,
+        )
+    if interpolation == "mu_cv_loglog":
+        return _evaluate_weibull_at_heights_mu_cv_loglog(
+            weibull_A_stack,
+            weibull_k_stack,
+            query_heights_m=query_heights_m,
+            rho_stack=rho_stack,
+            policy=policy,
+        )
+    raise ValueError(f"Unsupported interpolation backend: {interpolation!r}")
 
 
 def default_vertical_policy() -> dict:

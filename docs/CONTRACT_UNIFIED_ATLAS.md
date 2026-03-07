@@ -76,7 +76,7 @@ Normative:
 - Default `hours_per_year` is **8766.0** when not configured (accounts for leap years).
 - Configured timebase is preserved across `select(..., inplace=False)` clones.
 - `compute("lcoe", hours_per_year=...)` must raise `ValueError` directing user to `configure_timebase()`.
-- **Physics metrics** (`capacity_factors`, `mean_wind_speed`, `rews_mps`) must NOT carry `cleo:hours_per_year` attr.
+- **Physics metrics** (`capacity_factors`, `wind_speed`) must NOT carry `cleo:hours_per_year` attr.
 - **Economics metrics** (`lcoe`, `min_lcoe_turbine`, `optimal_power`, `optimal_energy`) must carry `cleo:hours_per_year` attr.
 - Timebase affects LCOE-family metrics only; changing timebase does NOT invalidate cached `capacity_factors`.
 
@@ -185,12 +185,18 @@ Normative:
 
 ## A8. Wind: single compute entry point + materialization into `.data`
 
+Breaking-change notes:
+- For `metric="capacity_factors"`, the flat kwarg `mode` is replaced by `method`.
+- Capacity-factor method names are renamed from legacy strings (`"hub"`, `"rews"`, `"direct_cf_quadrature"`, `"momentmatch_weibull"`) to the explicit vocabulary defined in A9.
+- The split wind-speed metrics `mean_wind_speed` and `rews_mps` are replaced by one `metric="wind_speed"` surface with a `method` selector.
+
 ### Compute (lazy)
 
 ```python
 run = atlas.wind.compute(
     metric="capacity_factors",
-    mode="direct_cf_quadrature",
+    method="rotor_node_average",
+    interpolation="auto",
     air_density=False,
     rews_n=12,
     loss_factor=1.0,
@@ -204,7 +210,8 @@ Composed metric example (grouped dependency specs):
 run = atlas.wind.compute(
     metric="lcoe",
     cf={
-        "mode": "direct_cf_quadrature",
+        "method": "rotor_node_average",
+        "interpolation": "auto",
         "air_density": False,
         "rews_n": 12,
         "loss_factor": 1.0,
@@ -225,7 +232,8 @@ da = run.data
 ```python
 da_materialized = atlas.wind.compute(
     metric="capacity_factors",
-    mode="direct_cf_quadrature",
+    method="rotor_node_average",
+    interpolation="auto",
     air_density=False,
     rews_n=12,
     loss_factor=1.0,
@@ -235,13 +243,13 @@ da_materialized = atlas.wind.compute(
 Normative:
 - `WindDomain.compute(metric=..., **kwargs)` returns a **DomainResult** object with:
   - `.data -> xr.DataArray` (lazy by default),
-  - `.materialize(overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray`,
+  - `.materialize(overwrite: bool = True, allow_method_change: bool = False) -> xr.DataArray`,
   - `.persist(run_id: str | None = None, params: dict | None = None, metric_name: str | None = None) -> Path`.
 - `atlas.wind.compute(...)` is the primary public entrypoint for wind metrics.
 - `compute(...)` also stages a lazy normalized overlay immediately in `atlas.wind.data[metric_name]` without writing to the wind store.
 - `compute(...)` must reject unknown metric-specific parameters; silent unknown-kwarg drops are prohibited.
 - Parameter-shape convention for wind metrics:
-  - Leaf metrics (`mean_wind_speed`, `capacity_factors`, `rews_mps`) use flat kwargs.
+  - Leaf metrics (`wind_speed`, `capacity_factors`) use flat kwargs.
   - Composed metrics (`lcoe`, `min_lcoe_turbine`, `optimal_power`, `optimal_energy`) use grouped dependency specs:
     - `cf={...}` for capacity-factor dependency knobs.
     - `economics={...}` for economic assumptions.
@@ -250,7 +258,7 @@ Normative:
   1) write the result into the active wind store (area store when a area is selected, base store otherwise), and
   2) surface it immediately as `atlas.wind.data[metric_name]`, and
   3) return the materialized `xr.DataArray`.
-- When replacing materialized `capacity_factors`, a mode change requires `allow_mode_change=True`.
+- When replacing materialized `capacity_factors`, a capacity-factor method change requires `allow_method_change=True`.
 - Staged wind overlays are transient: `select(...)`, `build()`, `build_canonical()`, and `build_clc()` clear them.
 - Successful `.materialize()` clears the staged overlay for that metric.
 
@@ -263,44 +271,95 @@ Normative:
 Parameters:
 - `turbines`: optional override list (see A7).
 - `air_density`: `bool`, default `False`.
-- `mode`: `"direct_cf_quadrature"` (default), `"momentmatch_weibull"`, `"hub"`, or `"rews"`.
-- `rews_n`: `int`, default `12` (rotor quadrature points for rotor-aware modes).
+- `method`: `str`, one of:
+  - `"rotor_node_average"` (default) - weighted average of node-wise capacity factors across rotor disk using Gauss-Legendre quadrature.
+  - `"rotor_moment_matched_weibull"` - single effective Weibull obtained by moment-matching across rotor disk nodes.
+  - `"hub_height_weibull"` - single Weibull distribution queried at turbine hub height. No rotor averaging.
+  - `"hub_height_weibull_rews_scaled"` - hub-height Weibull with scale parameter adjusted by a REWS moment factor.
+- `rews_n`: `int`, default `12`.
+  Used by:
+  - rotor-aware methods as rotor quadrature node count;
+  - `hub_height_weibull_rews_scaled` as the REWS moment-factor integration resolution.
+  Ignored by:
+  - `hub_height_weibull`.
+- `interpolation`: `str`, default `"auto"`, one of:
+  - `"auto"` - behavior-preserving resolver by method family.
+  - `"ak_logz"` - direct interpolation of `A` and `k` in `ln(z)` space.
+  - `"mu_cv_loglog"` - interpolate `mu` and `CV` in log-log space, invert `CV -> k`, and derive `A`.
 - `loss_factor`: `float`, default `1.0` (applied multiplicatively).
 
 Normative physics/semantics:
-- Capacity factors are computed **per turbine at its hub height**, derived from the turbine definition.
-- Rotor-aware modes use height-continuous evaluation over rotor disk heights.
+- Capacity factors are produced **per turbine**, with the turbine definition supplying hub height and other turbine-specific parameters.
+- Rotor-aware methods (`rotor_node_average`, `rotor_moment_matched_weibull`) use height-continuous evaluation over rotor disk heights with vertical policy.
+- Hub-height methods (`hub_height_weibull`, `hub_height_weibull_rews_scaled`) use hub-height interpolation path with no extrapolation.
+- `interpolation="auto"` preserves current behavior mapping:
+  - hub-height methods -> `ak_logz`
+  - rotor-aware methods -> `mu_cv_loglog`
+- Explicit interpolation selection is supported for all method families:
+  - `ak_logz` keeps no-extrapolation semantics and raises if any required query
+    height lies outside the available GWA height range.
+  - `mu_cv_loglog` uses the vertical-policy path, including configured
+    extrapolation behavior where applicable.
 - This metric must not accept a free `height=` parameter (hub height is implied by the turbine).
 
 Intermediate requirement:
 - When `air_density=True`, the wind dataset must be able to hold air density fields as:
   - `atlas.wind.data["rho"]` with dims `("height", "y", "x")` (height in meters; values correspond to the hub-height bins used).
 
-### `metric="mean_wind_speed"`
+#### Scientific limitations
+
+CLEO computes rotor-level capacity factors using surrogate families because only
+height-wise marginal Weibull distributions are available from the GWA data source.
+The four capacity-factor methods represent different approaches to constructing a
+rotor-level wind speed or capacity factor surrogate from these marginal distributions.
+
+No method provides exact rotor-level capacity-factor derivation from a fully
+specified joint stochastic vertical wind field, because such information is not
+present in the input data.
+
+### `metric="wind_speed"`
 
 Parameters:
-- `height: int` (required; meters above ground).
+- `method`: `str`, one of:
+  - `"height_weibull_mean"` - compute Weibull mean wind speed at a requested height.
+  - `"rotor_equivalent"` - compute rotor-equivalent wind speed for selected turbines.
+- `interpolation`: `str`, default `"auto"`.
+  - `"auto"` - behavior-preserving resolver by method family.
+  - `"ak_logz"` - explicit hub-height interpolation backend.
+  - `"mu_cv_loglog"` - explicit policy-style interpolation backend.
 
 Normative:
-- Must not require turbine selection.
+- `method="height_weibull_mean"`:
+  - required kwargs: `height`
+  - forbidden kwargs: `turbines`, `rews_n`, `air_density`
+  - output variable name: `mean_wind_speed`
+  - output dims: `("height", "y", "x")`
+  - `compute(..., height=<h>)` returns a singleton height slice (`height=[h]`).
+- `method="rotor_equivalent"`:
+  - required kwargs: `turbines` via selection or explicit override
+  - optional kwargs: `air_density`, `rews_n`, `interpolation`
+  - forbidden kwargs: free `height`
+  - output variable name: `rotor_equivalent_wind_speed`
+  - output dims: `("turbine", "y", "x")`
 - Must operate on the current area selection if set (A4).
-- Output must carry an explicit ``height`` dimension with dims
-  ``("height", "y", "x")``.
-- `compute(..., height=<h>)` returns a singleton height slice (`height=[h]`).
-- `materialize()` stores/updates `mean_wind_speed` by height slice so repeated
-  materializations at different heights aggregate into one
+- `method="height_weibull_mean"` materialization stores/updates height slices into one
   `mean_wind_speed(height,y,x)` variable.
+- `method="rotor_equivalent"` materialization stores/updates
+  `rotor_equivalent_wind_speed(turbine,y,x)`.
 - If an existing store contains legacy 2D `mean_wind_speed(y,x)`,
-  materialization must fail with an explicit migration error.
+  materialization of `method="height_weibull_mean"` must fail with an explicit migration error.
+- For `method="rotor_equivalent"`, interpolation follows the same rotor-aware
+  backend rules as `capacity_factors(method="rotor_node_average")`:
+  - `interpolation="auto"` resolves to `mu_cv_loglog`
+  - `interpolation="ak_logz"` is allowed and preserves no-extrapolation
+    semantics across the rotor query heights
+  - `interpolation="mu_cv_loglog"` is allowed and uses the vertical-policy path
 
 ### Additional wind metrics (implemented)
 
-- `metric="rews_mps"`
-  - Requires turbines via selection or `turbines=[...]`.
-  - Optional: `air_density: bool = False`, `rews_n: int = 12`.
 - `metric="lcoe"`
   - Requires turbines and grouped dependency specs:
-    - `cf` (optional): `mode`, `rews_n`, `air_density`, `loss_factor`.
+    - `cf` (optional): `method`, `interpolation`, `rews_n`, `air_density`, `loss_factor`.
     - `economics` (required by effective resolution): `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`, `discount_rate`, `lifetime_a`.
   - Optional in `economics`: `bos_cost_share` (default 0.0, meaning all CAPEX is turbine/location-independent).
   - `hours_per_year` must not be passed to `compute("lcoe", ...)`; it belongs to Atlas-level timebase assumptions.
@@ -583,8 +642,7 @@ The repository must provide a contract check that:
 
 | Variable | Canonical Unit | Notes |
 |----------|----------------|-------|
-| `mean_wind_speed` | `m/s` | Height-specific |
-| `rews_mps` | `m/s` | Rotor-equivalent wind speed |
+| `wind_speed` | `m/s` | Method-dependent: height-specific or rotor-equivalent |
 | `capacity_factors` | `1` | Dimensionless fraction |
 | `lcoe` | `EUR/MWh` | Levelized cost of electricity |
 | `min_lcoe_turbine` | *(none)* | Index, dimensionless |

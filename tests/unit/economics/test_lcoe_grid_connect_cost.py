@@ -25,7 +25,7 @@ def _make_cf(turbine_ids: tuple[str, ...]) -> xr.DataArray:
             "turbine": list(turbine_ids),
         },
     )
-    cf.attrs["cleo:cf_mode"] = "direct_cf_quadrature"
+    cf.attrs["cleo:cf_method"] = "rotor_node_average"
     cf.attrs["cleo:air_density"] = 0
     cf.attrs["cleo:rews_n"] = 12
     cf.attrs["cleo:loss_factor"] = 1.0

@@ -299,6 +299,7 @@ def persist_result(
 def normalize_metric_for_active_wind_store(
     *,
     metric: str,
+    variable_name: str | None = None,
     da: xr.DataArray,
     existing_ds: xr.Dataset,
 ) -> xr.DataArray:
@@ -306,6 +307,9 @@ def normalize_metric_for_active_wind_store(
 
     :param metric: Metric variable name targeted for wind-store materialization.
     :type metric: str
+    :param variable_name: Target data-variable name in the active wind store.
+        Defaults to ``metric`` when omitted.
+    :type variable_name: str | None
     :param da: Computed metric data array.
     :type da: xarray.DataArray
     :param existing_ds: Active wind-store dataset used as the schema reference.
@@ -316,6 +320,7 @@ def normalize_metric_for_active_wind_store(
     :raises ValueError: If computed coordinates are incompatible with store
         coordinates.
     """
+    target_name = metric if variable_name is None else variable_name
     out = da.copy()
 
     if "turbine" in out.dims:
@@ -343,7 +348,7 @@ def normalize_metric_for_active_wind_store(
         out = out.assign_coords(turbine=computed_labels)
         out = out.reindex(turbine=full_turbine_labels, fill_value=np.nan)
 
-    if metric == "mean_wind_speed":
+    if target_name == "mean_wind_speed" and "height" in out.dims:
         if "height" not in out.dims:
             raise RuntimeError("mean_wind_speed materialization requires a 'height' dimension in computed output.")
         if "height" not in existing_ds.coords:
@@ -365,7 +370,7 @@ def normalize_metric_for_active_wind_store(
     if coords_to_drop:
         out = out.drop_vars(coords_to_drop)
 
-    out.name = metric
+    out.name = target_name
     return out
 
 
@@ -394,7 +399,7 @@ def _validate_height_aggregated_preconditions(
     existing_ds: xr.Dataset,
 ) -> _HeightAggregatedContext:
     """
-    Validate preconditions for height-aggregated metrics (mean_wind_speed).
+    Validate preconditions for height-aggregated metrics (wind_speed).
 
     :param metric: Metric name.
     :param params: Compute parameters.
@@ -479,27 +484,27 @@ def _validate_height_slice_overwrite(
         )
 
 
-def _validate_cf_mode_change(
+def _validate_cf_method_change(
     existing_ds: xr.Dataset,
     new_data: xr.DataArray,
-    allow_mode_change: bool,
+    allow_method_change: bool,
 ) -> None:
     """
-    Validate capacity_factors mode change.
+    Validate capacity_factors method change.
 
     :param existing_ds: Existing dataset with capacity_factors.
     :param new_data: New data being materialized.
-    :param allow_mode_change: Whether mode change is allowed.
-    :raises ValueError: If mode would change without permission.
+    :param allow_method_change: Whether method change is allowed.
+    :raises ValueError: If method would change without permission.
     """
     existing_var = existing_ds["capacity_factors"]
-    old_mode = existing_var.attrs.get("cleo:cf_mode")
-    new_mode = new_data.attrs.get("cleo:cf_mode")
+    old_method = existing_var.attrs.get("cleo:cf_method")
+    new_method = new_data.attrs.get("cleo:cf_method")
 
-    if old_mode is not None and old_mode != new_mode and not allow_mode_change:
+    if old_method is not None and old_method != new_method and not allow_method_change:
         raise ValueError(
-            f"capacity_factors already materialized with cleo:cf_mode={old_mode!r}; "
-            f"requested {new_mode!r}; pass allow_mode_change=True (and overwrite=True) to replace."
+            f"capacity_factors already materialized with cleo:cf_method={old_method!r}; "
+            f"requested {new_method!r}; pass allow_method_change=True (and overwrite=True) to replace."
         )
 
 
@@ -569,7 +574,15 @@ class DomainResult:
     - ``atlas.wind.compute(...).persist(run_id=...)``
     """
 
-    def __init__(self, domain: WindDomain, metric: str, data: xr.DataArray, params: dict):
+    def __init__(
+        self,
+        domain: WindDomain,
+        metric: str,
+        data: xr.DataArray,
+        params: dict,
+        *,
+        variable_name: str | None = None,
+    ):
         """
         Initialize domain result wrapper.
 
@@ -582,27 +595,28 @@ class DomainResult:
         self._metric = metric
         self._data = data
         self._params = params
+        self._variable_name = metric if variable_name is None else variable_name
 
     def __repr__(self) -> str:
         """Human-friendly REPL representation with next-step guidance."""
         overlays = getattr(self._domain, "_computed_overlays", None)
-        is_staged = isinstance(overlays, dict) and self._metric in overlays
+        is_staged = isinstance(overlays, dict) and self._variable_name in overlays
         state = "staged" if is_staged else "computed"
 
-        mode = None
+        method = None
         if self._metric == "capacity_factors":
-            mode = self._data.attrs.get("cleo:cf_mode")
+            method = self._data.attrs.get("cleo:cf_method")
 
-        target = f'atlas.wind.data["{self._metric}"]'
+        target = f'atlas.wind.data["{self._variable_name}"]'
         header = f"DomainResult(metric={self._metric!r}, state={state!r}, target={target!r}"
-        if mode is not None:
-            header += f", mode={mode!r}"
+        if method is not None:
+            header += f", method={method!r}"
         header += ")"
 
         return (
             f"{header}\n"
             "  - Lazy data: .data\n"
-            "  - Write to active wind store: .materialize(overwrite=True, allow_mode_change=False)\n"
+            "  - Write to active wind store: .materialize(overwrite=True, allow_method_change=False)\n"
             "  - Persist as run artifact: .persist(run_id=None, metric_name=None)"
         )
 
@@ -620,7 +634,7 @@ class DomainResult:
     ) -> Path:
         """Persist this result as a standalone run artifact."""
         atlas = self._domain._atlas
-        name = metric_name if metric_name is not None else self._metric
+        name = metric_name if metric_name is not None else self._variable_name
         payload_params = self._params if params is None else params
         return persist_result(
             atlas,
@@ -630,7 +644,7 @@ class DomainResult:
             params=payload_params,
         )
 
-    def materialize(self, *, overwrite: bool = True, allow_mode_change: bool = False) -> xr.DataArray:
+    def materialize(self, *, overwrite: bool = True, allow_method_change: bool = False) -> xr.DataArray:
         """
         Materialize the metric into the active wind store and surface in atlas.wind.data.
 
@@ -639,14 +653,15 @@ class DomainResult:
         immediately as atlas.wind.data[metric_name].
 
         :param overwrite: If ``True`` (default), overwrite existing variable.
-            For ``mean_wind_speed``, this applies per requested ``height`` slice.
-        :param allow_mode_change: If ``True``, allow changing ``capacity_factors`` mode.
+            For height-sliced ``wind_speed``, this applies per requested ``height`` slice.
+        :param allow_method_change: If ``True``, allow changing the
+            materialized ``capacity_factors`` method.
         :returns: Cached DataArray.
         :raises ValueError: If variable exists and ``overwrite=False``.
-            For ``mean_wind_speed``, this is evaluated per requested ``height``.
-        :raises ValueError: If ``capacity_factors`` mode would change without
-            ``allow_mode_change=True``.
-        :raises RuntimeError: If materializing ``mean_wind_speed`` into a legacy
+            For height-sliced ``wind_speed``, this is evaluated per requested ``height``.
+        :raises ValueError: If ``capacity_factors`` method would change without
+            ``allow_method_change=True``.
+        :raises RuntimeError: If materializing height-sliced ``wind_speed`` into a legacy
             2D variable (missing ``height`` dimension) in an existing store.
         """
         atlas = self._domain._atlas
@@ -654,8 +669,8 @@ class DomainResult:
 
         # Open store and capture state
         existing_ds = xr.open_zarr(store_path, consolidated=False)
-        var_exists = self._metric in existing_ds.data_vars
-        is_height_aggregated = self._metric == "mean_wind_speed"
+        var_exists = self._variable_name in existing_ds.data_vars
+        is_height_aggregated = self._variable_name == "mean_wind_speed" and "height" in self._data.dims
 
         # Get compute context from atlas
         evaluator = getattr(atlas, "_evaluate_for_io", None)
@@ -670,7 +685,7 @@ class DomainResult:
                 var_exists,
                 is_height_aggregated,
                 overwrite,
-                allow_mode_change,
+                allow_method_change,
                 evaluator,
                 backend,
                 workers,
@@ -682,6 +697,7 @@ class DomainResult:
         # Normalize data for store
         da = normalize_metric_for_active_wind_store(
             metric=self._metric,
+            variable_name=self._variable_name,
             da=self._data,
             existing_ds=existing_ds,
         )
@@ -707,7 +723,7 @@ class DomainResult:
         # Cleanup and return
         self._clear_overlay()
         self._domain._data = None
-        return self._domain.data[self._metric]
+        return self._domain.data[self._variable_name]
 
     def _validate_preconditions(
         self,
@@ -715,7 +731,7 @@ class DomainResult:
         var_exists: bool,
         is_height_aggregated: bool,
         overwrite: bool,
-        allow_mode_change: bool,
+        allow_method_change: bool,
         evaluator: Any,
         backend: str,
         workers: int | None,
@@ -727,7 +743,7 @@ class DomainResult:
             height_ctx = _validate_height_aggregated_preconditions(self._metric, self._params, existing_ds)
             if var_exists:
                 _validate_height_slice_overwrite(
-                    self._metric,
+                    self._variable_name,
                     existing_ds,
                     height_ctx,
                     overwrite,
@@ -736,10 +752,12 @@ class DomainResult:
                     workers,
                 )
         elif var_exists and not overwrite:
-            raise ValueError(f"Variable {self._metric!r} already exists in wind.zarr; use overwrite=True to replace.")
+            raise ValueError(
+                f"Variable {self._variable_name!r} already exists in wind.zarr; use overwrite=True to replace."
+            )
 
-        if self._metric == "capacity_factors" and var_exists:
-            _validate_cf_mode_change(existing_ds, self._data, allow_mode_change)
+        if self._variable_name == "capacity_factors" and var_exists:
+            _validate_cf_method_change(existing_ds, self._data, allow_method_change)
 
         return height_ctx
 
@@ -769,9 +787,9 @@ class DomainResult:
         """Write metric to store with appropriate strategy."""
         with single_writer_lock(zarr_store_lock_dir(store_path)):
             if is_height_aggregated and var_exists and height_ctx is not None:
-                _write_height_slice_to_store(store_path, self._metric, da, height_ctx, store_sizes)
+                _write_height_slice_to_store(store_path, self._variable_name, da, height_ctx, store_sizes)
             else:
-                _write_full_variable_to_store(store_path, self._metric, da, var_exists, overwrite)
+                _write_full_variable_to_store(store_path, self._variable_name, da, var_exists, overwrite)
 
             # Restore preserved attributes
             root = zarr.open_group(store_path, mode="a")
@@ -782,4 +800,4 @@ class DomainResult:
         """Clear computed overlay for this metric."""
         overlays = getattr(self._domain, "_computed_overlays", None)
         if isinstance(overlays, dict):
-            overlays.pop(self._metric, None)
+            overlays.pop(self._variable_name, None)

@@ -35,7 +35,7 @@ def _make_minimal_cf():
         coords={"turbine": list(turbine_ids), "y": y, "x": x},
         name="capacity_factors",
     )
-    cf.attrs["cleo:cf_mode"] = "hub"
+    cf.attrs["cleo:cf_method"] = "hub_height_weibull"
 
     return cf, turbine_ids
 

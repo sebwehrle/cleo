@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified height-based wind-speed evaluation onto the same internal vertical evaluator used by wind assessment methods, preserving public behavior while removing duplicated interpolation logic
 - Simplified internal wind-metric orchestration by reusing shared wind-store input resolution helpers and removing redundant internal compute parameters, with unchanged public behavior
 
+### Fixed
+- Normalize test-suite formatting so Ruff format checks pass in CI
+
 ### Security
 - Added secret scanning to CI workflow via `detect-secrets`
 - Added Dependabot for automated dependency updates (conservative settings)

@@ -700,8 +700,8 @@ The package outputs (capacity factors, LCOE, flattened rasters) are designed as 
 
 ### C2.1 Python Version
 
-- **Minimum**: Python 3.10
-- **Tested**: Python 3.10, 3.11, 3.12 (CI matrix when available)
+- **Minimum**: Python 3.11
+- **Tested**: Python 3.11, 3.12 (CI matrix when available)
 
 ### C2.2 Operating System
 

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - This changelog
 
 ### Changed
+- Minimum supported Python version is now 3.11 because the required stable Zarr v3 releases are not available for Python 3.10
 - Wind public API now uses explicit wind-assessment method vocabulary:
   `capacity_factors` accepts `method`/`interpolation` instead of legacy `mode`,
   `.materialize()` uses `allow_method_change`, and CF provenance is stored via
@@ -122,7 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Canonical workflow guide
 
 ### Technical Details
-- Python 3.10+ required
+- Python 3.11+ required
 - Built on xarray, dask, rasterio, geopandas ecosystem
 - Zarr v3 compatible storage (no string arrays, no consolidated metadata dependency)
 - 5-layer architecture: orchestration, materialization, computation, boundaries, policies

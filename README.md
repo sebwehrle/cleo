@@ -7,7 +7,7 @@ CLEO prepares analysis-ready wind/landscape rasters and tabular exports; econome
 
 ## Supported Environment
 
-- **Python**: 3.10+
+- **Python**: 3.11+
 - **OS**: Linux (primary), macOS (secondary)
 - **System deps**: GDAL/PROJ (via rasterio/pyproj), HDF5/NetCDF
 

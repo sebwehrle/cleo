@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Added type hints to key public methods: `Atlas.__init__`, `Atlas.build`, `Atlas.flatten`, `Atlas.export_analysis_dataset_zarr`
 - Extracted parameter validation helpers in `configure_economics()` for more consistent error messages
+- Improved wind-capacity-factor validation coverage with a new internal rotor-inflow seam test suite (`tests/unit/assess/test_rotor_inflow.py`) while preserving public API and metric semantics
+- Refactored wind capacity-factor internals to use a unified inflow-based integration pipeline across `hub`, `rews`, `direct_cf_quadrature`, and `momentmatch_weibull` modes with parity-preserving outputs
+- Consolidated duplicate direct/momentmatch turbine helper paths onto the same inflow-seam implementation, improving maintainability with unchanged public metric semantics
 
 ### Security
 - Added secret scanning to CI workflow via `detect-secrets`

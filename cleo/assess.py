@@ -1,6 +1,7 @@
 # Pure numeric assessment functions for wind resource analysis.
 # Contract: No I/O, no network, no store access, no mutation of self.data.
 # All spatial arrays stay lazy (dask-compatible).
+from dataclasses import dataclass
 import json
 import numpy as np
 import xarray as xr
@@ -15,6 +16,48 @@ logger = logging.getLogger(__name__)
 
 # %% Constants
 RHO_0 = 1.225  # Reference air density at sea level (kg/m³)
+
+
+@dataclass(frozen=True)
+class SingleWeibullInflow:
+    """Rotor inflow represented by one effective Weibull distribution.
+
+    :param A_eff: Effective Weibull scale parameter on ``(y, x)``.
+    :type A_eff: xarray.DataArray
+    :param k_eff: Effective Weibull shape parameter on ``(y, x)``.
+    :type k_eff: xarray.DataArray
+    :param rews_mps: Optional REWS diagnostic on ``(y, x)`` in m/s.
+    :type rews_mps: xarray.DataArray | None
+    :param density_scale: Optional air-density speed scale ``c=(rho/rho0)**(1/3)``
+        on ``(y, x)``. When present, turbine integration applies density
+        correction inside power-curve evaluation.
+    :type density_scale: xarray.DataArray | None
+    """
+
+    A_eff: xr.DataArray
+    k_eff: xr.DataArray
+    rews_mps: xr.DataArray | None = None
+    density_scale: xr.DataArray | None = None
+
+
+@dataclass(frozen=True)
+class WeightedNodeInflow:
+    """Rotor inflow represented by weighted node-wise Weibull distributions.
+
+    :param weights: Normalized quadrature weights ``(n_nodes,)``.
+    :type weights: numpy.ndarray
+    :param A_nodes: Node Weibull scale parameters ``(node, y, x)``.
+    :type A_nodes: xarray.DataArray
+    :param k_nodes: Node Weibull shape parameters ``(node, y, x)``.
+    :type k_nodes: xarray.DataArray
+    :param rews_mps: Optional REWS diagnostic on ``(y, x)`` in m/s.
+    :type rews_mps: xarray.DataArray | None
+    """
+
+    weights: np.ndarray
+    A_nodes: xr.DataArray
+    k_nodes: xr.DataArray
+    rews_mps: xr.DataArray | None = None
 
 
 # %% Pure compute primitives
@@ -269,6 +312,316 @@ def air_density_at_height(rho_stack: xr.DataArray, height_m: float) -> xr.DataAr
     return rho_stack
 
 
+def _rotor_nodes_and_weights(
+    *,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute rotor quadrature node heights and normalized weights.
+
+    Uses Gauss-Legendre nodes ``t`` on ``[-1, 1]`` and rotor-chord weighting
+    ``(2/pi) * sqrt(1 - t^2)``.
+
+    :param hub_height: Turbine hub height in meters.
+    :type hub_height: float
+    :param rotor_diameter: Turbine rotor diameter in meters.
+    :type rotor_diameter: float
+    :param rews_n: Number of quadrature nodes, must be >= 2.
+    :type rews_n: int
+    :returns: Tuple ``(z_nodes, weights)`` where ``z_nodes`` are physical
+        sample heights in meters and ``weights`` sum to one.
+    :rtype: tuple[numpy.ndarray, numpy.ndarray]
+    :raises ValueError: If ``rews_n < 2`` or ``rotor_diameter <= 0``.
+    """
+    if rews_n < 2:
+        raise ValueError(f"rews_n must be >= 2, got {rews_n}")
+    if rotor_diameter <= 0:
+        raise ValueError(f"rotor_diameter must be > 0, got {rotor_diameter!r}")
+
+    t, g = np.polynomial.legendre.leggauss(int(rews_n))
+    chord = (2.0 / np.pi) * np.sqrt(np.clip(1.0 - t**2, 0.0, 1.0))
+    weights = g * chord
+    weights = weights / np.sum(weights)
+    z_nodes = float(hub_height) + (float(rotor_diameter) / 2.0) * t
+    return z_nodes, weights
+
+
+def _build_hub_inflow(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    hub_height: float,
+    rho_stack: xr.DataArray | None,
+    air_density: bool,
+) -> SingleWeibullInflow:
+    """Build single-Weibull inflow for ``hub`` mode.
+
+    :param A_stack: Weibull scale stack ``(height, y, x)``.
+    :type A_stack: xarray.DataArray
+    :param k_stack: Weibull shape stack ``(height, y, x)``.
+    :type k_stack: xarray.DataArray
+    :param hub_height: Hub height in meters.
+    :type hub_height: float
+    :param rho_stack: Air-density stack ``(height, y, x)`` when density is enabled.
+    :type rho_stack: xarray.DataArray | None
+    :param air_density: Whether to apply density correction.
+    :type air_density: bool
+    :returns: Effective single-Weibull inflow.
+    :rtype: SingleWeibullInflow
+    :raises ValueError: If density correction is requested without ``rho_stack``.
+    """
+    A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, hub_height)
+    density_scale = None
+    if air_density:
+        if rho_stack is None:
+            raise ValueError("rho_stack required when air_density=True")
+        rho_hub = air_density_at_height(rho_stack, hub_height)
+        density_scale = (rho_hub / RHO_0) ** (1.0 / 3.0)
+    return SingleWeibullInflow(A_eff=A_hub, k_eff=k_hub, rews_mps=None, density_scale=density_scale)
+
+
+def _build_rews_inflow(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+    rho_stack: xr.DataArray | None,
+    air_density: bool,
+) -> SingleWeibullInflow:
+    """Build single-Weibull inflow for legacy ``rews`` mode.
+
+    :param A_stack: Weibull scale stack ``(height, y, x)``.
+    :type A_stack: xarray.DataArray
+    :param k_stack: Weibull shape stack ``(height, y, x)``.
+    :type k_stack: xarray.DataArray
+    :param hub_height: Hub height in meters.
+    :type hub_height: float
+    :param rotor_diameter: Rotor diameter in meters.
+    :type rotor_diameter: float
+    :param rews_n: Number of rotor samples for REWS-factor integration.
+    :type rews_n: int
+    :param rho_stack: Air-density stack ``(height, y, x)`` when density is enabled.
+    :type rho_stack: xarray.DataArray | None
+    :param air_density: Whether to apply density correction.
+    :type air_density: bool
+    :returns: Effective single-Weibull inflow.
+    :rtype: SingleWeibullInflow
+    :raises ValueError: If density correction is requested without ``rho_stack``.
+    """
+    A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, hub_height)
+    rews_factor = _rews_moment_factor(
+        A_stack=A_stack,
+        k_stack=k_stack,
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        n=rews_n,
+    )
+    A_eff = A_hub * rews_factor
+    density_scale = None
+    if air_density:
+        if rho_stack is None:
+            raise ValueError("rho_stack required when air_density=True")
+        rho_hub = air_density_at_height(rho_stack, hub_height)
+        density_scale = (rho_hub / RHO_0) ** (1.0 / 3.0)
+    return SingleWeibullInflow(A_eff=A_eff, k_eff=k_hub, rews_mps=None, density_scale=density_scale)
+
+
+def _build_direct_inflow(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+    rho_stack: xr.DataArray | None,
+    air_density: bool,
+    vertical_policy: dict | None,
+) -> WeightedNodeInflow:
+    """Build weighted node-wise inflow for ``direct_cf_quadrature`` mode.
+
+    :param A_stack: Weibull scale stack ``(height, y, x)``.
+    :type A_stack: xarray.DataArray
+    :param k_stack: Weibull shape stack ``(height, y, x)``.
+    :type k_stack: xarray.DataArray
+    :param hub_height: Hub height in meters.
+    :type hub_height: float
+    :param rotor_diameter: Rotor diameter in meters.
+    :type rotor_diameter: float
+    :param rews_n: Number of rotor nodes.
+    :type rews_n: int
+    :param rho_stack: Air-density stack ``(height, y, x)`` when density is enabled.
+    :type rho_stack: xarray.DataArray | None
+    :param air_density: Whether to apply density correction.
+    :type air_density: bool
+    :param vertical_policy: Optional vertical interpolation/extrapolation policy.
+    :type vertical_policy: dict | None
+    :returns: Weighted node-wise rotor inflow.
+    :rtype: WeightedNodeInflow
+    :raises ValueError: If density correction is requested without ``rho_stack``.
+    """
+    if air_density and rho_stack is None:
+        raise ValueError("rho_stack required when air_density=True")
+
+    z_nodes, weights = _rotor_nodes_and_weights(
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
+    )
+    _mu, k_nodes, _A_nodes, A_prime_nodes = evaluate_weibull_at_heights(
+        A_stack,
+        k_stack,
+        query_heights_m=z_nodes,
+        rho_stack=rho_stack if air_density else None,
+        policy=vertical_policy,
+    )
+
+    if "query_height" not in A_prime_nodes.dims or "query_height" not in k_nodes.dims:
+        raise ValueError("evaluate_weibull_at_heights must return query_height dimension for rotor inflow.")
+
+    A_nodes = A_prime_nodes.rename({"query_height": "node"}).assign_coords(node=np.arange(z_nodes.size, dtype=np.int64))
+    k_nodes_out = k_nodes.rename({"query_height": "node"}).assign_coords(node=np.arange(z_nodes.size, dtype=np.int64))
+
+    m3_nodes = np.exp(3.0 * np.log(A_nodes) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_nodes_out), dask="parallelized"))
+    w_da = xr.DataArray(weights, dims=("node",), coords={"node": np.arange(z_nodes.size, dtype=np.int64)})
+    rews = ((m3_nodes * w_da).sum(dim="node") ** (1.0 / 3.0)).rename("rews_mps")
+    return WeightedNodeInflow(weights=weights, A_nodes=A_nodes, k_nodes=k_nodes_out, rews_mps=rews)
+
+
+def _build_momentmatch_inflow(
+    *,
+    A_stack: xr.DataArray,
+    k_stack: xr.DataArray,
+    hub_height: float,
+    rotor_diameter: float,
+    rews_n: int,
+    rho_stack: xr.DataArray | None,
+    air_density: bool,
+    vertical_policy: dict | None,
+) -> SingleWeibullInflow:
+    """Build single-Weibull inflow for ``momentmatch_weibull`` mode.
+
+    :param A_stack: Weibull scale stack ``(height, y, x)``.
+    :type A_stack: xarray.DataArray
+    :param k_stack: Weibull shape stack ``(height, y, x)``.
+    :type k_stack: xarray.DataArray
+    :param hub_height: Hub height in meters.
+    :type hub_height: float
+    :param rotor_diameter: Rotor diameter in meters.
+    :type rotor_diameter: float
+    :param rews_n: Number of rotor nodes.
+    :type rews_n: int
+    :param rho_stack: Air-density stack ``(height, y, x)`` when density is enabled.
+    :type rho_stack: xarray.DataArray | None
+    :param air_density: Whether to apply density correction.
+    :type air_density: bool
+    :param vertical_policy: Optional vertical interpolation/extrapolation policy.
+    :type vertical_policy: dict | None
+    :returns: Effective moment-matched single-Weibull inflow.
+    :rtype: SingleWeibullInflow
+    :raises ValueError: If density correction is requested without ``rho_stack``.
+    """
+    direct_inflow = _build_direct_inflow(
+        A_stack=A_stack,
+        k_stack=k_stack,
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
+        rho_stack=rho_stack,
+        air_density=air_density,
+        vertical_policy=vertical_policy,
+    )
+    rews = direct_inflow.rews_mps
+
+    m1_acc: xr.DataArray | None = None
+    m3_acc: xr.DataArray | None = None
+    for j, wj in enumerate(direct_inflow.weights):
+        A_j = direct_inflow.A_nodes.isel(node=j)
+        k_j = direct_inflow.k_nodes.isel(node=j)
+
+        log_m1_j = np.log(A_j) + xr.apply_ufunc(gammaln, 1.0 + (1.0 / k_j), dask="parallelized")
+        log_m3_j = 3.0 * np.log(A_j) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_j), dask="parallelized")
+        m1_j = np.exp(log_m1_j)
+        m3_j = np.exp(log_m3_j)
+
+        m1_acc = (wj * m1_j) if m1_acc is None else (m1_acc + (wj * m1_j))
+        m3_acc = (wj * m3_j) if m3_acc is None else (m3_acc + (wj * m3_j))
+
+    if rews is None or m1_acc is None or m3_acc is None:
+        raise ValueError("Moment-match inflow requires non-empty rotor nodes and REWS diagnostic.")
+
+    r = m3_acc / (m1_acc**3)
+    k_rot = _solve_k_from_moment_ratio(r)
+    log_A_rot = np.log(m1_acc) - xr.apply_ufunc(gammaln, 1.0 + (1.0 / k_rot), dask="parallelized")
+    A_rot = np.exp(log_A_rot)
+
+    return SingleWeibullInflow(A_eff=A_rot, k_eff=k_rot, rews_mps=rews)
+
+
+def integrate_cf_from_inflow(
+    *,
+    inflow: SingleWeibullInflow | WeightedNodeInflow,
+    u_grid: np.ndarray,
+    p_curve: np.ndarray,
+    loss_factor: float,
+) -> xr.DataArray:
+    """Integrate capacity factor from a rotor inflow surrogate.
+
+    :param inflow: Rotor inflow surrogate, either single-Weibull or weighted nodes.
+    :type inflow: SingleWeibullInflow | WeightedNodeInflow
+    :param u_grid: Wind-speed integration grid in m/s.
+    :type u_grid: numpy.ndarray
+    :param p_curve: Turbine power curve sampled at ``u_grid`` (per-unit output).
+    :type p_curve: numpy.ndarray
+    :param loss_factor: Multiplicative loss factor applied to the integrated CF.
+    :type loss_factor: float
+    :returns: Capacity factor on ``(y, x)``.
+    :rtype: xarray.DataArray
+    :raises ValueError: If weighted inflow has inconsistent node shapes.
+    """
+    if isinstance(inflow, SingleWeibullInflow):
+        pdf = weibull_probability_density(u_grid, inflow.k_eff, inflow.A_eff)
+        if inflow.density_scale is None:
+            cf = _integrate_cf_no_density(
+                pdf=pdf,
+                u_grid=u_grid,
+                p_curve=p_curve,
+                loss_factor=loss_factor,
+            )
+        else:
+            cf = _integrate_cf_with_density_correction(
+                pdf=pdf,
+                u_grid=u_grid,
+                p_curve=p_curve,
+                c=inflow.density_scale,
+                loss_factor=loss_factor,
+            )
+        return cf.rename("capacity_factor")
+
+    n_nodes = int(inflow.weights.shape[0])
+    if inflow.A_nodes.sizes.get("node") != n_nodes or inflow.k_nodes.sizes.get("node") != n_nodes:
+        raise ValueError("WeightedNodeInflow node dimension must match weights length.")
+
+    cf_acc: xr.DataArray | None = None
+    for j, w_j in enumerate(inflow.weights):
+        A_j = inflow.A_nodes.isel(node=j)
+        k_j = inflow.k_nodes.isel(node=j)
+        pdf_j = weibull_probability_density(u_grid, k_j, A_j)
+        cf_j = _integrate_cf_no_density(
+            pdf=pdf_j,
+            u_grid=u_grid,
+            p_curve=p_curve,
+            loss_factor=loss_factor,
+        )
+        cf_acc = (float(w_j) * cf_j) if cf_acc is None else (cf_acc + (float(w_j) * cf_j))
+
+    if cf_acc is None:
+        raise ValueError("WeightedNodeInflow must contain at least one node.")
+    return cf_acc.rename("capacity_factor")
+
+
 def capacity_factors_v1(
     *,
     A_stack: xr.DataArray,
@@ -290,6 +643,7 @@ def capacity_factors_v1(
 
     This is the v1 capacity factor algorithm with support for:
     - direct rotor-node quadrature mode (default)
+    - moment-matched rotor Weibull mode
     - hub-height mode
     - legacy REWS-factor mode
 
@@ -302,8 +656,8 @@ def capacity_factors_v1(
     :param turbine_ids: Tuple of turbine ID strings
     :param hub_heights_m: Hub heights for each turbine (n_turb,)
     :param power_curves: Power curves for each turbine (n_turb, n_ws)
-    :param mode: "direct_cf_quadrature" (default), "hub", or legacy "rews"
-    :param rotor_diameters_m: Rotor diameters (required for direct/rews modes)
+    :param mode: "direct_cf_quadrature" (default), "momentmatch_weibull", "hub", or legacy "rews"
+    :param rotor_diameters_m: Rotor diameters (required for rotor-aware modes)
     :param rho_stack: Air density DataArray (required if air_density=True)
     :param air_density: If True, apply air density correction
     :param loss_factor: Loss correction factor (default 1.0)
@@ -323,72 +677,59 @@ def capacity_factors_v1(
     for i, turbine_id in enumerate(turbine_ids):
         H = float(hub_heights_m[i])
 
-        if mode == "direct_cf_quadrature":
-            assert rotor_diameters_m is not None
-            D = float(rotor_diameters_m[i])
-            cf, _rews = _direct_cf_and_rews_for_turbine(
+        if mode == "hub":
+            inflow = _build_hub_inflow(
                 A_stack=A_stack,
                 k_stack=k_stack,
-                rho_stack=rho_stack if air_density else None,
-                u_grid=u_grid,
-                p_curve=power_curves[i],
                 hub_height=H,
-                rotor_diameter=D,
-                rews_n=rews_n,
-                loss_factor=loss_factor,
-                vertical_policy=vertical_policy,
-                compute_cf=True,
+                rho_stack=rho_stack,
+                air_density=air_density,
             )
-        elif mode == "momentmatch_weibull":
+        elif mode == "rews":
             assert rotor_diameters_m is not None
             D = float(rotor_diameters_m[i])
-            cf, _rews = _momentmatch_cf_and_rews_for_turbine(
+            inflow = _build_rews_inflow(
                 A_stack=A_stack,
                 k_stack=k_stack,
-                rho_stack=rho_stack if air_density else None,
-                u_grid=u_grid,
-                p_curve=power_curves[i],
                 hub_height=H,
                 rotor_diameter=D,
                 rews_n=rews_n,
-                loss_factor=loss_factor,
+                rho_stack=rho_stack,
+                air_density=air_density,
+            )
+        elif mode == "direct_cf_quadrature":
+            assert rotor_diameters_m is not None
+            D = float(rotor_diameters_m[i])
+            inflow = _build_direct_inflow(
+                A_stack=A_stack,
+                k_stack=k_stack,
+                hub_height=H,
+                rotor_diameter=D,
+                rews_n=rews_n,
+                rho_stack=rho_stack,
+                air_density=air_density,
                 vertical_policy=vertical_policy,
             )
         else:
-            # Legacy paths retained for explicit comparability.
-            A_hub, k_hub = interpolate_weibull_params_to_height(A_stack, k_stack, H)
-            if mode == "rews":
-                assert rotor_diameters_m is not None
-                D = float(rotor_diameters_m[i])
-                f = _rews_moment_factor(
-                    A_stack=A_stack,
-                    k_stack=k_stack,
-                    hub_height=H,
-                    rotor_diameter=D,
-                    n=rews_n,
-                )
-                A_eff = A_hub * f
-            else:
-                A_eff = A_hub
+            assert rotor_diameters_m is not None
+            D = float(rotor_diameters_m[i])
+            inflow = _build_momentmatch_inflow(
+                A_stack=A_stack,
+                k_stack=k_stack,
+                hub_height=H,
+                rotor_diameter=D,
+                rews_n=rews_n,
+                rho_stack=rho_stack,
+                air_density=air_density,
+                vertical_policy=vertical_policy,
+            )
 
-            pdf = weibull_probability_density(u_grid, k_hub, A_eff)
-            if air_density:
-                rho_hub = air_density_at_height(rho_stack, H)
-                c = (rho_hub / RHO_0) ** (1.0 / 3.0)
-                cf = _integrate_cf_with_density_correction(
-                    pdf=pdf,
-                    u_grid=u_grid,
-                    p_curve=power_curves[i],
-                    c=c,
-                    loss_factor=loss_factor,
-                )
-            else:
-                cf = _integrate_cf_no_density(
-                    pdf=pdf,
-                    u_grid=u_grid,
-                    p_curve=power_curves[i],
-                    loss_factor=loss_factor,
-                )
+        cf = integrate_cf_from_inflow(
+            inflow=inflow,
+            u_grid=u_grid,
+            p_curve=power_curves[i],
+            loss_factor=loss_factor,
+        )
 
         # Expand with turbine dimension
         cf = cf.expand_dims(turbine=[turbine_id])
@@ -471,52 +812,35 @@ def _direct_cf_and_rews_for_turbine(
     vertical_policy: dict | None,
     compute_cf: bool,
 ) -> tuple[xr.DataArray, xr.DataArray]:
-    """Compute direct rotor CF and REWS for one turbine."""
-    if rews_n < 2:
-        raise ValueError(f"rews_n must be >= 2, got {rews_n}")
-    if rotor_diameter <= 0:
-        raise ValueError(f"rotor_diameter must be > 0, got {rotor_diameter!r}")
+    """Compute direct rotor CF and REWS for one turbine.
 
-    t, g = np.polynomial.legendre.leggauss(int(rews_n))
-    chord = (2.0 / np.pi) * np.sqrt(np.clip(1.0 - t**2, 0.0, 1.0))
-    weights = g * chord
-    weights = weights / np.sum(weights)
-
-    z_nodes = float(hub_height) + (float(rotor_diameter) / 2.0) * t
-
-    _mu, k_nodes, _A_nodes, A_prime_nodes = evaluate_weibull_at_heights(
-        A_stack,
-        k_stack,
-        query_heights_m=z_nodes,
+    Delegates rotor inflow construction to ``_build_direct_inflow(...)`` and
+    integrates CF through ``integrate_cf_from_inflow(...)`` when requested.
+    """
+    inflow = _build_direct_inflow(
+        A_stack=A_stack,
+        k_stack=k_stack,
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
         rho_stack=rho_stack,
-        policy=vertical_policy,
+        air_density=rho_stack is not None,
+        vertical_policy=vertical_policy,
     )
+    rews = inflow.rews_mps
+    if rews is None:
+        raise ValueError("Direct inflow must provide REWS diagnostic.")
 
-    cf_acc: xr.DataArray | None = None
-    m3_acc: xr.DataArray | None = None
-    for j, zq in enumerate(z_nodes):
-        wj = float(weights[j])
-        A_j = A_prime_nodes.sel(query_height=float(zq))
-        k_j = k_nodes.sel(query_height=float(zq))
-
-        m3_j = np.exp(3.0 * np.log(A_j) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_j), dask="parallelized"))
-        m3_acc = (wj * m3_j) if m3_acc is None else (m3_acc + (wj * m3_j))
-
-        if compute_cf:
-            pdf_j = weibull_probability_density(u_grid, k_j, A_j)
-            cf_j = _integrate_cf_no_density(
-                pdf=pdf_j,
-                u_grid=u_grid,
-                p_curve=p_curve,
-                loss_factor=loss_factor,
-            )
-            cf_acc = (wj * cf_j) if cf_acc is None else (cf_acc + (wj * cf_j))
-
-    assert m3_acc is not None
-    rews = (m3_acc ** (1.0 / 3.0)).rename("rews_mps")
-    if cf_acc is None:
-        cf_acc = xr.zeros_like(rews)
-    return cf_acc.rename("capacity_factor"), rews
+    if compute_cf:
+        cf = integrate_cf_from_inflow(
+            inflow=inflow,
+            u_grid=u_grid,
+            p_curve=p_curve,
+            loss_factor=loss_factor,
+        )
+    else:
+        cf = xr.zeros_like(rews).rename("capacity_factor")
+    return cf.rename("capacity_factor"), rews.rename("rews_mps")
 
 
 def _momentmatch_cf_and_rews_for_turbine(
@@ -532,59 +856,32 @@ def _momentmatch_cf_and_rews_for_turbine(
     loss_factor: float,
     vertical_policy: dict | None,
 ) -> tuple[xr.DataArray, xr.DataArray]:
-    """Compute rotor CF via moment-matched Weibull and return REWS."""
-    if rews_n < 2:
-        raise ValueError(f"rews_n must be >= 2, got {rews_n}")
-    if rotor_diameter <= 0:
-        raise ValueError(f"rotor_diameter must be > 0, got {rotor_diameter!r}")
+    """Compute rotor CF via moment-matched Weibull and return REWS.
 
-    t, g = np.polynomial.legendre.leggauss(int(rews_n))
-    chord = (2.0 / np.pi) * np.sqrt(np.clip(1.0 - t**2, 0.0, 1.0))
-    weights = g * chord
-    weights = weights / np.sum(weights)
-    z_nodes = float(hub_height) + (float(rotor_diameter) / 2.0) * t
-
-    _mu, k_nodes, _A_nodes, A_prime_nodes = evaluate_weibull_at_heights(
-        A_stack,
-        k_stack,
-        query_heights_m=z_nodes,
+    Delegates rotor inflow construction to ``_build_momentmatch_inflow(...)``
+    and integrates CF through ``integrate_cf_from_inflow(...)``.
+    """
+    inflow = _build_momentmatch_inflow(
+        A_stack=A_stack,
+        k_stack=k_stack,
+        hub_height=hub_height,
+        rotor_diameter=rotor_diameter,
+        rews_n=rews_n,
         rho_stack=rho_stack,
-        policy=vertical_policy,
+        air_density=rho_stack is not None,
+        vertical_policy=vertical_policy,
     )
+    rews = inflow.rews_mps
+    if rews is None:
+        raise ValueError("Moment-match inflow must provide REWS diagnostic.")
 
-    m1_acc: xr.DataArray | None = None
-    m3_acc: xr.DataArray | None = None
-    for j, zq in enumerate(z_nodes):
-        wj = float(weights[j])
-        A_j = A_prime_nodes.sel(query_height=float(zq))
-        k_j = k_nodes.sel(query_height=float(zq))
-
-        log_m1_j = np.log(A_j) + xr.apply_ufunc(gammaln, 1.0 + (1.0 / k_j), dask="parallelized")
-        log_m3_j = 3.0 * np.log(A_j) + xr.apply_ufunc(gammaln, 1.0 + (3.0 / k_j), dask="parallelized")
-        m1_j = np.exp(log_m1_j)
-        m3_j = np.exp(log_m3_j)
-
-        m1_acc = (wj * m1_j) if m1_acc is None else (m1_acc + (wj * m1_j))
-        m3_acc = (wj * m3_j) if m3_acc is None else (m3_acc + (wj * m3_j))
-
-    assert m1_acc is not None and m3_acc is not None
-    rews = (m3_acc ** (1.0 / 3.0)).rename("rews_mps")
-
-    # Moment match Weibull via r = m3 / m1^3.
-    r = m3_acc / (m1_acc**3)
-    k_rot = _solve_k_from_moment_ratio(r)
-
-    log_A_rot = np.log(m1_acc) - xr.apply_ufunc(gammaln, 1.0 + (1.0 / k_rot), dask="parallelized")
-    A_rot = np.exp(log_A_rot)
-
-    pdf_rot = weibull_probability_density(u_grid, k_rot, A_rot)
-    cf = _integrate_cf_no_density(
-        pdf=pdf_rot,
+    cf = integrate_cf_from_inflow(
+        inflow=inflow,
         u_grid=u_grid,
         p_curve=p_curve,
         loss_factor=loss_factor,
-    ).rename("capacity_factor")
-    return cf, rews
+    )
+    return cf.rename("capacity_factor"), rews.rename("rews_mps")
 
 
 def _solve_k_from_moment_ratio(

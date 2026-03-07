@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cleo"
-version = "0.0.1"
+version = "0.1.0"
 description = "Cleo supports wind resource assessment with the Global Wind Atlas"
 readme = "README.md"
 requires-python = ">=3.10"

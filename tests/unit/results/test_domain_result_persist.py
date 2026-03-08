@@ -89,3 +89,61 @@ def test_domain_result_persist_uses_atlas_evaluate_for_io_when_available(tmp_pat
     result.persist()
 
     assert len(calls) == 1
+
+
+def test_domain_result_persist_uses_atlas_compute_backend(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def _fake_dask_compute(obj, *, backend, num_workers=None):
+        calls.append((backend, num_workers))
+        return obj
+
+    monkeypatch.setattr("cleo.results.dask_compute", _fake_dask_compute)
+
+    atlas = SimpleNamespace(
+        results_root=tmp_path / "results",
+        new_run_id=lambda: "run_004",
+        _canonical_ready=False,
+        compute_backend="processes",
+        compute_workers=2,
+    )
+    domain = SimpleNamespace(_atlas=atlas)
+    da = xr.DataArray(
+        np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
+        name="var",
+    )
+    result = DomainResult(domain, "var", da, {})
+
+    result.persist()
+
+    assert calls == [("processes", 2)]
+
+
+def test_domain_result_persist_defaults_to_serial_backend(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def _fake_dask_compute(obj, *, backend, num_workers=None):
+        calls.append((backend, num_workers))
+        return obj
+
+    monkeypatch.setattr("cleo.results.dask_compute", _fake_dask_compute)
+
+    atlas = SimpleNamespace(
+        results_root=tmp_path / "results",
+        new_run_id=lambda: "run_005",
+        _canonical_ready=False,
+    )
+    domain = SimpleNamespace(_atlas=atlas)
+    da = xr.DataArray(
+        np.array([[11.0, 12.0], [13.0, 14.0]], dtype=np.float32),
+        dims=("y", "x"),
+        coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
+        name="var",
+    )
+    result = DomainResult(domain, "var", da, {})
+
+    result.persist()
+
+    assert calls == [("serial", None)]

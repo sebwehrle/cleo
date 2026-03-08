@@ -96,6 +96,48 @@ class ValidationError(ValueError):
     pass
 
 
+def _requirements_for_kind(kind: StoreKind) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """Return required attrs, vars, and dims for a store kind.
+
+    :param kind: Expected store kind.
+    :type kind: StoreKind
+    :returns: Tuple ``(required_attrs, required_vars, required_dims)``.
+    :rtype: tuple[frozenset[str], frozenset[str], frozenset[str]]
+    """
+    if kind == "wind":
+        return WIND_REQUIRED_ATTRS, WIND_REQUIRED_VARS, WIND_REQUIRED_DIMS
+    if kind == "landscape":
+        return LANDSCAPE_REQUIRED_ATTRS, LANDSCAPE_REQUIRED_VARS, LANDSCAPE_REQUIRED_DIMS
+    if kind == "export":
+        return EXPORT_REQUIRED_ATTRS, frozenset(), frozenset({"y", "x"})
+    if kind == "result":
+        return RESULT_REQUIRED_ATTRS, frozenset(), frozenset()
+    return _COMMON_REQUIRED_ATTRS, frozenset(), frozenset()
+
+
+def _validate_json_array_attr(raw_value: object, *, attr_name: str, errors: list[str]) -> None:
+    """Append validation errors when a JSON-array attr is missing or malformed.
+
+    :param raw_value: Raw attribute payload.
+    :type raw_value: object
+    :param attr_name: Attribute name for error reporting.
+    :type attr_name: str
+    :param errors: Mutable error accumulator.
+    :type errors: list[str]
+    :returns: ``None``
+    :rtype: None
+    """
+    if raw_value is None:
+        return
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as e:
+        errors.append(f"{attr_name} is invalid JSON: {e}")
+        return
+    if not isinstance(parsed, list):
+        errors.append(f"{attr_name} is not a JSON array")
+
+
 # -----------------------------------------------------------------------------
 # Dataset validation
 # -----------------------------------------------------------------------------
@@ -135,27 +177,7 @@ def validate_dataset(
     """
     errors: list[str] = []
 
-    # Determine required attrs and vars based on kind
-    if kind == "wind":
-        required_attrs = WIND_REQUIRED_ATTRS
-        required_vars = WIND_REQUIRED_VARS
-        required_dims = WIND_REQUIRED_DIMS
-    elif kind == "landscape":
-        required_attrs = LANDSCAPE_REQUIRED_ATTRS
-        required_vars = LANDSCAPE_REQUIRED_VARS
-        required_dims = LANDSCAPE_REQUIRED_DIMS
-    elif kind == "export":
-        required_attrs = EXPORT_REQUIRED_ATTRS
-        required_vars = frozenset()
-        required_dims = frozenset({"y", "x"})
-    elif kind == "result":
-        required_attrs = RESULT_REQUIRED_ATTRS
-        required_vars = frozenset()
-        required_dims = frozenset()
-    else:  # generic
-        required_attrs = _COMMON_REQUIRED_ATTRS
-        required_vars = frozenset()
-        required_dims = frozenset()
+    required_attrs, required_vars, required_dims = _requirements_for_kind(kind)
 
     # Check required attributes
     missing_attrs = required_attrs - set(ds.attrs.keys())
@@ -179,15 +201,7 @@ def validate_dataset(
 
     # Wind-specific checks
     if kind == "wind":
-        # Validate cleo_turbines_json is valid JSON array
-        turbines_json = ds.attrs.get("cleo_turbines_json")
-        if turbines_json is not None:
-            try:
-                parsed = json.loads(turbines_json)
-                if not isinstance(parsed, list):
-                    errors.append("cleo_turbines_json is not a JSON array")
-            except json.JSONDecodeError as e:
-                errors.append(f"cleo_turbines_json is invalid JSON: {e}")
+        _validate_json_array_attr(ds.attrs.get("cleo_turbines_json"), attr_name="cleo_turbines_json", errors=errors)
 
     # Coordinate checks (metadata-only, no compute)
     for dim in ("y", "x"):
@@ -299,17 +313,7 @@ def validate_store(
                 f"store_state is {store_state!r}, expected 'complete' (use allow_incomplete=True to skip this check)"
             )
 
-    # Determine required attrs based on kind
-    if kind == "wind":
-        required_attrs = WIND_REQUIRED_ATTRS
-    elif kind == "landscape":
-        required_attrs = LANDSCAPE_REQUIRED_ATTRS
-    elif kind == "export":
-        required_attrs = EXPORT_REQUIRED_ATTRS
-    elif kind == "result":
-        required_attrs = RESULT_REQUIRED_ATTRS
-    else:  # generic
-        required_attrs = _COMMON_REQUIRED_ATTRS
+    required_attrs, required_vars, _required_dims = _requirements_for_kind(kind)
 
     # Check required attributes (skip store_state if allow_incomplete)
     check_attrs = required_attrs
@@ -322,14 +326,7 @@ def validate_store(
 
     # Wind-specific: validate turbines JSON
     if kind == "wind":
-        turbines_json = attrs.get("cleo_turbines_json")
-        if turbines_json is not None:
-            try:
-                parsed = json.loads(turbines_json)
-                if not isinstance(parsed, list):
-                    errors.append("cleo_turbines_json is not a JSON array")
-            except json.JSONDecodeError as e:
-                errors.append(f"cleo_turbines_json is invalid JSON: {e}")
+        _validate_json_array_attr(attrs.get("cleo_turbines_json"), attr_name="cleo_turbines_json", errors=errors)
 
     # Export-specific: validate schema_version is integer
     if kind == "export":
@@ -341,11 +338,11 @@ def validate_store(
     array_names = set(group.array_keys()) if hasattr(group, "array_keys") else set()
 
     if kind == "wind":
-        missing_vars = WIND_REQUIRED_VARS - array_names
+        missing_vars = required_vars - array_names
         if missing_vars:
             errors.append(f"Missing required arrays: {sorted(missing_vars)}")
     elif kind == "landscape":
-        missing_vars = LANDSCAPE_REQUIRED_VARS - array_names
+        missing_vars = required_vars - array_names
         if missing_vars:
             errors.append(f"Missing required arrays: {sorted(missing_vars)}")
 

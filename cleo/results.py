@@ -135,6 +135,45 @@ def validate_result_path_token(value: str, *, field: str) -> str:
     return value
 
 
+def _resolve_atlas_io_policy(atlas) -> tuple[Any, str, int | None]:
+    """Resolve the atlas I/O evaluation policy for lazy xarray objects.
+
+    :param atlas: Atlas-like object exposing optional ``_evaluate_for_io``,
+        ``compute_backend``, and ``compute_workers`` attributes.
+    :returns: Tuple ``(evaluator, backend, workers)``.
+    :rtype: tuple[typing.Any, str, int | None]
+    """
+    evaluator = getattr(atlas, "_evaluate_for_io", None)
+    backend = getattr(atlas, "compute_backend", "serial")
+    workers = getattr(atlas, "compute_workers", None)
+    return evaluator, backend, workers
+
+
+def _evaluate_for_io(
+    obj: xr.DataArray | xr.Dataset,
+    *,
+    evaluator: Any,
+    backend: str,
+    workers: int | None,
+) -> xr.DataArray | xr.Dataset:
+    """Evaluate an xarray object for I/O using atlas-configured policy.
+
+    :param obj: Xarray object to evaluate.
+    :type obj: xarray.DataArray | xarray.Dataset
+    :param evaluator: Optional atlas-provided eager-evaluation callable.
+    :type evaluator: typing.Any
+    :param backend: Compute backend name.
+    :type backend: str
+    :param workers: Optional worker count for the backend.
+    :type workers: int | None
+    :returns: Evaluated object.
+    :rtype: xarray.DataArray | xarray.Dataset
+    """
+    if callable(evaluator):
+        return evaluator(obj)
+    return dask_compute(obj, backend=backend, num_workers=workers)  # type: ignore[call-overload]
+
+
 def result_run_dir_path(*, results_root: Path, run_id: str) -> Path:
     """Return validated run directory path under ``results_root``."""
     run_id_n = validate_result_path_token(run_id, field="run_id")
@@ -259,13 +298,8 @@ def persist_result(
 
     ds = _sanitize_result_dataset_for_zarr(ds)
 
-    evaluator = getattr(atlas, "_evaluate_for_io", None)
-    if callable(evaluator):
-        ds = evaluator(ds)
-    else:
-        backend = getattr(atlas, "compute_backend", "serial")
-        workers = getattr(atlas, "compute_workers", None)
-        ds = dask_compute(ds, backend=backend, num_workers=workers)
+    evaluator, backend, workers = _resolve_atlas_io_policy(atlas)
+    ds = _evaluate_for_io(ds, evaluator=evaluator, backend=backend, workers=workers)
 
     store_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -381,16 +415,12 @@ def normalize_metric_for_active_wind_store(
 class _HeightAggregatedContext:
     """Context for height-aggregated metric materialization (mean_wind_speed).
 
-    :param requested_height: Height value from compute params.
     :param target_height_value: Matching height value from store coords.
     :param height_index: Index of target height in store coords.
-    :param store_height_values: List of all height values in store.
     """
 
-    requested_height: Any
     target_height_value: Any
     height_index: int
-    store_height_values: list[Any]
 
 
 def _validate_height_aggregated_preconditions(
@@ -433,10 +463,8 @@ def _validate_height_aggregated_preconditions(
         )
 
     return _HeightAggregatedContext(
-        requested_height=requested_height,
         target_height_value=target_height_value,
         height_index=height_index,
-        store_height_values=store_height_values,
     )
 
 
@@ -471,10 +499,12 @@ def _validate_height_slice_overwrite(
         )
 
     existing_slice_any = existing_var.sel(height=height_ctx.target_height_value).notnull().any()
-    if callable(evaluator):
-        existing_slice_any = evaluator(existing_slice_any)
-    else:
-        existing_slice_any = dask_compute(existing_slice_any, backend=backend, num_workers=workers)  # type: ignore[call-overload]
+    existing_slice_any = _evaluate_for_io(
+        existing_slice_any,
+        evaluator=evaluator,
+        backend=backend,
+        workers=workers,
+    )
 
     has_existing_height_data = bool(np.asarray(existing_slice_any).item())
     if has_existing_height_data and not overwrite:
@@ -673,9 +703,7 @@ class DomainResult:
         is_height_aggregated = self._variable_name == "mean_wind_speed" and "height" in self._data.dims
 
         # Get compute context from atlas
-        evaluator = getattr(atlas, "_evaluate_for_io", None)
-        backend = getattr(atlas, "compute_backend", "serial")
-        workers = getattr(atlas, "compute_workers", None)
+        evaluator, backend, workers = _resolve_atlas_io_policy(atlas)
 
         # Validate preconditions (may raise)
         height_ctx: _HeightAggregatedContext | None = None
@@ -701,7 +729,7 @@ class DomainResult:
             da=self._data,
             existing_ds=existing_ds,
         )
-        da = self._compute_for_io(da, evaluator, backend, workers)
+        da = _evaluate_for_io(da, evaluator=evaluator, backend=backend, workers=workers)
 
         # Capture state before closing
         existing_attrs = dict(existing_ds.attrs)
@@ -760,18 +788,6 @@ class DomainResult:
             _validate_cf_method_change(existing_ds, self._data, allow_method_change)
 
         return height_ctx
-
-    def _compute_for_io(
-        self,
-        da: xr.DataArray,
-        evaluator: Any,
-        backend: str,
-        workers: int | None,
-    ) -> xr.DataArray:
-        """Compute data for I/O using appropriate backend."""
-        if callable(evaluator):
-            return evaluator(da)
-        return dask_compute(da, backend=backend, num_workers=workers)  # type: ignore[call-overload]
 
     def _write_to_store(
         self,

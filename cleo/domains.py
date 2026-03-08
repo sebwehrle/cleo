@@ -745,8 +745,9 @@ class WindDomain:
                 Required: discount_rate, lifetime_a, om_fixed_eur_per_kw_a, om_variable_eur_per_kwh.
                 Optional: bos_cost_share (default 0.0 from _effective_economics()).
                 Can be configured at Atlas level via atlas.configure_economics(...).
-            - "min_lcoe_turbine": same params as lcoe. Returns int32 turbine
-              index at each pixel. Turbine ID mapping in attrs["cleo:turbine_ids_json"].
+            - "min_lcoe_turbine": same params as lcoe. Returns the minimum-LCOE
+              turbine index at each valid pixel; invalid pixels are masked.
+              Turbine ID mapping in attrs["cleo:turbine_ids_json"].
             - "optimal_power": same params as lcoe. Returns rated power (kW)
               of the minimum-LCOE turbine at each pixel.
             - "optimal_energy": same params as lcoe. Returns annual energy (GWh/a)

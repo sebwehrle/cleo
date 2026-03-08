@@ -331,6 +331,7 @@ Atlas(
     ```
 - `min_lcoe_turbine`
   - Same grouped spec API as `lcoe`
+  - Returns the minimum-LCOE turbine index on valid pixels; invalid pixels are masked
 - `optimal_power`
   - Same grouped spec API as `lcoe`
 - `optimal_energy`

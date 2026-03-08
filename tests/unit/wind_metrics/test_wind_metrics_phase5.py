@@ -135,3 +135,5 @@ def test_lcoe_min_lcoe_and_optimal_power_success_paths() -> None:
     assert idx.dims == ("y", "x")
     assert p.dims == ("y", "x")
     assert np.isfinite(lcoe.values[np.isfinite(lcoe.values)]).all()
+    assert np.isnan(idx.values[0, 1])
+    assert np.all(np.isfinite(idx.values[land["valid_mask"].values]))

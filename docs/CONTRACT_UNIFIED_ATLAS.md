@@ -365,6 +365,8 @@ Normative:
   - `hours_per_year` must not be passed to `compute("lcoe", ...)`; it belongs to Atlas-level timebase assumptions.
 - `metric="min_lcoe_turbine"`, `metric="optimal_power"`, `metric="optimal_energy"`
   - Same grouped `cf` / `economics` contract as `lcoe`.
+  - `min_lcoe_turbine` surfaces the selected turbine index on valid pixels and
+    masks invalid pixels at the public API boundary.
 
 ---
 

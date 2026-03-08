@@ -93,6 +93,7 @@ def test_lcoe_and_optimal_metrics_emit_metadata_lineage_contract() -> None:
     assert economics["om_variable_eur_per_kwh"] == 0.01
     assert economics["bos_cost_share"] == 0.0
 
+    assert np.isnan(idx.values[0, 1])
     assert idx.attrs["cleo:nodata_index"] == -1
     assert idx.attrs["cleo:turbine_ids_json"] == lcoe.attrs["cleo:turbine_ids_json"]
     assert idx.attrs["cleo:economics_json"] == lcoe.attrs["cleo:economics_json"]

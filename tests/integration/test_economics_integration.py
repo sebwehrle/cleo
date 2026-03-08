@@ -464,11 +464,13 @@ class TestLcoeFamilyMetricsIntegration:
             economics=full_economics,
         ).data.compute()
 
-        # Should produce int32 indices
-        assert result.dtype == np.int32
-        # With single turbine, valid pixels should be 0, invalid -1
-        valid_mask = result.values >= 0
-        assert np.all(result.values[valid_mask] == 0)
+        land = atlas.landscape.data.compute()
+        valid_mask = land["valid_mask"].values
+
+        # With a single turbine, valid pixels should select index 0 and invalid
+        # pixels should be masked for consistency with the other surfaced metrics.
+        np.testing.assert_allclose(result.values[valid_mask], 0.0, rtol=0.0, atol=0.0, equal_nan=True)
+        np.testing.assert_array_equal(np.isnan(result.values), ~valid_mask)
 
     def test_optimal_power_integration(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """optimal_power computes successfully end-to-end."""

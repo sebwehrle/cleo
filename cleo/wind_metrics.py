@@ -750,7 +750,11 @@ def _wind_metric_min_lcoe_turbine(
     """
     Orchestration for min_lcoe_turbine metric.
 
-    Returns turbine index (int32) with minimum LCOE at each pixel.
+    Returns the minimum-LCOE turbine index at each valid pixel.
+
+    Invalid pixels are masked in the public result for consistency with the
+    other clipped wind metrics, even though the low-level economics helper uses
+    ``-1`` as an internal nodata sentinel.
     """
     lcoe = _wind_metric_lcoe(
         wind,
@@ -772,10 +776,12 @@ def _wind_metric_min_lcoe_turbine(
     )
 
     idx = min_lcoe_turbine_idx(lcoe=lcoe, turbine_ids=turbines)
+    valid_mask = _require_land_valid_mask(land, metric_name="min_lcoe_turbine")
+    public_mask = valid_mask & ~lcoe.isnull().all(dim="turbine")
+    idx_public = idx.where(public_mask)
+    idx_public.attrs = idx.attrs.copy()
 
-    # valid_mask already applied via CF -> LCOE.
-    # All-NaN pixels are encoded as nodata index (-1) in economics.min_lcoe_turbine_idx.
-    return idx
+    return idx_public
 
 
 def _wind_metric_optimal_power(

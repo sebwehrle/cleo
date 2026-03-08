@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Minimum supported Python version is now 3.11 because the required stable Zarr v3 releases are not available for Python 3.10
+- `atlas.wind.compute("min_lcoe_turbine", ...)` now masks invalid pixels at the public API boundary instead of surfacing the internal `-1` nodata sentinel
 - Wind public API now uses explicit wind-assessment method vocabulary:
   `capacity_factors` accepts `method`/`interpolation` instead of legacy `mode`,
   `.materialize()` uses `allow_method_change`, and CF provenance is stored via

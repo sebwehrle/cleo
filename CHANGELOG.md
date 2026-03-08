@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Normalize test-suite formatting so Ruff format checks pass in CI
 - Pin Ruff to `0.15.2` in dev dependencies and CI so local and GitHub formatting checks use the same version
+- Stabilized the phase-3 materialization golden test by pinning its turbine inventory so packaged turbine additions do not spuriously change the expected wind `inputs_id`
 
 ### Security
 - Added a pinned `detect-secrets` workflow with a shared `tools/secret_scan.sh` entrypoint for CI and optional local maintainer checks, replacing the invalid CI `audit --baseline` flow and removing dependence on an activated shell for local pre-commit runs

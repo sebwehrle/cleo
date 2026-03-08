@@ -24,9 +24,21 @@ from cleo import Atlas
 
 _FIXED_MTIME_NS = 1704067200000000000  # 2024-01-01T00:00:00Z
 _GWA_HEIGHTS = [10, 50, 100, 150, 200]
+_FIXED_TURBINES = [
+    "Enercon.E101.3050",
+    "Enercon.E115.3000",
+    "Enercon.E138.3500",
+    "Enercon.E160.5560",
+    "Enercon.E40.500",
+    "Enercon.E82.3000",
+    "Vestas.V100.1800",
+    "Vestas.V100.2000",
+    "Vestas.V112.3075",
+    "Vestas.V150.4200",
+]
 _GOLDEN = {
     "wind_grid_id": "e3c31174a7256f36",
-    "wind_inputs_id": "d51a1966f9bebfd2",
+    "wind_inputs_id": "729300d9175205a6",
     "wind_subset_checksum": "d83475c443ac887100a9f7164978dabc06d0666c9093cf541d53f6388c185da0",
     "wind_template_checksum": "d83475c443ac887100a9f7164978dabc06d0666c9093cf541d53f6388c185da0",
     "land_valid_mask_checksum": "834a709ba2534ebe3ee1397fd4f7bd288b2acc1d20a08d6c862dcd99b6f04400",
@@ -174,8 +186,10 @@ def phase3_baseline_atlas(tmp_path: Path) -> Atlas:
     _create_nuts_shapefile(root, bounds=bounds)
 
     atlas = Atlas(root, country, "epsg:3035")
+    atlas.configure_turbines(_FIXED_TURBINES)
 
     # Freeze raw/resource mtimes so path_mtime_size fingerprints are deterministic.
+    # Pin turbine inventory so this golden remains stable when new packaged turbines are added.
     _set_fixed_mtime(root / "data")
     _set_fixed_mtime(root / "resources")
     return atlas

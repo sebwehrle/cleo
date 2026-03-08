@@ -8,9 +8,7 @@ import xarray as xr
 
 from cleo.domains import (
     _reject_inplace_kwarg,
-    _reject_materialize_only_kwargs,
-    _reject_timebase_kwargs,
-    _validate_unknown_kwargs,
+    _validate_wind_compute_kwargs,
     _validate_landscape_compute_kwargs,
     _validate_distance_sources,
     _check_distance_conflicts,
@@ -37,69 +35,56 @@ class TestRejectInplaceKwarg:
         _reject_inplace_kwarg({}, "compute")
 
 
-class TestRejectMaterializeOnlyKwargs:
-    """Tests for _reject_materialize_only_kwargs function."""
+class TestValidateWindComputeKwargs:
+    """Tests for _validate_wind_compute_kwargs function."""
+
+    @staticmethod
+    def _spec(*, allowed: set[str], required: set[str] | None = None) -> dict:
+        return {
+            "allowed": frozenset(allowed),
+            "required": frozenset() if required is None else frozenset(required),
+        }
 
     def test_raises_when_overwrite_present(self) -> None:
         """Raises ValueError when overwrite kwarg is present."""
         with pytest.raises(ValueError, match="materialize-only parameter"):
-            _reject_materialize_only_kwargs({"overwrite": True})
+            _validate_wind_compute_kwargs({"overwrite": True}, "test_metric", self._spec(allowed={"overwrite"}))
 
     def test_raises_when_allow_method_change_present(self) -> None:
         """Raises ValueError when allow_method_change kwarg is present."""
         with pytest.raises(ValueError, match="materialize-only parameter"):
-            _reject_materialize_only_kwargs({"allow_method_change": True})
-
-    def test_raises_with_both_present(self) -> None:
-        """Raises ValueError listing both kwargs."""
-        with pytest.raises(ValueError, match="materialize-only parameter"):
-            _reject_materialize_only_kwargs({"overwrite": True, "allow_method_change": True})
-
-    def test_passes_when_none_present(self) -> None:
-        """Does not raise when materialize-only kwargs are absent."""
-        _reject_materialize_only_kwargs({"other": "value"})
-        _reject_materialize_only_kwargs({})
-
-
-class TestRejectTimebaseKwargs:
-    """Tests for _reject_timebase_kwargs function."""
+            _validate_wind_compute_kwargs(
+                {"allow_method_change": True},
+                "test_metric",
+                self._spec(allowed={"allow_method_change"}),
+            )
 
     def test_raises_when_hours_per_year_present(self) -> None:
         """Raises ValueError when hours_per_year kwarg is present."""
         with pytest.raises(ValueError, match="Timebase parameter"):
-            _reject_timebase_kwargs({"hours_per_year": 8760})
-
-    def test_passes_when_hours_per_year_absent(self) -> None:
-        """Does not raise when hours_per_year kwarg is absent."""
-        _reject_timebase_kwargs({"other": "value"})
-        _reject_timebase_kwargs({})
-
-
-class TestValidateUnknownKwargs:
-    """Tests for _validate_unknown_kwargs function."""
+            _validate_wind_compute_kwargs(
+                {"hours_per_year": 8760}, "test_metric", self._spec(allowed={"hours_per_year"})
+            )
 
     def test_raises_when_unknown_kwargs_present(self) -> None:
         """Raises ValueError when unknown kwargs are present."""
-        allowed = {"a", "b", "c"}
         with pytest.raises(ValueError, match="Unknown parameter"):
-            _validate_unknown_kwargs({"a": 1, "unknown": 2}, allowed, "test_metric")
-
-    def test_passes_when_all_kwargs_allowed(self) -> None:
-        """Does not raise when all kwargs are in allowed set."""
-        allowed = {"a", "b", "c"}
-        _validate_unknown_kwargs({"a": 1, "b": 2}, allowed, "test_metric")
-
-    def test_passes_when_allowed_is_none(self) -> None:
-        """Does not raise when allowed is None (no restriction)."""
-        _validate_unknown_kwargs({"anything": "goes"}, None, "test_metric")
+            _validate_wind_compute_kwargs({"a": 1, "unknown": 2}, "test_metric", self._spec(allowed={"a", "b", "c"}))
 
     def test_filters_internal_params_from_error_message(self) -> None:
         """Internal params like hours_per_year are filtered from allowed list in error."""
-        allowed = {"a", "hours_per_year"}
         with pytest.raises(ValueError) as exc_info:
-            _validate_unknown_kwargs({"unknown": 1}, allowed, "test_metric")
-        # hours_per_year should not appear in the "Allowed:" part
+            _validate_wind_compute_kwargs({"unknown": 1}, "test_metric", self._spec(allowed={"a", "hours_per_year"}))
         assert "hours_per_year" not in str(exc_info.value).split("Allowed:")[1]
+
+    def test_raises_when_required_kwargs_missing(self) -> None:
+        """Raises ValueError when required kwargs are missing."""
+        with pytest.raises(ValueError, match="Missing required parameters"):
+            _validate_wind_compute_kwargs({}, "test_metric", self._spec(allowed={"a"}, required={"a"}))
+
+    def test_passes_when_kwargs_are_valid(self) -> None:
+        """Does not raise when required and allowed kwargs are satisfied."""
+        _validate_wind_compute_kwargs({"a": 1}, "test_metric", self._spec(allowed={"a"}, required={"a"}))
 
 
 # =============================================================================

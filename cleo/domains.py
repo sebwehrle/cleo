@@ -179,8 +179,25 @@ def _reject_inplace_kwarg(kwargs: dict, method_name: str) -> None:
         )
 
 
-def _reject_materialize_only_kwargs(kwargs: dict) -> None:
-    """Reject kwargs that belong to materialize(), not compute()."""
+# =============================================================================
+# WindDomain compute helpers
+# =============================================================================
+
+
+def _validate_wind_compute_kwargs(kwargs: dict, metric: str, spec: dict) -> None:
+    """Validate public compute kwargs for a wind metric.
+
+    :param kwargs: User-supplied compute kwargs for the requested metric.
+    :type kwargs: dict
+    :param metric: Public wind metric name.
+    :type metric: str
+    :param spec: Internal metric specification with ``required`` and ``allowed`` keys.
+    :type spec: dict
+    :raises ValueError: If ``compute(...)`` receives inplace, materialize-only,
+        timebase, missing, or unknown parameters.
+    """
+    _reject_inplace_kwarg(kwargs, "compute")
+
     materialize_only = tuple(key for key in ("overwrite", "allow_method_change") if key in kwargs)
     if materialize_only:
         keys_text = ", ".join(repr(key) for key in materialize_only)
@@ -190,9 +207,6 @@ def _reject_materialize_only_kwargs(kwargs: dict) -> None:
             "atlas.wind.compute(...).materialize(overwrite=True, allow_method_change=True)."
         )
 
-
-def _reject_timebase_kwargs(kwargs: dict) -> None:
-    """Reject timebase kwargs that must be set via atlas.configure_timebase()."""
     timebase_kwargs = tuple(key for key in ("hours_per_year",) if key in kwargs)
     if timebase_kwargs:
         keys_text = ", ".join(repr(key) for key in timebase_kwargs)
@@ -201,36 +215,18 @@ def _reject_timebase_kwargs(kwargs: dict) -> None:
             f"Use atlas.configure_timebase(hours_per_year=...) to set timebase assumptions."
         )
 
-
-def _validate_unknown_kwargs(kwargs: dict, allowed: set | None, metric: str) -> None:
-    """Check for unknown kwargs (strict enforcement)."""
-    if allowed is None:
-        return
-    unknown = set(kwargs.keys()) - allowed
-    if unknown:
-        internal_params = {"hours_per_year"}
-        user_allowed = sorted(allowed - internal_params)
-        raise ValueError(f"Unknown parameter(s) for metric {metric!r}: {sorted(unknown)}. Allowed: {user_allowed}")
-
-
-# =============================================================================
-# WindDomain compute helpers
-# =============================================================================
-
-
-def _validate_wind_compute_kwargs(kwargs: dict, metric: str, spec: dict) -> None:
-    """Validate kwargs for wind compute."""
-    _reject_inplace_kwarg(kwargs, "compute")
-    _reject_materialize_only_kwargs(kwargs)
-    _reject_timebase_kwargs(kwargs)
-
     # Check required kwargs
     required = spec["required"]
     missing = required - kwargs.keys()
     if missing:
         raise ValueError(f"Missing required parameters for {metric}: {sorted(missing)}")
 
-    _validate_unknown_kwargs(kwargs, spec["allowed"], metric)
+    allowed = spec["allowed"]
+    unknown = set(kwargs.keys()) - allowed
+    if unknown:
+        internal_params = {"hours_per_year"}
+        user_allowed = sorted(allowed - internal_params)
+        raise ValueError(f"Unknown parameter(s) for metric {metric!r}: {sorted(unknown)}. Allowed: {user_allowed}")
 
 
 def _resolve_composed_metric_kwargs(

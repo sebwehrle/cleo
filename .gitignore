@@ -37,6 +37,7 @@ site/
 # Local config (not tracked)
 AGENTS.md
 CLAUDE.md
+.local/
 
 # Secrets and credentials
 .env

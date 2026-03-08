@@ -1,9 +1,10 @@
 # CLEO
 
 CLEO is an `xarray`-based package for wind resource assessment with Global Wind Atlas (GWA) inputs.
-It materializes canonical Zarr stores, computes wind/energy metrics, and persists/exports results.
+It creates Zarr datasets on disk, computes wind and energy metrics, and can persist or export results.
 
-CLEO prepares analysis-ready wind/landscape rasters and tabular exports; econometric regression is out of scope.
+CLEO prepares analysis-ready wind rasters, optional landscape rasters, and tabular exports. It does not support downstream data analysis beyond preparing and exporting these datasets.
+It is currently focused on European workflows, with NUTS region support, CORINE Land Cover integration, and EUR-based economics defaults.
 
 ## Supported Environment
 
@@ -44,51 +45,22 @@ proj                 # Should show PROJ usage
 ### Package Installation
 
 ```bash
-python -m pip install -e .
+python -m pip install .
 ```
 
-Dependency management is defined in `pyproject.toml`. A `requirements-lock.txt` is available for reproducible installs.
+CLEO is currently installed from a repository checkout. Run the command above from the repo root. CLEO is not yet published on PyPI or Conda.
 
-## Development Commands (Canonical)
+Dependencies are defined in `pyproject.toml`. A `requirements-lock.txt` is available for reproducible maintainer installs.
 
-Use these commands directly (no Makefile required):
+## First Run Notes
 
-```bash
-# install dev + docs dependencies
-python -m pip install -e ".[dev,docs]"
-
-# format/lint
-python -m ruff format --check .
-python -m ruff check .
-
-# architecture/boundary guardrails
-python -m pytest -q tests/unit/compat
-
-# test suite
-python -m pytest -q tests/unit
-python -m pytest -q tests/integration
-python -m pytest -q tests/smoke
-
-# build + import verification
-python -m pip install build
-python -m build
-python -m pip install dist/*.whl
-python -c "from cleo import __version__; print(f'cleo {__version__}')"
-
-# docs build
-python -m mkdocs build --strict
-python -m mkdocs serve
-```
-
-Optional local cleanup:
-
-```bash
-find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
-find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
-find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
-rm -rf build/ dist/ 2>/dev/null || true
-```
+- Your `workdir` is the directory where CLEO stores downloaded inputs, Zarr datasets, and results.
+- `atlas.build()` creates the main `wind.zarr` and `landscape.zarr` stores in that workdir.
+- On first run, CLEO may automatically download required GWA rasters and NUTS boundaries if they are missing.
+  NUTS is the EU regional boundary system used for area selection.
+- `atlas.build_clc()` is optional. It prepares CORINE Land Cover (CLC) data aligned to the atlas grid for land-cover workflows.
+- `atlas.build_clc(url=...)` expects an HTTP(S) download URL. It does not accept local filesystem paths.
+- If you only need wind metrics, you do not need to run `atlas.build_clc()`.
 
 ## Quick Start
 
@@ -96,7 +68,7 @@ rm -rf build/ dist/ 2>/dev/null || true
 from cleo import Atlas
 
 atlas = Atlas(
-    "/path/to/workdir",
+    "/path/to/workdir",  # directory CLEO will use for data, stores, and results
     country="AUT",      # ISO-3166 alpha-3
     crs="EPSG:3035",
 )
@@ -127,6 +99,14 @@ mean_ws = atlas.wind.compute(
 # mean_ws name: "mean_wind_speed", dims: ("height","y","x")
 ```
 
+Typical workflow:
+
+1. Construct an `Atlas` pointing to a workdir and country/CRS.
+2. Run `atlas.build()` to create the main datasets on disk.
+3. Select turbines and optionally an area.
+4. Call `atlas.wind.compute(...)` for wind metrics, and use `atlas.landscape.compute(...)` only if you need landscape-derived variables.
+5. Continue working with `atlas.wind.data` / `atlas.landscape.data`, or materialize and persist results.
+
 ## Workspace Layout
 
 After materialization, CLEO uses:
@@ -139,6 +119,7 @@ After materialization, CLEO uses:
 - `<workdir>/resources/*.yml`
 - `<workdir>/data/raw/<ISO3>/*.tif`
 - `<workdir>/data/nuts/*`
+- `<workdir>/data/clc/*` (only if you use optional CLC preparation)
 
 ## Public API
 
@@ -147,7 +128,9 @@ Public API boundary:
 - Supported entry point: `from cleo import Atlas, __version__`.
 - `__version__` provides runtime version access.
 - Public behavior is defined by the `Atlas`, `WindDomain`, `LandscapeDomain`, and `DomainResult` contracts below.
-- Internal modules (for example `cleo.assess`, `cleo.loaders`, `cleo.unification.*`, `cleo.clc`) are implementation details and not part of the stability contract.
+- Internal modules (for example `cleo.assess`, `cleo.loaders`, `cleo.unification.*`, `cleo.clc`) are implementation details and may change without notice.
+- If you are new to CLEO, the main path is: `Atlas(...)` -> `build()` -> `wind.select(...)` -> `wind.compute(...)` -> `.materialize()` or `.persist()`.
+- For the full method/option matrix, see `docs/reference/knobs-and-methods.md`.
 
 ```python
 from cleo import __version__
@@ -171,29 +154,36 @@ Atlas(
 )
 ```
 
-- `path`: workspace root for stores/resources/results.
+Common arguments:
+
+- `path`: workspace root for datasets, resources, and results.
 - `country`: ISO3 country code.
-- `crs`: canonical projected CRS for atlas stores.
-- `chunk_policy`: chunk sizes for `y/x` when opening zarr datasets.
-- `compute_backend`: eager-materialization backend (`"serial"|"threads"|"processes"|"distributed"`).
+- `crs`: projected CRS used for atlas datasets.
+
+Less common arguments:
+
+- `chunk_policy`: chunk sizes for `y/x` when opening Zarr datasets.
+- `compute_backend`: backend used when CLEO evaluates and writes computed results (`"serial"|"threads"|"processes"|"distributed"`).
 - `compute_workers`: optional worker cap for local backends (`threads`/`processes`).
   Must be `None` or `1` for `serial`; must be `None` for `distributed`.
-- `area`: optional initial area selection (applied on `build()`).
+- `area`: optional initial area selection, applied on `build()`.
 - `results_root`: optional custom results directory.
-- `fingerprint_method`: internal fingerprinting policy used by unification internals.
+- `fingerprint_method`: internal change-detection policy. Leave the default unless you have a specific reason to change it.
 
 ### Lifecycle and Selection
 
+Most users only need `build()` and optionally `select(...)`.
+
 - `atlas.build()`
-  - Ensures base stores and, when an area is selected, area stores.
+  - Ensures the base datasets exist and, when an area is selected, creates area-specific datasets.
   - If required GWA wind rasters are missing under
     `<workdir>/data/raw/<ISO3>/`, attempts automatic download of the required
     GWA layers/heights before failing.
-  - If area-aware paths require NUTS boundaries and no local NUTS shapefile
+  - If area-aware paths require NUTS boundaries (EU regional boundary files) and no local NUTS shapefile
     exists under `<workdir>/data/nuts/`, attempts automatic NUTS
     download/extract before failing.
 - `atlas.build_canonical()`
-  - Ensures base stores only (`wind.zarr`, `landscape.zarr`).
+  - Ensures only the base datasets exist (`wind.zarr`, `landscape.zarr`).
 - `atlas.select(area=..., nuts_level=None, inplace=False)`
   - `area`: area name or `None` to clear selection.
   - `nuts_level`: optional NUTS level disambiguation (`0|1|2|3`).
@@ -206,8 +196,10 @@ Atlas(
 
 ### Domains and Data Access
 
+The two main datasets are `atlas.wind.data` and `atlas.landscape.data`.
+
 - `atlas.wind`, `atlas.landscape`
-  - domain facades.
+  - main accessors for wind and landscape data.
 - `atlas.wind_data`, `atlas.landscape_data`
   - direct shortcuts to `atlas.wind.data` / `atlas.landscape.data`.
 - `atlas.configure_turbines(turbines)`
@@ -226,11 +218,13 @@ Atlas(
 - `atlas.economics_configured`
   - configured economics dict or `None`.
 - `atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True, cast_binary_to_int=False, include_only=None)`
-  - flattens domain data into a tabular frame.
+  - turns domain data into a tabular `pandas.DataFrame`.
 - `Atlas.validate_flatten_schema(df, required_columns)`
   - raises if required flattened columns are missing.
 
 ### WindDomain
+
+If you only use wind metrics, this is the main section to learn.
 
 - `atlas.wind.turbines`
   - available turbine IDs in active wind store.
@@ -253,22 +247,21 @@ Atlas(
   - `inplace=True` stages the converted DataArray; `inplace=False` returns it.
   - conversion is dask-friendly (lazy arrays stay lazy).
 - `atlas.wind.compute(metric, **kwargs)`
-  - metric entrypoint for all wind metrics.
+  - single entry point for all wind metrics.
   - rejects materialize-only kwargs `overwrite` and `allow_method_change`; pass those to `.materialize(...)`.
-  - stages a lazy normalized overlay into `atlas.wind.data[<resolved_variable_name>]` before store writes.
-  - staged wind overlays are cleared by `atlas.select(...)`, `atlas.build()`, `atlas.build_canonical()`, and `atlas.build_clc()`.
+  - adds the computed variable to `atlas.wind.data[<resolved_variable_name>]` before any store write.
+  - these staged wind variables are cleared by `atlas.select(...)`, `atlas.build()`, `atlas.build_canonical()`, and `atlas.build_clc()`.
 
 `compute(...)` returns `DomainResult`:
 
 - `.data`
   - computed `xarray.DataArray` (lazy when backed by dask).
 - `.materialize(overwrite=True, allow_method_change=False)`
-  - writes metric to active wind store and reloads surfaced domain state.
+  - writes the metric to the current wind dataset on disk and reloads the domain state.
   - `allow_method_change` is required to replace existing `capacity_factors` with a different `cleo:cf_method`.
-  - `mean_wind_speed` is materialized per requested height slice into one
-    aggregated `mean_wind_speed(height,y,x)` variable.
-  - `overwrite=False` for `mean_wind_speed` blocks only if that requested
-    height slice already has data; other heights can still be added.
+  - `mean_wind_speed` writes one height slice at a time into the aggregated
+    `mean_wind_speed(height,y,x)` variable.
+  - `overwrite=False` for `mean_wind_speed` blocks only if that requested height slice already has data; other heights can still be added.
   - existing legacy `mean_wind_speed(y,x)` variables fail with an explicit
     migration error.
 - `.persist(run_id=None, params=None, metric_name=None)`
@@ -276,8 +269,10 @@ Atlas(
 
 ### Supported Wind Metrics
 
+The most common starting points are `wind_speed`, `capacity_factors`, and `lcoe`.
+
 - `wind_speed`
-  - Public selector with method-dependent output variable names.
+  - Single wind-speed API. The output variable depends on `method`.
   - `method="height_weibull_mean"`
     - Required: `height`
     - Output variable: `mean_wind_speed`
@@ -339,26 +334,28 @@ Atlas(
 
 ### LandscapeDomain
 
+Skip this section if you only need wind metrics.
+
 - `atlas.landscape.data`
-  - active landscape dataset.
+  - current landscape dataset.
 - `atlas.landscape.compute(metric, **kwargs)`
-  - compute entrypoint for landscape metrics.
+  - single entry point for landscape metrics.
   - currently supported metric:
     - `metric="distance"` with:
       - `source`: one source variable name or a list/tuple of source variable names.
       - `name`: optional output name or list/tuple of output names; default is `distance_<source>`.
       - `if_exists`: `"error"|"replace"|"noop"`.
   - distance sources must be store-backed landscape variables (not staged-only overlays).
-  - returns a batch result object with:
+  - returns a result object with:
     - `.data`: staged `xr.Dataset` containing computed distance variables.
     - `.materialize(if_exists=None)`: writes staged distance variables into the active landscape store and returns materialized `xr.Dataset`.
 - `atlas.landscape.add(name, source_path, *, kind="raster", params=None, if_exists="error")`
-  - stages a raster landscape candidate and returns `LandscapeAddResult`.
+  - stages a raster variable and returns `LandscapeAddResult`.
   - `add(...)` is raster-only (`kind` must be `"raster"`); use `rasterize(...)` for vector sources.
   - staged variables are visible in `atlas.landscape.data` before store writes.
   - `if_exists`: `"error"|"replace"|"noop"`.
 - `atlas.landscape.rasterize(shape, *, name, column=None, all_touched=False, if_exists="error")`
-  - stages a vector-rasterized landscape candidate and returns `LandscapeAddResult`.
+  - converts vector data to a raster on the atlas grid and returns `LandscapeAddResult`.
   - `shape` accepts path-like vector sources or a `geopandas.GeoDataFrame`.
   - `column=None` burns binary coverage (`1.0`); otherwise burns numeric values from `column`.
   - staged variables are visible in `atlas.landscape.data` before store writes.
@@ -373,7 +370,7 @@ Atlas(
   - `inplace=True` stages the converted DataArray; `inplace=False` returns it.
   - conversion is dask-friendly (lazy arrays stay lazy).
 - `atlas.build_clc(source="clc2018", url=None, force_download=False, force_prepare=False)`
-  - prepares CLC cache aligned to wind/GWA grid.
+  - optional helper for land-cover workflows; prepares CORINE Land Cover (CLC) data aligned to the wind/GWA grid.
   - with `url=None`, CLC2018 auto-download uses the CLMS API prepackaged-download workflow and expects CLMS auth via
     `CLEO_CLMS_ACCESS_TOKEN` or service key envs (`CLEO_CLMS_SERVICE_KEY_JSON`, `CLEO_CLMS_SERVICE_KEY_PATH`, `CLMS_API_SERVICE_KEY`).
   - multiband rendered inputs (for example RGB/RGBA imagery) are rejected; CLEO expects single-band categorical CLC class rasters.
@@ -385,7 +382,9 @@ Atlas(
 
 #### CLC Authentication Setup (CLMS)
 
-When `atlas.build_clc(url=None)` needs to download CLC automatically, CLEO authenticates against the CLMS API.
+This section is only relevant if you want to use optional CORINE Land Cover (CLC) data.
+
+When `atlas.build_clc(url=None)` needs to download CLC automatically, CLEO authenticates against the Copernicus Land Monitoring Service (CLMS) API.
 
 Get credentials (service key) from CLMS:
 
@@ -519,7 +518,7 @@ atlas.export_result_netcdf(store_path.parent.name, "capacity_factors", "cf.nc")
 ## Dask and Chunking
 
 CLEO does not expose a `DaskConfig` object in the public API.
-Chunking and execution behavior are controlled via `chunk_policy`, dataset chunking, and `compute_backend`.
+Chunking and execution behavior are controlled through `chunk_policy`, dataset chunking, and `compute_backend`.
 
 - Dask-backed arrays can stay lazy until materialization paths (`materialize`, `persist`, export).
 - Local backend worker cap is controlled by `compute_workers`.
@@ -565,6 +564,47 @@ print(df)
 python -m pytest -q
 ```
 
+## Development Commands
+
+Maintainer commands are kept separate from the user workflow:
+
+```bash
+# install dev + docs dependencies
+python -m pip install -e ".[dev,docs]"
+
+# format/lint
+python -m ruff format --check .
+python -m ruff check .
+
+# architecture/boundary guardrails
+python -m pytest -q tests/unit/compat
+
+# test suite
+python -m pytest -q tests/unit
+python -m pytest -q tests/integration
+python -m pytest -q tests/smoke
+
+# build + import verification
+python -m pip install build
+python -m build
+python -m pip install dist/*.whl
+python -c "from cleo import __version__; print(f'cleo {__version__}')"
+
+# docs build
+python -m mkdocs build --strict
+python -m mkdocs serve
+```
+
+Optional local cleanup:
+
+```bash
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+rm -rf build/ dist/ 2>/dev/null || true
+```
+
 ## Troubleshooting
 
 ### GDAL/PROJ Installation Issues
@@ -599,7 +639,7 @@ export LDFLAGS="-L$(brew --prefix)/lib"
 
 **Error: `CLMS authentication cannot be resolved`**
 
-CLEO needs CLMS credentials to download CLC data. See the [CLC Authentication Setup](#clc-authentication-setup-clms) section.
+CLEO needs CLMS credentials only when downloading optional CLC data. See the [CLC Authentication Setup](#clc-authentication-setup-clms) section.
 
 Quick fix: Set one of these environment variables:
 ```bash
@@ -608,12 +648,14 @@ export CLEO_CLMS_SERVICE_KEY_PATH="/path/to/clms_service_key.json"
 export CLEO_CLMS_ACCESS_TOKEN="<your-access-token>"
 ```
 
-**Alternative: Manual download**
+**Alternative: provide an explicit download URL**
 
-Download CLC data manually from [Copernicus Land Monitoring Service](https://land.copernicus.eu/en/products/corine-land-cover) and pass the URL or local path:
+If you already know the remote CLC file URL, pass it explicitly:
 ```python
-atlas.build_clc(url="/path/to/clc_raster.tif")
+atlas.build_clc(url="https://example.org/path/to/clc_raster.tif")
 ```
+
+`build_clc(url=...)` does not currently accept local filesystem paths.
 
 ### Memory Issues
 

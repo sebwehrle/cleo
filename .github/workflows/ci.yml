@@ -201,39 +201,12 @@ jobs:
           python-version: "3.11"
 
       - name: Install detect-secrets
-        run: python -m pip install detect-secrets
+        run: python -m pip install "detect-secrets==1.5.0"
 
       - name: Scan for secrets
         run: |
           echo "Scanning for potential secrets..."
-          detect-secrets scan \
-            --exclude-files 'requirements-lock\.txt' \
-            --exclude-files '\.zarr/' \
-            --exclude-files '.*\.tif$' \
-            --exclude-files '.*\.png$' \
-            --exclude-secrets '[A-Fa-f0-9]{64}' \
-            > .secrets-scan-results.json
-
-          # Check against baseline if it exists
-          if [[ -f .secrets.baseline ]]; then
-            detect-secrets audit --report --baseline .secrets.baseline .secrets-scan-results.json || {
-              echo "WARNING: New potential secrets detected. Review .secrets-scan-results.json"
-              echo "If these are false positives, update .secrets.baseline"
-              exit 1
-            }
-          else
-            # No baseline - just report findings
-            FINDINGS=$(python -c "import json; d=json.load(open('.secrets-scan-results.json')); print(len(d.get('results', {})))")
-            if [[ "$FINDINGS" != "0" ]]; then
-              echo "Potential secrets found in $FINDINGS file(s). Review .secrets-scan-results.json"
-              cat .secrets-scan-results.json
-              echo ""
-              echo "If these are false positives, create .secrets.baseline with:"
-              echo "  detect-secrets scan --baseline .secrets.baseline"
-            else
-              echo "OK: No secrets detected"
-            fi
-          fi
+          tools/secret_scan.sh --all --json-out .secrets-scan-results.json
 
   build:
     name: Build

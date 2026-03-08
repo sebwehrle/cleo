@@ -576,6 +576,9 @@ python -m pip install -e ".[dev,docs]"
 python -m ruff format --check .
 python -m ruff check .
 
+# secret scan
+tools/secret_scan.sh --all
+
 # architecture/boundary guardrails
 python -m pytest -q tests/unit/compat
 

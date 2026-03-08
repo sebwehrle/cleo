@@ -211,12 +211,13 @@ def test_materialize_clc_accepts_integer_source_raster_with_nan_nodata(
 
 
 def test_resolve_default_clc_download_uses_clms_api_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use an allowlisted CLMS fixture while exercising the API download flow."""
     monkeypatch.setenv(
         "CLEO_CLMS_SERVICE_KEY_JSON",
         json.dumps(
             {
                 "service_name": "example-service",
-                "secret": "example-secret",
+                "secret": "not-a-real-secret",  # pragma: allowlist secret
                 "username": "example-user",
             }
         ),

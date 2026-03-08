@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pin Ruff to `0.15.2` in dev dependencies and CI so local and GitHub formatting checks use the same version
 
 ### Security
-- Added secret scanning to CI workflow via `detect-secrets`
+- Added a pinned `detect-secrets` workflow with a shared `tools/secret_scan.sh` entrypoint for CI and optional local maintainer checks, replacing the invalid CI `audit --baseline` flow and removing dependence on an activated shell for local pre-commit runs
 - Added Dependabot for automated dependency updates (conservative settings)
 - Hardened `.gitignore` with secret file patterns
 - Added security documentation for CLMS authentication in `cleo/clc.py`

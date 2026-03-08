@@ -46,13 +46,12 @@ from pathlib import Path
 from cleo.results import DomainResult, normalize_metric_for_active_wind_store
 from cleo.spatial import distance_to_positive_mask
 from cleo.wind_metrics import (
-    list_wind_metrics,
-    get_wind_metric_spec,
+    _FLAT_CF_KWARGS,
+    _FLAT_ECONOMICS_KWARGS,
+    _REQUIRED_ECONOMICS_FIELDS,
+    _WIND_METRICS,
     resolve_cf_spec,
     resolved_wind_output_name,
-    required_economics_fields,
-    flat_cf_kwargs,
-    flat_economics_kwargs,
 )
 from cleo.unification.materializers._landscape_api import (
     materialize_landscape_computed_variables,
@@ -244,11 +243,11 @@ def _resolve_composed_metric_kwargs(
 
     Returns resolved_cf dict for CF reuse checking.
     """
-    if not spec["composed"]:
+    if not spec.get("composed", False):
         return {}
 
     # Reject flat CF/economics kwargs - must use grouped specs
-    flat_cf_present = set(kwargs.keys()) & flat_cf_kwargs()
+    flat_cf_present = set(kwargs.keys()) & _FLAT_CF_KWARGS
     if flat_cf_present:
         raise ValueError(
             f"For {metric!r}, CF parameters must be passed via cf={{...}}, "
@@ -256,7 +255,7 @@ def _resolve_composed_metric_kwargs(
             f'Use: compute({metric!r}, cf={{"method": ..., "air_density": ...}}, ...)'
         )
 
-    flat_econ_present = set(kwargs.keys()) & flat_economics_kwargs()
+    flat_econ_present = set(kwargs.keys()) & _FLAT_ECONOMICS_KWARGS
     if flat_econ_present:
         raise ValueError(
             f"For {metric!r}, economics parameters must be passed via economics={{...}}, "
@@ -275,7 +274,7 @@ def _resolve_composed_metric_kwargs(
     effective_economics = atlas._effective_economics(economics_override)
 
     # Validate required economics fields
-    missing_econ = required_economics_fields() - set(effective_economics.keys())
+    missing_econ = _REQUIRED_ECONOMICS_FIELDS - set(effective_economics.keys())
     if missing_econ:
         raise ValueError(
             f"Missing required economics parameters for {metric!r}: {sorted(missing_econ)}. "
@@ -321,7 +320,7 @@ def _inject_economics_params_and_cf_reuse(
         kwargs["hours_per_year"] = domain._atlas._effective_hours_per_year()
 
     # CF reuse check for LCOE-family metrics
-    if spec["composed"] and metric in _ECONOMICS_METRICS:
+    if spec.get("composed", False) and metric in _ECONOMICS_METRICS:
         turbines = kwargs["turbines"]
         store_ds = domain._store_data()
         if "capacity_factors" in store_ds.data_vars:
@@ -777,11 +776,11 @@ class WindDomain:
             are passed instead of grouped specs.
         """
         # Validate metric exists
-        available_metrics = list_wind_metrics()
-        if metric not in available_metrics:
+        available_metrics = tuple(sorted(_WIND_METRICS))
+        if metric not in _WIND_METRICS:
             raise ValueError(f"Unknown metric {metric!r}. Supported: {list(available_metrics)}")
 
-        spec = get_wind_metric_spec(metric)
+        spec = _WIND_METRICS[metric]
 
         # Validate kwargs
         _validate_wind_compute_kwargs(kwargs, metric, spec)

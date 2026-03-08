@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Simplified internal wind-metric orchestration by reusing shared wind-store input resolution helpers and removing redundant internal compute parameters, with unchanged public behavior
 - Unit conversion now requires the canonical `units` attr, and current wind stores are treated as canonical `weibull_A` / `weibull_k` datasets without legacy alias tolerance
 - Simplified internal unification orchestration so incremental landscape registration/materialization routes directly to its owning materializer helpers while preserving Atlas workflows and canonical unification behavior
+- Simplified internal wind metric dispatch plumbing so `WindDomain.compute(...)` now consumes the canonical wind-metric registry directly, removing boundary wrapper helpers while preserving grouped spec behavior, CF reuse semantics, and metric outputs
 
 ### Removed
 - Developer benchmark helpers are no longer shipped in the runtime package as `cleo.bench`; maintainer benchmarking now lives under `tools/bench.py`

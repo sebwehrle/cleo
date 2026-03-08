@@ -1,7 +1,6 @@
 # %% imports
 from dataclasses import dataclass
 import json
-import types
 import numpy as np
 import xarray as xr
 
@@ -926,62 +925,70 @@ _WIND_METRICS = {
     "wind_speed": {
         "fn": _wind_metric_wind_speed,
         "requires_turbines": False,
-        "required": set(),
-        "allowed": {"method", "interpolation", "height", "turbines", "air_density", "rews_n"},
+        "required": frozenset(),
+        "allowed": frozenset({"method", "interpolation", "height", "turbines", "air_density", "rews_n"}),
     },
     "capacity_factors": {
         "fn": _wind_metric_capacity_factors,
         "requires_turbines": True,
-        "required": set(),
-        "allowed": {"turbines", "method", "interpolation", "air_density", "loss_factor", "rews_n"},
+        "required": frozenset(),
+        "allowed": frozenset({"turbines", "method", "interpolation", "air_density", "loss_factor", "rews_n"}),
     },
     "lcoe": {
         "fn": _wind_metric_lcoe,
         "requires_turbines": True,
-        "required": set(),
+        "required": frozenset(),
         "composed": True,  # accepts grouped cf={} and economics={} specs
-        "allowed": {
-            "turbines",
-            "cf",
-            "economics",
-            "hours_per_year",  # injected internally by domain
-        },
+        "allowed": frozenset(
+            {
+                "turbines",
+                "cf",
+                "economics",
+                "hours_per_year",  # injected internally by domain
+            }
+        ),
     },
     "min_lcoe_turbine": {
         "fn": _wind_metric_min_lcoe_turbine,
         "requires_turbines": True,
-        "required": set(),
+        "required": frozenset(),
         "composed": True,
-        "allowed": {
-            "turbines",
-            "cf",
-            "economics",
-            "hours_per_year",  # injected internally by domain
-        },
+        "allowed": frozenset(
+            {
+                "turbines",
+                "cf",
+                "economics",
+                "hours_per_year",  # injected internally by domain
+            }
+        ),
     },
     "optimal_power": {
         "fn": _wind_metric_optimal_power,
         "requires_turbines": True,
-        "required": set(),
+        "required": frozenset(),
         "composed": True,
-        "allowed": {
-            "turbines",
-            "cf",
-            "economics",
-            "hours_per_year",  # injected internally by domain
-        },
+        "allowed": frozenset(
+            {
+                "turbines",
+                "cf",
+                "economics",
+                "hours_per_year",  # injected internally by domain
+            }
+        ),
     },
     "optimal_energy": {
         "fn": _wind_metric_optimal_energy,
         "requires_turbines": True,
-        "required": set(),
+        "required": frozenset(),
         "composed": True,
-        "allowed": {
-            "turbines",
-            "cf",
-            "economics",
-            "hours_per_year",  # injected internally by domain
-        },
+        "allowed": frozenset(
+            {
+                "turbines",
+                "cf",
+                "economics",
+                "hours_per_year",  # injected internally by domain
+            }
+        ),
     },
 }
 
@@ -1019,56 +1026,6 @@ _FLAT_ECONOMICS_KWARGS = frozenset(
 )
 
 
-# =============================================================================
-# Stable internal interface functions
-# =============================================================================
-# These functions provide a stable boundary interface for cleo.domains to access
-# wind metric registry internals without importing underscore-prefixed symbols.
-
-
-def list_wind_metrics() -> tuple[str, ...]:
-    """Return tuple of available wind metric names.
-
-    Returns:
-        Tuple of metric names in sorted order.
-    """
-    return tuple(sorted(_WIND_METRICS.keys()))
-
-
-def get_wind_metric_spec(name: str) -> types.MappingProxyType:
-    """Return immutable metric specification for the given metric name.
-
-    Args:
-        name: The metric name (e.g., "capacity_factors", "lcoe").
-
-    Returns:
-        Immutable dict-like object with keys:
-        - fn: callable metric function
-        - requires_turbines: bool
-        - required: frozenset of required parameter names
-        - allowed: frozenset of allowed parameter names
-        - composed: bool (True for metrics using grouped cf/economics specs)
-
-    Raises:
-        KeyError: If metric name is not found.
-    """
-    if name not in _WIND_METRICS:
-        raise KeyError(f"Unknown wind metric: {name!r}")
-
-    spec = _WIND_METRICS[name]
-    # Normalize to immutable types
-    required_params: set[str] = spec["required"]  # type: ignore[assignment]
-    allowed_params: set[str] = spec["allowed"]  # type: ignore[assignment]
-    normalized = {
-        "fn": spec["fn"],
-        "requires_turbines": spec["requires_turbines"],
-        "required": frozenset(required_params),
-        "allowed": frozenset(allowed_params),
-        "composed": spec.get("composed", False),
-    }
-    return types.MappingProxyType(normalized)
-
-
 def resolve_cf_spec(cf: dict | None) -> dict:
     """Resolve CF spec dict with defaults for composed metrics.
 
@@ -1093,38 +1050,3 @@ def resolve_cf_spec(cf: dict | None) -> dict:
         rews_n=int(result["rews_n"]),
         loss_factor=float(result["loss_factor"]),
     )
-
-
-def required_economics_fields() -> frozenset[str]:
-    """Return frozenset of required economics field names for LCOE computation.
-
-    Returns:
-        Frozenset containing: discount_rate, lifetime_a,
-        om_fixed_eur_per_kw_a, om_variable_eur_per_kwh.
-    """
-    return frozenset(_REQUIRED_ECONOMICS_FIELDS)
-
-
-def flat_cf_kwargs() -> frozenset[str]:
-    """Return frozenset of CF kwargs that are rejected for composed metrics.
-
-    These kwargs must be passed via the grouped cf={} spec for composed
-    metrics (lcoe, min_lcoe_turbine, optimal_power, optimal_energy).
-
-    Returns:
-        Frozenset containing: method, interpolation, air_density, loss_factor, rews_n.
-    """
-    return _FLAT_CF_KWARGS
-
-
-def flat_economics_kwargs() -> frozenset[str]:
-    """Return frozenset of economics kwargs that are rejected for composed metrics.
-
-    These kwargs must be passed via the grouped economics={} spec for composed
-    metrics (lcoe, min_lcoe_turbine, optimal_power, optimal_energy).
-
-    Returns:
-        Frozenset containing: discount_rate, lifetime_a, om_fixed_eur_per_kw_a,
-        om_variable_eur_per_kwh, bos_cost_share, grid_connect_cost_eur_per_kw.
-    """
-    return _FLAT_ECONOMICS_KWARGS

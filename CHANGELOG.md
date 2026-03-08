@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Simplified internal unification orchestration so incremental landscape registration/materialization routes directly to its owning materializer helpers while preserving Atlas workflows and canonical unification behavior
 - Simplified internal wind metric dispatch plumbing so `WindDomain.compute(...)` now consumes the canonical wind-metric registry directly, removing boundary wrapper helpers while preserving grouped spec behavior, CF reuse semantics, and metric outputs
 - Narrowed the remaining internal wind-compute helper chain by folding tiny single-use validation wrappers into one compute-kwarg validator, preserving grouped spec behavior, CF reuse, timebase injection, and metric outputs
-- Simplified internal result persistence and materialization plumbing by sharing atlas I/O evaluation policy and validation requirement helpers while preserving result-store semantics, export behavior, and active-store alignment behavior
+- Simplified internal result persistence and materialization plumbing by sharing atlas I/O evaluation policy, centralizing result-store attr preparation, and using one canonical turbine-alignment representation inside the results slice while preserving result-store semantics, export behavior, and active-store alignment behavior
 
 ### Removed
 - Developer benchmark helpers are no longer shipped in the runtime package as `cleo.bench`; maintainer benchmarking now lives under `tools/bench.py`

@@ -174,6 +174,133 @@ def _evaluate_for_io(
     return dask_compute(obj, backend=backend, num_workers=workers)  # type: ignore[call-overload]
 
 
+@dataclass(frozen=True)
+class _ActiveWindTurbineAlignment:
+    """Canonical turbine-alignment state for active wind-store materialization.
+
+    :param turbine_ids: Ordered turbine IDs from ``cleo_turbines_json``.
+    :type turbine_ids: tuple[str, ...]
+    :param store_labels: Canonical turbine coordinate labels used by the active
+        wind store.
+    :type store_labels: tuple[typing.Any, ...]
+    :param index_by_id: Mapping from turbine ID to its canonical store index.
+    :type index_by_id: dict[str, int]
+    """
+
+    turbine_ids: tuple[str, ...]
+    store_labels: tuple[Any, ...]
+    index_by_id: dict[str, int]
+
+    @classmethod
+    def from_store(cls, existing_ds: xr.Dataset) -> "_ActiveWindTurbineAlignment":
+        """Build turbine-alignment state from an active wind store.
+
+        :param existing_ds: Active wind-store dataset used as schema source.
+        :type existing_ds: xarray.Dataset
+        :returns: Canonical alignment state for this store.
+        :rtype: _ActiveWindTurbineAlignment
+        :raises RuntimeError: If the store lacks ``cleo_turbines_json``.
+        """
+        meta_json = existing_ds.attrs.get("cleo_turbines_json")
+        if not meta_json:
+            raise RuntimeError("Wind store missing cleo_turbines_json attr; cannot align turbine coordinates.")
+
+        turbine_ids = turbine_ids_from_json(meta_json)
+        if "turbine" in existing_ds.coords and existing_ds.coords["turbine"].dims == ("turbine",):
+            store_labels = tuple(existing_ds.coords["turbine"].values.tolist())
+        else:
+            store_labels = tuple(range(len(turbine_ids)))
+
+        return cls(
+            turbine_ids=turbine_ids,
+            store_labels=store_labels,
+            index_by_id={tid: i for i, tid in enumerate(turbine_ids)},
+        )
+
+    def labels_for_coord(self, coord: xr.DataArray) -> tuple[Any, ...]:
+        """Resolve computed turbine coord values onto canonical store labels.
+
+        :param coord: Computed turbine coordinate.
+        :type coord: xarray.DataArray
+        :returns: Canonical turbine labels matching the active wind store.
+        :rtype: tuple[typing.Any, ...]
+        :raises ValueError: If a string turbine ID is unknown.
+        """
+        raw_values = tuple(coord.values.tolist())
+        if coord.dtype.kind in ("U", "O", "S"):
+            try:
+                indices = tuple(self.index_by_id[tid] for tid in raw_values)
+            except KeyError as exc:
+                raise ValueError(f"Computed metric includes unknown turbine id {exc.args[0]!r}.") from exc
+        else:
+            indices = raw_values
+        return tuple(self.store_labels[i] for i in indices)
+
+
+def _build_result_store_attrs(
+    atlas,
+    *,
+    run_id: str,
+    metric_name: str,
+    params: dict | None,
+) -> dict[str, Any]:
+    """Build root attrs for a persisted result store.
+
+    :param atlas: Atlas owning the result store.
+    :type atlas: typing.Any
+    :param run_id: Result run identifier.
+    :type run_id: str
+    :param metric_name: Metric name persisted in the store.
+    :type metric_name: str
+    :param params: Optional parameter payload for ``params_json``.
+    :type params: dict | None
+    :returns: Root attrs to write to the result store.
+    :rtype: dict[str, typing.Any]
+    """
+    attrs: dict[str, Any] = {
+        "store_state": "complete",
+        "run_id": run_id,
+        "metric_name": metric_name,
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    if params is not None:
+        attrs["params_json"] = json.dumps(params, sort_keys=True, separators=(",", ":"))
+
+    try:
+        if getattr(atlas, "_canonical_ready", False):
+            wind = atlas.wind_zarr
+            land = atlas.landscape_zarr
+            attrs["wind_grid_id"] = wind.attrs.get("grid_id", "")
+            attrs["landscape_grid_id"] = land.attrs.get("grid_id", "")
+    except (AttributeError, OSError, ValueError, TypeError, KeyError):
+        logger.debug(
+            "Failed to attach canonical provenance attrs to persisted result store.",
+            extra={"run_id": run_id, "metric_name": metric_name},
+            exc_info=True,
+        )
+
+    return attrs
+
+
+def _align_turbine_axis(
+    da: xr.DataArray,
+    *,
+    alignment: _ActiveWindTurbineAlignment,
+) -> xr.DataArray:
+    """Align a computed turbine axis onto the active wind-store schema.
+
+    :param da: Computed metric array containing a ``turbine`` dimension.
+    :type da: xarray.DataArray
+    :param alignment: Canonical turbine-alignment state for the target store.
+    :type alignment: _ActiveWindTurbineAlignment
+    :returns: Turbine-aligned array reindexed to the full active-store axis.
+    :rtype: xarray.DataArray
+    """
+    aligned_labels = alignment.labels_for_coord(da.coords["turbine"])
+    out = da.assign_coords(turbine=list(aligned_labels))
+    return out.reindex(turbine=list(alignment.store_labels), fill_value=np.nan)
+
+
 def result_run_dir_path(*, results_root: Path, run_id: str) -> Path:
     """Return validated run directory path under ``results_root``."""
     run_id_n = validate_result_path_token(run_id, field="run_id")
@@ -307,25 +434,13 @@ def persist_result(
         ds.to_zarr(tmp, mode="w", consolidated=False)
 
         g = zarr.open_group(tmp, mode="a")
-        g.attrs["store_state"] = "complete"
-        g.attrs["run_id"] = run_id
-        g.attrs["metric_name"] = metric_name
-        g.attrs["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        if params is not None:
-            g.attrs["params_json"] = json.dumps(params, sort_keys=True, separators=(",", ":"))
-
-        try:
-            if getattr(atlas, "_canonical_ready", False):
-                w = atlas.wind_zarr
-                land = atlas.landscape_zarr
-                g.attrs["wind_grid_id"] = w.attrs.get("grid_id", "")
-                g.attrs["landscape_grid_id"] = land.attrs.get("grid_id", "")
-        except (AttributeError, OSError, ValueError, TypeError, KeyError):
-            logger.debug(
-                "Failed to attach canonical provenance attrs to persisted result store.",
-                extra={"run_id": run_id, "metric_name": metric_name},
-                exc_info=True,
-            )
+        for key, value in _build_result_store_attrs(
+            atlas,
+            run_id=run_id,
+            metric_name=metric_name,
+            params=params,
+        ).items():
+            g.attrs[key] = value
 
     return store_path
 
@@ -358,29 +473,7 @@ def normalize_metric_for_active_wind_store(
     out = da.copy()
 
     if "turbine" in out.dims:
-        meta_json = existing_ds.attrs.get("cleo_turbines_json")
-        if not meta_json:
-            raise RuntimeError("Wind store missing cleo_turbines_json attr; cannot align turbine coordinates.")
-        turbine_ids = turbine_ids_from_json(meta_json)
-        turbine_id_to_idx = {tid: i for i, tid in enumerate(turbine_ids)}
-        full_turbine_indices = list(range(len(turbine_ids)))
-        if "turbine" in existing_ds.coords and existing_ds.coords["turbine"].dims == ("turbine",):
-            full_turbine_labels = existing_ds.coords["turbine"].values.tolist()
-        else:
-            full_turbine_labels = full_turbine_indices
-
-        if out.coords["turbine"].dtype.kind in ("U", "O", "S"):
-            computed_ids = out.coords["turbine"].values.tolist()
-            try:
-                computed_indices = [turbine_id_to_idx[tid] for tid in computed_ids]
-            except KeyError as exc:
-                raise ValueError(f"Computed metric includes unknown turbine id {exc.args[0]!r}.") from exc
-        else:
-            computed_indices = out.coords["turbine"].values.tolist()
-
-        computed_labels = [full_turbine_labels[i] for i in computed_indices]
-        out = out.assign_coords(turbine=computed_labels)
-        out = out.reindex(turbine=full_turbine_labels, fill_value=np.nan)
+        out = _align_turbine_axis(out, alignment=_ActiveWindTurbineAlignment.from_store(existing_ds))
 
     if target_name == "mean_wind_speed" and "height" in out.dims:
         if "height" not in out.dims:

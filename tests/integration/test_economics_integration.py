@@ -80,14 +80,19 @@ def _create_all_required_gwa_files(atlas_path: Path, country: str = "AUT") -> No
     _create_gwa_raster(elev_path, fill_value=500.0, add_nodata_region=False)
 
 
-def _copy_turbine_yaml(atlas_path: Path, turbine_name: str = "Enercon.E40.500") -> None:
-    """Copy a turbine YAML from package resources."""
+def _copy_turbine_yaml(
+    atlas_path: Path,
+    turbine_name: str | list[str] | tuple[str, ...] = "Enercon.E40.500",
+) -> None:
+    """Copy one or more turbine YAML files from package resources."""
     resources_src = Path(cleo.__file__).resolve().parent / "resources"
     resources_dest = atlas_path / "resources"
     resources_dest.mkdir(parents=True, exist_ok=True)
-    src = resources_src / f"{turbine_name}.yml"
-    if src.exists():
-        shutil.copy(src, resources_dest / f"{turbine_name}.yml")
+    turbine_names = [turbine_name] if isinstance(turbine_name, str) else list(turbine_name)
+    for name in turbine_names:
+        src = resources_src / f"{name}.yml"
+        if src.exists():
+            shutil.copy(src, resources_dest / f"{name}.yml")
 
 
 class TestEconomicsIntegration:
@@ -453,6 +458,23 @@ class TestLcoeFamilyMetricsIntegration:
             "om_variable_eur_per_kwh": 0.008,
         }
 
+    @pytest.fixture
+    def multi_turbine_materialized_atlas(self, tmp_path: Path) -> Atlas:
+        """Create a chunked atlas with multiple turbines for dask selection tests."""
+        _create_all_required_gwa_files(tmp_path)
+        turbine_ids = ["Enercon.E40.500", "Vestas.V100.2000"]
+        _copy_turbine_yaml(tmp_path, turbine_ids)
+
+        atlas = Atlas(
+            tmp_path,
+            country="AUT",
+            crs="epsg:3035",
+            chunk_policy={"y": 64, "x": 64},
+        )
+        atlas.configure_turbines(turbine_ids)
+        atlas.build()
+        return atlas
+
     def test_min_lcoe_turbine_integration(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """min_lcoe_turbine computes successfully end-to-end."""
         atlas = materialized_atlas
@@ -505,6 +527,39 @@ class TestLcoeFamilyMetricsIntegration:
         valid = result.values[np.isfinite(result.values)]
         assert len(valid) > 0
         assert np.all(valid > 0)
+
+    def test_optimal_metrics_stay_lazy_with_chunked_multi_turbine_selection(
+        self,
+        multi_turbine_materialized_atlas: Atlas,
+        full_economics: dict,
+    ) -> None:
+        """optimal metrics stay dask-backed for chunked multi-turbine selection."""
+        dask_array = pytest.importorskip("dask.array")
+        atlas = multi_turbine_materialized_atlas
+        turbine_ids = list(atlas.wind.turbines)
+
+        power = atlas.wind.compute(
+            "optimal_power",
+            turbines=turbine_ids,
+            economics=full_economics,
+        ).data
+        energy = atlas.wind.compute(
+            "optimal_energy",
+            turbines=turbine_ids,
+            economics=full_economics,
+        ).data
+
+        assert len(turbine_ids) == 2
+        assert isinstance(power.data, dask_array.Array)
+        assert isinstance(energy.data, dask_array.Array)
+
+        power_eval = power.compute()
+        energy_eval = energy.compute()
+
+        assert power_eval.attrs.get("units") == "kW"
+        assert energy_eval.attrs.get("units") == "GWh/a"
+        assert np.isfinite(power_eval.values).any()
+        assert np.isfinite(energy_eval.values).any()
 
     def test_lcoe_and_min_lcoe_turbine_grouped_spec_api(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """lcoe and min_lcoe_turbine use the grouped spec API."""

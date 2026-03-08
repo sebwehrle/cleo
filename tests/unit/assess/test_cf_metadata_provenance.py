@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from cleo.assess import capacity_factors_v1
-from cleo.economics import lcoe_v1_from_capacity_factors
+from cleo.assess import capacity_factors
+from cleo.economics import lcoe_from_capacity_factors
 
 
 class TestCFMetadataProvenance:
@@ -20,7 +20,7 @@ class TestCFMetadataProvenance:
 
     @pytest.fixture
     def minimal_cf_inputs(self):
-        """Create minimal inputs for capacity_factors_v1."""
+        """Create minimal inputs for capacity_factors."""
         y = np.array([0.0, 1.0], dtype=np.float64)
         x = np.array([0.0, 1.0], dtype=np.float64)
         # Height range must cover rotor span (hub_height +/- rotor_diameter/2)
@@ -61,7 +61,7 @@ class TestCFMetadataProvenance:
 
     def test_cf_has_loss_factor_attr(self, minimal_cf_inputs):
         """CF output carries cleo:loss_factor attr."""
-        result = capacity_factors_v1(
+        result = capacity_factors(
             **minimal_cf_inputs,
             method="rotor_node_average",
             loss_factor=0.95,
@@ -72,7 +72,7 @@ class TestCFMetadataProvenance:
 
     def test_cf_has_loss_factor_default(self, minimal_cf_inputs):
         """CF output carries cleo:loss_factor=1.0 when not specified."""
-        result = capacity_factors_v1(
+        result = capacity_factors(
             **minimal_cf_inputs,
             method="rotor_node_average",
         )
@@ -82,7 +82,7 @@ class TestCFMetadataProvenance:
 
     def test_cf_has_turbines_json_attr(self, minimal_cf_inputs):
         """CF output carries cleo:turbines_json attr."""
-        result = capacity_factors_v1(
+        result = capacity_factors(
             **minimal_cf_inputs,
             method="rotor_node_average",
         )
@@ -93,7 +93,7 @@ class TestCFMetadataProvenance:
 
     def test_cf_algo_version_is_4(self, minimal_cf_inputs):
         """CF output algo_version is 4 (v4 stores method/interpolation metadata)."""
-        result = capacity_factors_v1(
+        result = capacity_factors(
             **minimal_cf_inputs,
             method="rotor_node_average",
         )
@@ -122,7 +122,7 @@ class TestLCOECFSpecMetadata:
         cf.attrs["cleo:rews_n"] = 12
         cf.attrs["cleo:loss_factor"] = 0.95
 
-        result = lcoe_v1_from_capacity_factors(
+        result = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=np.array([3000.0]),
@@ -157,7 +157,7 @@ class TestLCOECFSpecMetadata:
         cf.attrs["cleo:cf_method"] = "hub_height_weibull"
         cf.attrs["cleo:interpolation"] = "ak_logz"
 
-        result = lcoe_v1_from_capacity_factors(
+        result = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=np.array([3000.0]),

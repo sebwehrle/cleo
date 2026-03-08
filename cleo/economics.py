@@ -120,7 +120,7 @@ def _turbine_ids_json_from_lcoe(lcoe: xr.DataArray) -> str:
     return json.dumps([], ensure_ascii=True)
 
 
-def lcoe_v1_from_capacity_factors(
+def lcoe_from_capacity_factors(
     *,
     cf: xr.DataArray,
     turbine_ids: tuple[str, ...],
@@ -222,7 +222,7 @@ def lcoe_v1_from_capacity_factors(
         "loss_factor": float(cf.attrs.get("cleo:loss_factor", 1.0)),
     }
     out.attrs["cleo:cf_spec_json"] = _stable_json(cf_spec_payload)
-    out.attrs["cleo:algo"] = "lcoe_v1"
+    out.attrs["cleo:algo"] = "lcoe"
     out.attrs["cleo:algo_version"] = "3"  # v3: added cf_spec_json
     return out
 

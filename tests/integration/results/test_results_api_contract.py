@@ -1,4 +1,4 @@
-"""Integration tests for Results API v1.
+"""Integration tests for the results API.
 
 Tests are offline-only: no network calls, uses local test fixtures.
 

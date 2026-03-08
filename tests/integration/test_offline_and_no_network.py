@@ -80,7 +80,7 @@ def test_atlas_build_deferred(tmp_path, monkeypatch):
 
     atlas = Atlas(tmp_path, "AUT", "EPSG:3035")
 
-    # v1 API: wind/landscape return domain objects without error
+    # Public API: wind/landscape return domain objects without error
     # But accessing .data raises FileNotFoundError since store doesn't exist
     assert atlas.wind is not None  # WindDomain object
     assert atlas.landscape is not None  # LandscapeDomain object

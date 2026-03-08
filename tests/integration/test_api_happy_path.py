@@ -1,4 +1,4 @@
-"""End-to-end integration test for v1 public API workflow.
+"""End-to-end integration test for the public API workflow.
 
 Tests the full happy path:
 Atlas.build → wind/landscape data access → turbine selection →
@@ -99,9 +99,9 @@ def offline_atlas(tmp_path: Path) -> Atlas:
     This fixture sets up everything needed for the happy path test:
     - All GWA rasters (Weibull A/k, air density at all heights)
     - Elevation raster (to avoid CopDEM network calls)
-    - All turbine YAMLs from package resources (default discovery per v1.3 contract)
+    - All turbine YAMLs from package resources (default discovery per contract)
 
-    Contract v1.3: NO configure_turbines() call - exercises default discovery path.
+    No configure_turbines() call: exercises the default discovery path.
     All turbine YAMLs in resources/ should be auto-discovered during materialize().
 
     Returns:
@@ -117,7 +117,7 @@ def offline_atlas(tmp_path: Path) -> Atlas:
     _create_elevation_raster(elev_path)
 
     # Create Atlas - this will deploy all packaged resources including turbine YAMLs
-    # NO configure_turbines() call - testing default discovery path (contract v1.3)
+    # No configure_turbines() call: test the default discovery path.
     # All turbine YAMLs in resources/ will be auto-discovered during materialize()
     atlas = Atlas(tmp_path, country, "epsg:3035")
 
@@ -149,8 +149,8 @@ def _assert_no_string_dtype_in_zarr(store_path: Path) -> None:
         )
 
 
-def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
-    """End-to-end test of the v1 public API workflow.
+def test_api_happy_path(offline_atlas: Atlas, tmp_path: Path) -> None:
+    """End-to-end test of the public API workflow.
 
     Verifies:
     - materialize() creates canonical stores
@@ -172,7 +172,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     for method in ("add", "rasterize", "clear_staged"):
         assert hasattr(atlas.landscape, method), f"LandscapeDomain missing public method: {method}"
 
-    # === Materialize (canonical v1 API, offline-safe) ===
+    # === Materialize (canonical API, offline-safe) ===
     atlas.build_canonical()
 
     # === Zarr v3 dtype invariant guard: no string/object dtypes ===
@@ -206,7 +206,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
         f"Fixture sanity: {weibull_A_var} at height=100 must have valid data on valid_mask"
     )
 
-    # === Guard 3: Default turbine discovery (contract v1.3) ===
+    # === Guard 3: Default turbine discovery ===
     # Verify that without configure_turbines(), default discovery finds ALL turbines in resources/
     # Per contract A3: "If not configured, all available turbines are materialized."
     assert atlas.turbines_configured is None, "Fixture should NOT call configure_turbines() - testing default discovery"
@@ -220,7 +220,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
     )
     assert len(actual_turbines) > 0, "At least one turbine YAML must exist in resources/"
 
-    # === Turbine selection (persistent, contract v1) ===
+    # === Turbine selection (persistent contract) ===
     tids = atlas.wind.turbines
     assert len(tids) >= 1, "Fixture must have at least one turbine"
     tid = tids[0]
@@ -244,7 +244,7 @@ def test_api_happy_path_v1(offline_atlas: Atlas, tmp_path: Path) -> None:
         "capacity_factors should have at least one valid (non-NaN) value on valid_mask"
     )
 
-    # === Contract v1: compute().materialize() pattern ===
+    # === Canonical compute().materialize() pattern ===
     # Test the canonical examples: select + compute + materialize writes to wind.zarr
     atlas.wind.clear_selection()
     assert atlas.wind.selected_turbines is None, "clear_selection() must clear"

@@ -9,9 +9,9 @@ import pytest
 import xarray as xr
 
 from cleo.assess import (
-    capacity_factors_v1,
+    capacity_factors,
     mean_wind_speed_from_weibull,
-    rews_mps_v1,
+    rews_mps,
 )
 
 
@@ -67,7 +67,7 @@ class TestCapacityFactorsUnitsAttr:
         """capacity_factors output has 'units' attr."""
         A, k = weibull_stack
 
-        cf = capacity_factors_v1(
+        cf = capacity_factors(
             A_stack=A,
             k_stack=k,
             u_grid=turbine_params["u_grid"],
@@ -91,7 +91,7 @@ class TestCapacityFactorsUnitsAttr:
             "hub_height_weibull_rews_scaled",
             "rotor_moment_matched_weibull",
         ]:
-            cf = capacity_factors_v1(
+            cf = capacity_factors(
                 A_stack=A,
                 k_stack=k,
                 u_grid=turbine_params["u_grid"],
@@ -113,7 +113,7 @@ class TestRewsMpsUnitsAttr:
         """wind_speed output has 'units' attr."""
         A, k = weibull_stack
 
-        rews = rews_mps_v1(
+        rews = rews_mps(
             A_stack=A,
             k_stack=k,
             turbine_ids=turbine_params["turbine_ids"],

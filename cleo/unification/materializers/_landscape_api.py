@@ -56,7 +56,7 @@ def register_landscape_source(
 ) -> bool:
     """Register a new landscape source in __manifest__/sources."""
     if kind != "raster":
-        raise ValueError(f"Only kind='raster' supported in v1; got {kind!r}")
+        raise ValueError(f"Only kind='raster' is currently supported; got {kind!r}")
     params = params or {}
     return _register_landscape_source_entry(
         atlas=atlas,
@@ -547,7 +547,7 @@ def _update_inputs_id(
         ("mask_policy", "nan+valid_mask_in_landscape"),
         ("area", _stable_json(getattr(atlas, "area", None))),
         ("chunk_policy", _stable_json(unifier.chunk_policy)),
-        ("incremental_add", "landscape_add_v1"),
+        ("incremental_add", "landscape_add"),
         (f"layer:{variable_name}:source_id", source_ctx["source_id"]),
         (f"layer:{variable_name}:fingerprint", source_ctx["stored_fingerprint"]),
         (f"layer:{variable_name}:params_json", source_ctx["params_json"]),

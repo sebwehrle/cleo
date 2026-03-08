@@ -16,7 +16,7 @@ from cleo.assess import (
     _integrate_cf_no_density,
     _momentmatch_cf_and_rews_for_turbine,
     _rews_moment_factor,
-    capacity_factors_v1,
+    capacity_factors,
     integrate_cf_from_inflow,
     interpolate_weibull_params_to_height,
     weibull_probability_density,
@@ -283,7 +283,7 @@ def test_inflow_based_cf_preserves_algo_version_attr() -> None:
     A, k, rho = _make_stacks()
     u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
     power_curves = np.array([np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0)], dtype=np.float64)
-    out = capacity_factors_v1(
+    out = capacity_factors(
         A_stack=A,
         k_stack=k,
         u_grid=u_grid,
@@ -304,7 +304,7 @@ def test_rotor_node_average_explicit_ak_logz_records_interpolation_attr() -> Non
     A, k, _rho = _make_stacks()
     u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
     power_curves = np.array([np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0)], dtype=np.float64)
-    out = capacity_factors_v1(
+    out = capacity_factors(
         A_stack=A,
         k_stack=k,
         u_grid=u_grid,
@@ -325,7 +325,7 @@ def test_cf_reuse_check_works_with_inflow_based_cf() -> None:
     A, k, rho = _make_stacks()
     u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
     power_curves = np.array([np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0)], dtype=np.float64)
-    out = capacity_factors_v1(
+    out = capacity_factors(
         A_stack=A,
         k_stack=k,
         u_grid=u_grid,

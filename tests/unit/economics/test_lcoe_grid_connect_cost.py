@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from cleo.economics import lcoe_v1_from_capacity_factors
+from cleo.economics import lcoe_from_capacity_factors
 
 
 def _make_cf(turbine_ids: tuple[str, ...]) -> xr.DataArray:
@@ -42,7 +42,7 @@ class TestLcoeGridConnectCostParameter:
         power_kw = np.array([1000.0])
         overnight_cost = np.array([1000.0])
 
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -80,12 +80,12 @@ class TestLcoeGridConnectCostParameter:
             "hours_per_year": 8766.0,
         }
 
-        lcoe_with_grid = lcoe_v1_from_capacity_factors(
+        lcoe_with_grid = lcoe_from_capacity_factors(
             **common_kwargs,
             grid_connect_cost_eur_per_kw=50.0,
         )
 
-        lcoe_without_grid = lcoe_v1_from_capacity_factors(
+        lcoe_without_grid = lcoe_from_capacity_factors(
             **common_kwargs,
             grid_connect_cost_eur_per_kw=0.0,
         )
@@ -120,12 +120,12 @@ class TestLcoeGridConnectCostParameter:
             "hours_per_year": 8766.0,
         }
 
-        lcoe_with_grid = lcoe_v1_from_capacity_factors(
+        lcoe_with_grid = lcoe_from_capacity_factors(
             **common_kwargs,
             grid_connect_cost_eur_per_kw=grid_rate,
         )
 
-        lcoe_without_grid = lcoe_v1_from_capacity_factors(
+        lcoe_without_grid = lcoe_from_capacity_factors(
             **common_kwargs,
             grid_connect_cost_eur_per_kw=0.0,
         )
@@ -161,7 +161,7 @@ class TestLcoeGridConnectCostParameter:
         power_kw = np.array([1000.0])
         overnight_cost = np.array([1000.0])
 
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-from cleo.assess import capacity_factors_v1, rews_mps_v1
+from cleo.assess import capacity_factors, rews_mps
 
 
 def _make_stacks() -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
@@ -37,7 +37,7 @@ def test_capacity_factors_rotor_node_average_runs() -> None:
     A, k, rho = _make_stacks()
     u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
     power_curves = np.array([np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0)], dtype=np.float64)
-    out = capacity_factors_v1(
+    out = capacity_factors(
         A_stack=A,
         k_stack=k,
         u_grid=u_grid,
@@ -55,9 +55,9 @@ def test_capacity_factors_rotor_node_average_runs() -> None:
     assert np.all(np.isfinite(out.values))
 
 
-def test_rews_mps_v1_runs_and_returns_units() -> None:
+def test_rews_mps_runs_and_returns_units() -> None:
     A, k, rho = _make_stacks()
-    out = rews_mps_v1(
+    out = rews_mps(
         A_stack=A,
         k_stack=k,
         turbine_ids=("T1",),
@@ -76,7 +76,7 @@ def test_capacity_factors_rotor_moment_matched_weibull_runs() -> None:
     A, k, rho = _make_stacks()
     u_grid = np.linspace(0.0, 25.0, 26, dtype=np.float64)
     power_curves = np.array([np.clip((u_grid - 3.0) / 10.0, 0.0, 1.0)], dtype=np.float64)
-    out = capacity_factors_v1(
+    out = capacity_factors(
         A_stack=A,
         k_stack=k,
         u_grid=u_grid,
@@ -110,7 +110,7 @@ def test_capacity_factors_momentmatch_vs_direct_close_on_constant_profile() -> N
         air_density=True,
         rews_n=12,
     )
-    direct = capacity_factors_v1(method="rotor_node_average", **kwargs)
-    mm = capacity_factors_v1(method="rotor_moment_matched_weibull", **kwargs)
+    direct = capacity_factors(method="rotor_node_average", **kwargs)
+    mm = capacity_factors(method="rotor_moment_matched_weibull", **kwargs)
     diff = np.abs((direct - mm).values)
     assert float(np.nanmax(diff)) <= 0.02

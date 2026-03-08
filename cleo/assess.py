@@ -949,7 +949,7 @@ def integrate_cf_from_inflow(
     return cf_acc.rename("capacity_factor")
 
 
-def capacity_factors_v1(
+def capacity_factors(
     *,
     A_stack: xr.DataArray,
     k_stack: xr.DataArray,
@@ -969,7 +969,7 @@ def capacity_factors_v1(
     """
     Compute capacity factors for multiple turbines (pure numerics, turbine-loop).
 
-    This is the v1 capacity factor algorithm with support for:
+    This capacity-factor algorithm supports:
     - rotor node average (default)
     - rotor moment-matched Weibull
     - hub-height Weibull
@@ -1077,7 +1077,7 @@ def capacity_factors_v1(
     out.attrs["units"] = "1"  # dimensionless fraction
     out.attrs["cleo:cf_method"] = method
     out.attrs["cleo:interpolation"] = resolved_interpolation
-    out.attrs["cleo:algo"] = "capacity_factors_v1"
+    out.attrs["cleo:algo"] = "capacity_factors"
     out.attrs["cleo:algo_version"] = "4"  # v4: renamed public method metadata and stored interpolation
     out.attrs["cleo:rews_n"] = int(rews_n)
     out.attrs["cleo:air_density"] = int(air_density)  # int for netCDF4 compat
@@ -1087,7 +1087,7 @@ def capacity_factors_v1(
     return out
 
 
-def rews_mps_v1(
+def rews_mps(
     *,
     A_stack: xr.DataArray,
     k_stack: xr.DataArray,
@@ -1157,7 +1157,7 @@ def rews_mps_v1(
     out = xr.concat(rews_list, dim="turbine", coords="different", compat="equals")
     out = out.rename("rews_mps")
     out.attrs["units"] = "m/s"
-    out.attrs["cleo:algo"] = "rews_mps_v1"
+    out.attrs["cleo:algo"] = "rews_mps"
     out.attrs["cleo:algo_version"] = "1"
     out.attrs["cleo:rews_n"] = int(rews_n)
     out.attrs["cleo:air_density"] = int(air_density)
@@ -1381,7 +1381,7 @@ def interpolate_weibull_params_to_height(
     :param weibull_A: DataArray with dim "height" containing A parameter at multiple heights
     :param weibull_k: DataArray with dim "height" containing k parameter at multiple heights
     :param target_height: Target height for interpolation (e.g., turbine hub height)
-    :param method: Interpolation method. Only "log_height_linear" supported in v1.
+    :param method: Interpolation method. Only "log_height_linear" is currently supported.
     :return: Tuple (A_hub, k_hub) as DataArrays without "height" dim, with coord hub_height=target_height
     :raises ValueError: If method is not supported, or if target_height is outside available height range
     """

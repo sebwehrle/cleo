@@ -627,7 +627,7 @@ Landscape materialization must source elevation deterministically using:
 The repository must provide a contract check that:
 - validates store schemas and required variables,
 - validates identity/manifest invariants,
-- exercises the v1 happy-path workflow end-to-end offline.
+- exercises the canonical happy-path workflow end-to-end offline.
 
 ---
 

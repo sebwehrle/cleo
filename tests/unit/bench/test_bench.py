@@ -412,21 +412,21 @@ def test_evaluate_cf_mode_acceptance_insufficient_sample_skip_policy():
 def test_build_benchmark_governance_record_is_deterministic():
     payload = dict(a=1, b=[2, 3])
     rec1 = build_benchmark_governance_record(
-        benchmark_dataset_id="ds_v1",
+        benchmark_dataset_id="ds_base",
         dataset_payload=payload,
-        benchmark_region_mask_id="mask_v1",
+        benchmark_region_mask_id="mask_base",
         region_mask_payload={"mask": [1, 0, 1]},
-        benchmark_turbine_set_id="ts_v1",
+        benchmark_turbine_set_id="ts_base",
         turbine_set_payload=["T1", "T2"],
         policy_snapshot={"cf_mode": "rotor_node_average"},
         benchmark_random_seed=None,
     )
     rec2 = build_benchmark_governance_record(
-        benchmark_dataset_id="ds_v1",
+        benchmark_dataset_id="ds_base",
         dataset_payload=payload,
-        benchmark_region_mask_id="mask_v1",
+        benchmark_region_mask_id="mask_base",
         region_mask_payload={"mask": [1, 0, 1]},
-        benchmark_turbine_set_id="ts_v1",
+        benchmark_turbine_set_id="ts_base",
         turbine_set_payload=["T1", "T2"],
         policy_snapshot={"cf_mode": "rotor_node_average"},
         benchmark_random_seed=None,

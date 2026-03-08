@@ -81,7 +81,7 @@ How it is computed (common pipeline):
 1. Resolve selected turbines and extract turbine metadata from store attrs and turbine variables:
    hub heights, power curves, rotor diameters.
 2. Read Weibull parameter stacks (`A(height,y,x)`, `k(height,y,x)`) and wind-speed grid.
-3. Run turbine-by-turbine CF numerics (`capacity_factors_v1`) with the selected method.
+3. Run turbine-by-turbine CF numerics (`capacity_factors`) with the selected method.
 4. Apply `loss_factor` during CF integration.
 5. Apply `valid_mask` so output is defined only on valid cells.
 

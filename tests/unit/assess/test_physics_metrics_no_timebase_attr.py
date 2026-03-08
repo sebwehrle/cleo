@@ -13,9 +13,9 @@ import numpy as np
 import xarray as xr
 
 from cleo.assess import (
-    capacity_factors_v1,
+    capacity_factors,
     mean_wind_speed_from_weibull,
-    rews_mps_v1,
+    rews_mps,
 )
 
 
@@ -55,10 +55,10 @@ def _make_minimal_inputs():
 
 
 def test_capacity_factors_has_no_hours_per_year_attr():
-    """capacity_factors_v1 must NOT set cleo:hours_per_year attr."""
+    """capacity_factors must NOT set cleo:hours_per_year attr."""
     inputs = _make_minimal_inputs()
 
-    result = capacity_factors_v1(
+    result = capacity_factors(
         A_stack=inputs["A_stack"],
         k_stack=inputs["k_stack"],
         u_grid=inputs["u_grid"],
@@ -88,11 +88,11 @@ def test_mean_wind_speed_has_no_hours_per_year_attr():
 
 
 def test_rews_mps_has_no_hours_per_year_attr():
-    """rews_mps_v1 must NOT set cleo:hours_per_year attr."""
+    """rews_mps must NOT set cleo:hours_per_year attr."""
     inputs = _make_minimal_inputs()
 
     # Use smaller rotor to stay within height stack bounds
-    result = rews_mps_v1(
+    result = rews_mps(
         A_stack=inputs["A_stack"],
         k_stack=inputs["k_stack"],
         turbine_ids=inputs["turbine_ids"],
@@ -108,7 +108,7 @@ def test_physics_metrics_have_no_timebase_related_attrs():
     """Physics metrics should have no timebase-related attrs at all."""
     inputs = _make_minimal_inputs()
 
-    cf = capacity_factors_v1(
+    cf = capacity_factors(
         A_stack=inputs["A_stack"],
         k_stack=inputs["k_stack"],
         u_grid=inputs["u_grid"],

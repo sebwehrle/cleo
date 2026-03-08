@@ -38,7 +38,7 @@ _FIXED_TURBINES = [
 ]
 _GOLDEN = {
     "wind_grid_id": "e3c31174a7256f36",
-    "wind_inputs_id": "729300d9175205a6",
+    "wind_inputs_id": "f657fcb7a043c9ee",
     "wind_subset_checksum": "d83475c443ac887100a9f7164978dabc06d0666c9093cf541d53f6388c185da0",
     "wind_template_checksum": "d83475c443ac887100a9f7164978dabc06d0666c9093cf541d53f6388c185da0",
     "land_valid_mask_checksum": "834a709ba2534ebe3ee1397fd4f7bd288b2acc1d20a08d6c862dcd99b6f04400",

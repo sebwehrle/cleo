@@ -15,7 +15,7 @@ When PV is introduced, docs should be updated in the same change set for:
 ## Naming and shape guidance
 
 - Reuse existing domain patterns (`compute(...) -> result wrapper -> materialize/persist`)
-- Avoid transitory names (`v1`, `phase2`, `new_*`, `old_*`) in canonical symbols
+- Avoid transitory names in canonical symbols
 - Keep dependency boundaries aligned with existing layer rules
 
 ## Placeholder status

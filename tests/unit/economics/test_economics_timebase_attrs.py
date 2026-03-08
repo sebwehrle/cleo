@@ -16,7 +16,7 @@ import numpy as np
 import xarray as xr
 
 from cleo.economics import (
-    lcoe_v1_from_capacity_factors,
+    lcoe_from_capacity_factors,
     min_lcoe_turbine_idx,
     optimal_power_kw,
     optimal_energy_gwh_a,
@@ -59,7 +59,7 @@ class TestTimebaseAttrsPresence:
         power_kw = np.array([3000.0, 3500.0], dtype=np.float64)
         overnight_cost = np.array([1300.0, 1400.0], dtype=np.float64)
 
-        result = lcoe_v1_from_capacity_factors(
+        result = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -75,7 +75,7 @@ class TestTimebaseAttrsPresence:
         power_kw = np.array([3000.0, 3500.0], dtype=np.float64)
         overnight_cost = np.array([1300.0, 1400.0], dtype=np.float64)
 
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -93,7 +93,7 @@ class TestTimebaseAttrsPresence:
         power_kw = np.array([3000.0, 3500.0], dtype=np.float64)
         overnight_cost = np.array([1300.0, 1400.0], dtype=np.float64)
 
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -112,7 +112,7 @@ class TestTimebaseAttrsPresence:
         overnight_cost = np.array([1300.0, 1400.0], dtype=np.float64)
         hours_per_year = 8766.0
 
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -143,7 +143,7 @@ class TestTimebaseValuesPropagate:
         params = _lcoe_params()
         params["hours_per_year"] = custom_hours
 
-        result = lcoe_v1_from_capacity_factors(
+        result = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -164,7 +164,7 @@ class TestTimebaseValuesPropagate:
         params2 = _lcoe_params()
         params2["hours_per_year"] = 8760.0
 
-        lcoe1 = lcoe_v1_from_capacity_factors(
+        lcoe1 = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -172,7 +172,7 @@ class TestTimebaseValuesPropagate:
             **params1,
         )
 
-        lcoe2 = lcoe_v1_from_capacity_factors(
+        lcoe2 = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -188,14 +188,14 @@ class TestTimebaseValuesPropagate:
 
 
 def test_lcoe_concat_has_no_futurewarning_for_coords_default_change():
-    """lcoe_v1_from_capacity_factors should not emit xarray concat coords FutureWarning."""
+    """lcoe_from_capacity_factors should not emit xarray concat coords FutureWarning."""
     cf, turbine_ids = _make_minimal_cf()
     power_kw = np.array([3000.0, 3500.0], dtype=np.float64)
     overnight_cost = np.array([1300.0, 1400.0], dtype=np.float64)
 
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        _ = lcoe_v1_from_capacity_factors(
+        _ = lcoe_from_capacity_factors(
             cf=cf,
             turbine_ids=turbine_ids,
             power_kw=power_kw,
@@ -218,7 +218,7 @@ def test_lcoe_concat_handles_aux_turbine_id_coord() -> None:
     power_kw = np.array([3000.0, 3500.0], dtype=np.float64)
     overnight_cost = np.array([1300.0, 1400.0], dtype=np.float64)
 
-    out = lcoe_v1_from_capacity_factors(
+    out = lcoe_from_capacity_factors(
         cf=cf,
         turbine_ids=turbine_ids,
         power_kw=power_kw,

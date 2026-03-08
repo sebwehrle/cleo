@@ -222,7 +222,7 @@ class Atlas:
         self._setup_logging()
         self._deploy_resources()
 
-        # v1 Domain objects (cached, lazy)
+        # Cached domain objects
         self._wind_domain: WindDomain | None = None
         self._landscape_domain: LandscapeDomain | None = None
 
@@ -780,7 +780,7 @@ class Atlas:
                     self._landscape_domain._staged_overlays.clear()
 
     # -------------------------------------------------------------------------
-    # Results API v1
+    # Results API
     # -------------------------------------------------------------------------
 
     _RUN_ID_PREFIX_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")

@@ -18,7 +18,7 @@ HASH_SCHEMA_VERSION = "v1"
 
 
 DEFAULT_VERTICAL_POLICY: dict[str, Any] = {
-    "vertical_policy_version": "mu_cv_continuous_momentmatch_v1",
+    "vertical_policy_version": "mu_cv_continuous_momentmatch",
     "compat_policy": "new_everywhere",
     "cf_mode": "direct_cf_quadrature",
     "max_query_height_m": 350.0,

@@ -9,7 +9,7 @@ import pytest
 import xarray as xr
 
 from cleo.economics import (
-    lcoe_v1_from_capacity_factors,
+    lcoe_from_capacity_factors,
     min_lcoe_turbine_idx,
     optimal_energy_gwh_a,
     optimal_power_kw,
@@ -62,7 +62,7 @@ class TestLcoeUnitsAttr:
 
     def test_lcoe_has_units_attr(self, capacity_factors, turbine_params, economics_params):
         """lcoe output has 'units' attr."""
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=capacity_factors,
             turbine_ids=turbine_params["turbine_ids"],
             power_kw=turbine_params["power_kw"],
@@ -79,7 +79,7 @@ class TestOptimalPowerUnitsAttr:
 
     def test_optimal_power_has_units_attr(self, capacity_factors, turbine_params, economics_params):
         """optimal_power output has 'units' attr."""
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=capacity_factors,
             turbine_ids=turbine_params["turbine_ids"],
             power_kw=turbine_params["power_kw"],
@@ -101,7 +101,7 @@ class TestOptimalEnergyUnitsAttr:
 
     def test_optimal_energy_has_units_attr(self, capacity_factors, turbine_params, economics_params):
         """optimal_energy output has 'units' attr."""
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=capacity_factors,
             turbine_ids=turbine_params["turbine_ids"],
             power_kw=turbine_params["power_kw"],
@@ -125,7 +125,7 @@ class TestMinLcoeTurbineNoUnitsAttr:
 
     def test_min_lcoe_turbine_no_units_attr(self, capacity_factors, turbine_params, economics_params):
         """min_lcoe_turbine output has no 'units' attr (index is dimensionless)."""
-        lcoe = lcoe_v1_from_capacity_factors(
+        lcoe = lcoe_from_capacity_factors(
             cf=capacity_factors,
             turbine_ids=turbine_params["turbine_ids"],
             power_kw=turbine_params["power_kw"],

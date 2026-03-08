@@ -6,12 +6,12 @@ import numpy as np
 import xarray as xr
 
 from cleo.assess import (
-    capacity_factors_v1,
-    rews_mps_v1,
+    capacity_factors,
+    rews_mps,
     resolve_capacity_factor_interpolation,
 )
 from cleo.economics import (
-    lcoe_v1_from_capacity_factors,
+    lcoe_from_capacity_factors,
     min_lcoe_turbine_idx,
     optimal_power_kw,
     optimal_energy_gwh_a,
@@ -533,7 +533,7 @@ def _wind_metric_capacity_factors(
     rews_n: int = 12,
 ) -> xr.DataArray:
     """
-    Orchestration for capacity_factors metric (calls assess.capacity_factors_v1).
+    Orchestration for capacity_factors metric (calls assess.capacity_factors).
 
     Args:
         wind: Canonical wind dataset (must have weibull_A, weibull_k, power_curve).
@@ -568,7 +568,7 @@ def _wind_metric_capacity_factors(
     )
 
     # Call pure numerics function
-    result = capacity_factors_v1(
+    result = capacity_factors(
         A_stack=inputs.A_stack,
         k_stack=inputs.k_stack,
         u_grid=inputs.u_grid,
@@ -629,7 +629,7 @@ def _wind_metric_rews_mps(
         require_rotor_diameter=True,
     )
 
-    out = rews_mps_v1(
+    out = rews_mps(
         A_stack=inputs.A_stack,
         k_stack=inputs.k_stack,
         turbine_ids=turbines,
@@ -710,7 +710,7 @@ def _wind_metric_lcoe(
     overnight_cost = _extract_overnight_cost_eur_per_kw(turbines_meta, turbines, wind)
 
     # Compute LCOE
-    lcoe = lcoe_v1_from_capacity_factors(
+    lcoe = lcoe_from_capacity_factors(
         cf=cf,
         turbine_ids=turbines,
         power_kw=power_kw,
@@ -898,7 +898,7 @@ def _wind_metric_optimal_energy(
     overnight_cost = _extract_overnight_cost_eur_per_kw(turbines_meta, turbines, wind)
 
     # Compute LCOE directly from CF (avoids redundant CF computation)
-    lcoe = lcoe_v1_from_capacity_factors(
+    lcoe = lcoe_from_capacity_factors(
         cf=cf,
         turbine_ids=turbines,
         power_kw=power_kw,

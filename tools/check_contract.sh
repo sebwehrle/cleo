@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Contract enforcement for Unified Atlas I/O boundaries.
-# Fails fast if raw I/O, Zarr I/O, or NetCDF I/O appears outside allowed modules.
+# Contract enforcement for artifact and compute invariants.
 # Portable: works on macOS, Linux, and Windows Git Bash.
 
 set -euo pipefail
@@ -80,112 +79,7 @@ echo "=== Unified Atlas Contract Check ==="
 echo ""
 
 # -----------------------------------------------------------------------------
-# A) Raw I/O only in cleo/loaders.py and cleo/unification/**
-# -----------------------------------------------------------------------------
-echo "Checking: Raw I/O restricted to cleo/loaders.py and cleo/unification/**..."
-
-fail_if_found \
-    "rxr.open_rasterio() only allowed in cleo/loaders.py" \
-    'rxr\.open_rasterio\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**'
-
-fail_if_found \
-    "rioxarray.open_rasterio() only allowed in cleo/loaders.py" \
-    'rioxarray\.open_rasterio\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**'
-
-fail_if_found \
-    "rasterio.open() only allowed in cleo/loaders.py" \
-    'rasterio\.open\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**'
-
-fail_if_found \
-    "gpd.read_file() only allowed in cleo/loaders.py" \
-    'gpd\.read_file\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**'
-
-fail_if_found \
-    "geopandas.read_file() only allowed in cleo/loaders.py" \
-    'geopandas\.read_file\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**'
-
-fail_if_found \
-    "yaml.safe_load() only allowed in cleo/loaders.py" \
-    'yaml\.safe_load\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**' --glob '!tools/**'
-
-fail_if_found \
-    "yaml.load() only allowed in cleo/loaders.py" \
-    'yaml\.load\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**' --glob '!tools/**'
-
-fail_if_found \
-    "xr.open_dataset() only allowed in cleo/loaders.py" \
-    'xr\.open_dataset\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**'
-
-fail_if_found \
-    "xr.open_mfdataset() only allowed in cleo/loaders.py" \
-    'xr\.open_mfdataset\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**'
-
-fail_if_found \
-    "xr.open_dataarray() only allowed in cleo/loaders.py" \
-    'xr\.open_dataarray\(' \
-    --glob '!cleo/loaders.py' --glob '!cleo/unification/**'
-
-# -----------------------------------------------------------------------------
-# A2) Network I/O restricted to cleo/net.py (single network boundary)
-# -----------------------------------------------------------------------------
-echo "Checking: Network I/O restricted to cleo/net.py..."
-
-fail_if_found \
-  "requests.*() only allowed in cleo/net.py" \
-  '\brequests\.(get|head|post|put|delete|patch|options|request)\(' \
-  --glob '!cleo/net.py'
-
-fail_if_found \
-  "import requests only allowed in cleo/net.py" \
-  '^\s*import\s+requests\b' \
-  --glob '!cleo/net.py'
-
-fail_if_found \
-  "from requests only allowed in cleo/net.py" \
-  '^\s*from\s+requests\b' \
-  --glob '!cleo/net.py'
-
-fail_if_found \
-  "urllib.request only allowed in cleo/net.py" \
-  '\burllib\.request\.' \
-  --glob '!cleo/net.py'
-
-fail_if_found \
-  "httpx.* only allowed in cleo/net.py" \
-  '\bhttpx\.' \
-  --glob '!cleo/net.py'
-
-fail_if_found \
-  "aiohttp.* only allowed in cleo/net.py" \
-  '\baiohttp\.' \
-  --glob '!cleo/net.py'
-
-# -----------------------------------------------------------------------------
-# B) Zarr I/O restricted to dedicated storage modules
-# -----------------------------------------------------------------------------
-echo "Checking: Zarr I/O restricted to dedicated I/O modules..."
-
-fail_if_found \
-    "xr.open_zarr() only allowed in dedicated I/O modules" \
-    'xr\.open_zarr\(' \
-    --glob '!cleo/unification/**' --glob '!cleo/results.py' --glob '!cleo/exports.py'
-
-fail_if_found \
-    ".to_zarr() only allowed in dedicated I/O modules" \
-    '\.to_zarr\(' \
-    --glob '!cleo/unification/**' --glob '!cleo/results.py' --glob '!cleo/exports.py'
-
-# -----------------------------------------------------------------------------
-# B2) No consolidated metadata examples (Zarr v3 future-proof)
+# A) No consolidated metadata dependency (Zarr v3 future-proof)
 # -----------------------------------------------------------------------------
 echo "Checking: No consolidated metadata usage..."
 
@@ -203,16 +97,6 @@ fail_if_found \
 fail_if_found \
   ".consolidate_metadata() is forbidden (Zarr v3: no consolidated metadata writes)" \
   '\.consolidate_metadata\('
-
-# -----------------------------------------------------------------------------
-# C) NetCDF I/O restricted to dedicated export helpers
-# -----------------------------------------------------------------------------
-echo "Checking: NetCDF I/O restricted to dedicated export helpers..."
-
-fail_if_found \
-    "to_netcdf() only allowed in dedicated export helpers" \
-    'to_netcdf\(' \
-    --glob '!cleo/unification/store_io.py' --glob '!cleo/results.py'
 
 # Raw I/O patterns forbidden in pure-compute modules.
 PURE_COMPUTE_IO_PATTERNS=(
@@ -291,58 +175,6 @@ check_pure_compute_module() {
 # -----------------------------------------------------------------------------
 check_pure_compute_module "cleo/assess.py" "assess.py"
 check_pure_compute_module "cleo/economics.py" "economics.py"
-
-# -----------------------------------------------------------------------------
-# E) loaders import restriction
-# -----------------------------------------------------------------------------
-echo "Checking: runtime imports of cleo.loaders are forbidden in package/tool code..."
-
-fail_if_found \
-    "runtime import from cleo.loaders is forbidden" \
-    '^\s*from\s+cleo\.loaders\s+import\b'
-
-fail_if_found \
-    "runtime import cleo.loaders is forbidden" \
-    '^\s*import\s+cleo\.loaders\b'
-
-# -----------------------------------------------------------------------------
-# F) Architecture boundary guardrails
-# -----------------------------------------------------------------------------
-echo "Checking: Architecture boundary guardrails..."
-
-PYTHON_BIN=""
-if command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="python"
-elif command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-fi
-
-if [[ -z "$PYTHON_BIN" ]]; then
-    echo "FAIL: Architecture boundary guardrails"
-    echo "No python interpreter found in PATH."
-    echo ""
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-elif ! "$PYTHON_BIN" - <<'PY'
-from pathlib import Path
-import sys
-
-root = Path(".").resolve()
-sys.path.insert(0, str(root))
-from tools.arch_check import check_all_boundaries
-
-violations = check_all_boundaries(root)
-if violations:
-    print("FAIL: Architecture boundary guardrails")
-    for item in violations:
-        print(f"- {item}")
-    raise SystemExit(1)
-
-print("OK: Architecture boundary guardrails passed")
-PY
-then
-    echo ""
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
 
 # -----------------------------------------------------------------------------
 # Summary

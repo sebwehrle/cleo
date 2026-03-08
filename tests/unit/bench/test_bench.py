@@ -1,11 +1,11 @@
-"""Minimal tests for cleo.bench helpers."""
+"""Minimal tests for developer benchmark helpers."""
 
 from __future__ import annotations
 
 import pandas as pd
 import pytest
 
-from cleo.bench import (
+from tools.bench import (
     build_benchmark_governance_record,
     benchmark_callable_variants,
     benchmark_case,
@@ -162,7 +162,7 @@ def test_benchmark_compare_speedup_column(monkeypatch: pytest.MonkeyPatch):
             ]
         )
 
-    monkeypatch.setattr("cleo.bench._benchmark_callable", _fake_benchmark_callable)
+    monkeypatch.setattr("tools.bench._benchmark_callable", _fake_benchmark_callable)
 
     df = benchmark_compare(
         lambda: 1,
@@ -212,7 +212,7 @@ def test_benchmark_case_context_key_collision_raises():
 
 def test_benchmark_case_sets_rss_delta_none_without_psutil(monkeypatch: pytest.MonkeyPatch):
     atlas = _Atlas()
-    monkeypatch.setattr("cleo.bench.psutil", None)
+    monkeypatch.setattr("tools.bench.psutil", None)
 
     df = benchmark_case(atlas, "wind_speed", repeats=1, warmup=0)
 
@@ -265,7 +265,7 @@ def test_benchmark_metric_variants_schema_and_speedup(monkeypatch: pytest.Monkey
             ]
         )
 
-    monkeypatch.setattr("cleo.bench.benchmark_case", _fake_benchmark_case)
+    monkeypatch.setattr("tools.bench.benchmark_case", _fake_benchmark_case)
 
     df = benchmark_metric_variants(
         atlas=object(),

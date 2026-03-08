@@ -53,7 +53,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-bench = ["psutil>=5.9"]
 docs = [
   "mkdocs>=1.6",
   "mkdocstrings[python]>=0.26",
@@ -65,6 +64,7 @@ dev = [
   "ruff==0.15.2",          # pin formatter/linter version to match CI and local pre-commit
   "detect-secrets==1.5.0", # pin secret scanner version to match CI and local maintainer checks
   "build>=1.0",            # 1.0 for PEP 517 build
+  "psutil>=5.9",           # benchmark helper memory metrics
 ]
 
 [tool.pytest.ini_options]

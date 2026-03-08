@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified height-based wind-speed evaluation onto the same internal vertical evaluator used by wind assessment methods, preserving public behavior while removing duplicated interpolation logic
 - Simplified internal wind-metric orchestration by reusing shared wind-store input resolution helpers and removing redundant internal compute parameters, with unchanged public behavior
 
+### Removed
+- Developer benchmark helpers are no longer shipped in the runtime package as `cleo.bench`; maintainer benchmarking now lives under `tools/bench.py`
+
 ### Fixed
 - Normalize test-suite formatting so Ruff format checks pass in CI
 - Pin Ruff to `0.15.2` in dev dependencies and CI so local and GitHub formatting checks use the same version

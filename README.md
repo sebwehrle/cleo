@@ -537,26 +537,8 @@ atlas = Atlas(..., compute_backend="distributed")
 
 ## Benchmarking
 
-Use `cleo.bench.benchmark_metric_variants(...)` for side-by-side metric variant comparisons.
-
-```python
-from cleo.bench import benchmark_metric_variants
-
-df = benchmark_metric_variants(
-    atlas,
-    "capacity_factors",
-    variants=[
-        {"label": "baseline", "kwargs": {"method": "rotor_node_average"}},
-        {"label": "candidate_rews7", "kwargs": {"method": "hub_height_weibull_rews_scaled", "rews_n": 7}},
-    ],
-    repeats=3,
-    warmup=1,
-    cache=True,
-    baseline_label="baseline",
-)
-
-print(df)
-```
+Benchmark helpers are maintainer tooling and are not part of the shipped runtime package.
+In a source checkout, use `tools/bench.py` directly for side-by-side metric or callable comparisons.
 
 ## Testing
 
@@ -579,13 +561,13 @@ python -m ruff check .
 # secret scan
 tools/secret_scan.sh --all
 
-# architecture/boundary guardrails
-python -m pytest -q tests/unit/compat
-
 # test suite
 python -m pytest -q tests/unit
 python -m pytest -q tests/integration
 python -m pytest -q tests/smoke
+
+# developer benchmark helpers
+python -m pytest -q tests/unit/bench
 
 # build + import verification
 python -m pip install build

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DEFAULT_CHUNK_POLICY` constant exported from `cleo.unification.store_io`
 - `__version__` attribute accessible via `cleo.__version__`
 - `CITATION.cff` for academic citation support
+- Additional packaged turbine models: `Enercon.E126.3500`, `Vestas.V136.4200`, `Vestas.V162.5600`, and `Vestas.V162.7200`
 - Smoke tests in `tests/smoke/` for import verification
 - GDAL/PROJ installation instructions in README (Ubuntu, macOS, Conda)
 - Troubleshooting section in README covering common issues (GDAL setup, CLC auth, memory, GWA downloads, chunk warnings)

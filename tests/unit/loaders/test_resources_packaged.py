@@ -10,6 +10,7 @@ EXPECTED = {
     "clc_codes.yml",
     "cost_assumptions.yml",
     "Enercon.E101.3050.yml",
+    "Enercon.E126.3500.yml",
     "Enercon.E115.3000.yml",
     "Enercon.E138.3500.yml",
     "Enercon.E160.5560.yml",
@@ -18,7 +19,10 @@ EXPECTED = {
     "Vestas.V100.1800.yml",
     "Vestas.V100.2000.yml",
     "Vestas.V112.3075.yml",
+    "Vestas.V136.4200.yml",
     "Vestas.V150.4200.yml",
+    "Vestas.V162.5600.yml",
+    "Vestas.V162.7200.yml",
 }
 
 

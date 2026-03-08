@@ -15,7 +15,7 @@ requires_geopandas()
 import geopandas as gpd
 from shapely.geometry import Polygon
 
-from cleo.unification.materializers.landscape import (
+from cleo.unification.materializers._landscape_vector import (
     _canonical_vector_source_artifact,
     _vector_semantic_hash,
 )

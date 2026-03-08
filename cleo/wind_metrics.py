@@ -160,13 +160,12 @@ def _resolve_weibull_stacks(wind: xr.Dataset) -> tuple[xr.DataArray, xr.DataArra
     :rtype: tuple[xarray.DataArray, xarray.DataArray]
     :raises ValueError: If required Weibull variables are missing or malformed.
     """
-    var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
     var_k = "weibull_k"
-    if var_A not in wind or var_k not in wind:
-        raise ValueError(f"wind store must have {var_A} and {var_k}")
-    A_stack = wind[var_A]
+    if "weibull_A" not in wind or var_k not in wind:
+        raise ValueError("wind store must have weibull_A and weibull_k")
+    A_stack = wind["weibull_A"]
     if "height" not in A_stack.dims:
-        raise ValueError(f"{var_A} must have height dimension")
+        raise ValueError("weibull_A must have height dimension")
     return A_stack, wind[var_k]
 
 
@@ -425,9 +424,8 @@ def _wind_metric_height_weibull_mean(
     interpolation: str = "auto",
 ) -> xr.DataArray:
     """Compute height-specific mean wind speed via the unified vertical evaluator."""
-    var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
     var_k = "weibull_k"
-    A = wind[var_A]
+    A = wind["weibull_A"]
     k = wind[var_k]
 
     options = _normalize_wind_speed_options(method=_WIND_SPEED_METHOD_HEIGHT, interpolation=interpolation)

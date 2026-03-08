@@ -2,7 +2,6 @@
 
 Verifies:
 - Unit metadata survives compute -> materialize -> persist -> export round-trip
-- Legacy 'unit' attr reads work during migration
 - Domain convert_units() works end-to-end
 - Conversion is dask-friendly (no eager loading regression)
 """
@@ -20,12 +19,9 @@ from rasterio.crs import CRS
 import cleo
 from cleo import Atlas
 from cleo.units import (
-    LEGACY_UNIT_ATTR_KEY,
     UNIT_ATTR_KEY,
     convert_dataarray,
     conversion_factor,
-    get_unit_attr,
-    set_unit_attr,
 )
 from cleo.unification.gwa_io import GWA_HEIGHTS
 
@@ -178,59 +174,6 @@ class TestUnitMetadataSurvivesRoundTrip:
         with xr.open_dataset(nc_path) as ds:
             assert "units" in ds["capacity_factors"].attrs
             assert ds["capacity_factors"].attrs["units"] == "1"
-
-
-class TestLegacyUnitAttrFallback:
-    """Tests for legacy 'unit' attr fallback during migration."""
-
-    def test_get_unit_attr_reads_legacy_unit(self) -> None:
-        """get_unit_attr falls back to legacy 'unit' attr."""
-        da = xr.DataArray([1.0, 2.0], dims=["x"])
-        da.attrs["unit"] = "m"  # Legacy key
-
-        result = get_unit_attr(da)
-
-        assert result == "m"
-
-    def test_get_unit_attr_prefers_canonical_units(self) -> None:
-        """get_unit_attr prefers canonical 'units' over legacy 'unit'."""
-        da = xr.DataArray([1.0, 2.0], dims=["x"])
-        da.attrs["units"] = "m"
-        da.attrs["unit"] = "m"  # Same value
-
-        result = get_unit_attr(da)
-
-        assert result == "m"
-
-    def test_get_unit_attr_raises_on_conflict(self) -> None:
-        """get_unit_attr raises when 'units' and 'unit' differ."""
-        da = xr.DataArray([1.0, 2.0], dims=["x"])
-        da.attrs["units"] = "m"
-        da.attrs["unit"] = "km"  # Conflicting
-
-        with pytest.raises(ValueError, match="Conflicting unit attrs"):
-            get_unit_attr(da)
-
-    def test_set_unit_attr_removes_legacy(self) -> None:
-        """set_unit_attr removes legacy 'unit' attr by default."""
-        da = xr.DataArray([1.0, 2.0], dims=["x"])
-        da.attrs["unit"] = "m"
-
-        result = set_unit_attr(da, "km")
-
-        assert "units" in result.attrs
-        assert result.attrs["units"] == "km"
-        assert "unit" not in result.attrs
-
-    def test_convert_dataarray_handles_legacy_input(self) -> None:
-        """convert_dataarray works with legacy 'unit' attr input."""
-        da = xr.DataArray([1.0, 2.0], dims=["x"])
-        da.attrs["unit"] = "m"  # Legacy key
-
-        result = convert_dataarray(da, "km")
-
-        assert result.attrs["units"] == "km"
-        np.testing.assert_allclose(result.values, [0.001, 0.002])
 
 
 class TestDomainConvertUnitsEndToEnd:
@@ -414,4 +357,4 @@ class TestCanonicalUnitsEnforced:
         # Should have canonical key
         assert UNIT_ATTR_KEY in result.data.attrs
         # Should NOT have legacy key
-        assert LEGACY_UNIT_ATTR_KEY not in result.data.attrs
+        assert "unit" not in result.data.attrs

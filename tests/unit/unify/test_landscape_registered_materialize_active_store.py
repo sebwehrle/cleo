@@ -9,7 +9,11 @@ import zarr
 
 from tests.helpers.optional import requires_rasterio, requires_rioxarray
 
-from cleo.unification.unifier import Unifier
+from cleo.unification.materializers._landscape_api import (
+    materialize_landscape_variable,
+    prepare_landscape_variable_data,
+    register_landscape_source,
+)
 
 rasterio = requires_rasterio()
 requires_rioxarray()
@@ -113,8 +117,7 @@ def test_registered_landscape_materialization_targets_active_region_store(tmp_pa
     source = tmp_path / "source" / "clc_region.tif"
     _write_source_raster(source)
 
-    u = Unifier(chunk_policy=atlas.chunk_policy, fingerprint_method=atlas.fingerprint_method)
-    changed = u.register_landscape_source(
+    changed = register_landscape_source(
         atlas,
         name="broad_leaved_forest",
         source_path=source,
@@ -131,11 +134,21 @@ def test_registered_landscape_materialization_targets_active_region_store(tmp_pa
     assert any(s.get("source_id") == "land:raster:broad_leaved_forest" for s in region_sources)
     assert not any(s.get("source_id") == "land:raster:broad_leaved_forest" for s in base_sources)
 
-    staged = u.prepare_landscape_variable_data(atlas, "broad_leaved_forest")
+    staged = prepare_landscape_variable_data(
+        atlas,
+        "broad_leaved_forest",
+        chunk_policy=atlas.chunk_policy,
+    )
     assert staged.name == "broad_leaved_forest"
     assert staged.dims == ("y", "x")
 
-    written = u.materialize_landscape_variable(atlas, "broad_leaved_forest", if_exists="error")
+    written = materialize_landscape_variable(
+        atlas,
+        "broad_leaved_forest",
+        chunk_policy=atlas.chunk_policy,
+        fingerprint_method=atlas.fingerprint_method,
+        if_exists="error",
+    )
     assert written is True
 
     ds_region = xr.open_zarr(active_land, consolidated=False)

@@ -1,4 +1,4 @@
-"""Phase 4 coverage tests for Unifier.compute_air_density_correction."""
+"""Coverage tests for canonical air-density correction computation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from cleo.unification.unifier import Unifier
+from cleo.unification.materializers._landscape_api import compute_air_density_correction
 
 
 def _write_canonical_stores(
@@ -44,7 +44,7 @@ def _write_canonical_stores(
 def test_compute_air_density_correction_raises_when_wind_missing(tmp_path: Path) -> None:
     atlas = SimpleNamespace(path=tmp_path)
     with pytest.raises(FileNotFoundError, match="wind.zarr not found"):
-        Unifier().compute_air_density_correction(atlas)
+        compute_air_density_correction(atlas)
 
 
 def test_compute_air_density_correction_raises_when_landscape_missing(tmp_path: Path) -> None:
@@ -60,41 +60,41 @@ def test_compute_air_density_correction_raises_when_landscape_missing(tmp_path: 
 
     atlas = SimpleNamespace(path=tmp_path)
     with pytest.raises(FileNotFoundError, match="landscape.zarr not found"):
-        Unifier().compute_air_density_correction(atlas)
+        compute_air_density_correction(atlas)
 
 
 def test_compute_air_density_correction_raises_when_store_incomplete(tmp_path: Path) -> None:
     _write_canonical_stores(tmp_path, wind_state="skeleton", land_state="complete")
     atlas = SimpleNamespace(path=tmp_path)
     with pytest.raises(RuntimeError, match="store_state='skeleton'"):
-        Unifier().compute_air_density_correction(atlas)
+        compute_air_density_correction(atlas)
 
 
 def test_compute_air_density_correction_raises_when_required_vars_missing(tmp_path: Path) -> None:
     _write_canonical_stores(tmp_path, with_weibull=False, with_elevation=True)
     atlas = SimpleNamespace(path=tmp_path)
     with pytest.raises(RuntimeError, match="missing 'weibull_A'"):
-        Unifier().compute_air_density_correction(atlas)
+        compute_air_density_correction(atlas)
 
 
 def test_compute_air_density_correction_raises_when_elevation_missing(tmp_path: Path) -> None:
     _write_canonical_stores(tmp_path, with_weibull=True, with_elevation=False)
     atlas = SimpleNamespace(path=tmp_path)
     with pytest.raises(RuntimeError, match="missing 'elevation'"):
-        Unifier().compute_air_density_correction(atlas)
+        compute_air_density_correction(atlas)
 
 
 def test_compute_air_density_correction_raises_on_grid_mismatch(tmp_path: Path) -> None:
     _write_canonical_stores(tmp_path, aligned=False)
     atlas = SimpleNamespace(path=tmp_path)
     with pytest.raises(RuntimeError, match="Elevation not aligned to wind grid"):
-        Unifier().compute_air_density_correction(atlas)
+        compute_air_density_correction(atlas)
 
 
 def test_compute_air_density_correction_success_path(tmp_path: Path) -> None:
     _write_canonical_stores(tmp_path, aligned=True)
     atlas = SimpleNamespace(path=tmp_path)
-    out = Unifier(chunk_policy={"y": 2, "x": 2}).compute_air_density_correction(atlas)
+    out = compute_air_density_correction(atlas, chunk_policy={"y": 2, "x": 2})
     assert out.name == "air_density_correction"
     assert out.dims == ("y", "x")
     assert out.shape == (2, 2)

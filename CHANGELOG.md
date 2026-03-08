@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified hub-height and rotor-aware capacity-factor families onto one policy-backed vertical evaluation framework, preserving current outputs while making the interpolation backend explicit internally
 - Unified height-based wind-speed evaluation onto the same internal vertical evaluator used by wind assessment methods, preserving public behavior while removing duplicated interpolation logic
 - Simplified internal wind-metric orchestration by reusing shared wind-store input resolution helpers and removing redundant internal compute parameters, with unchanged public behavior
+- Unit conversion now requires the canonical `units` attr, and current wind stores are treated as canonical `weibull_A` / `weibull_k` datasets without legacy alias tolerance
+- Simplified internal unification orchestration so incremental landscape registration/materialization routes directly to its owning materializer helpers while preserving Atlas workflows and canonical unification behavior
 
 ### Removed
 - Developer benchmark helpers are no longer shipped in the runtime package as `cleo.bench`; maintainer benchmarking now lives under `tools/bench.py`

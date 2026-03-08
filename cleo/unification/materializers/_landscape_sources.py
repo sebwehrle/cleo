@@ -62,7 +62,7 @@ def _register_landscape_source_entry(
     store_path = resolve_active_landscape_store_path(atlas)
     root = zarr.open_group(store_path, mode="r")
     if root.attrs.get("store_state") != "complete":
-        raise RuntimeError("landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first.")
+        raise RuntimeError("landscape.zarr is not complete; run atlas.build() first.")
 
     source_id = f"land:{kind}:{name}"
     other_kind = "vector" if kind == "raster" else "raster"

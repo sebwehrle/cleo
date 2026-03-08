@@ -50,8 +50,7 @@ def test_fetch_gwa_crs_raises_on_invalid_double_encoded_json(monkeypatch: pytest
     ],
 )
 def test_load_nuts_validates_inputs(kwargs: dict, expected: str, tmp_path) -> None:
-    parent = SimpleNamespace(path=tmp_path)
-    self = SimpleNamespace(parent=parent)
+    self = SimpleNamespace(path=tmp_path)
     with pytest.raises(ValueError, match=expected):
         L.load_nuts(self, **kwargs)
 

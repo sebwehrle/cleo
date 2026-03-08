@@ -1,4 +1,4 @@
-"""Integration tests for vector-source landscape materializer flow."""
+"""Integration tests for vector-source landscape materialization flow."""
 
 from __future__ import annotations
 
@@ -23,6 +23,11 @@ from shapely.geometry import Polygon
 
 from cleo.domains import LandscapeDomain
 from cleo.unification.gwa_io import GWA_HEIGHTS
+from cleo.unification.materializers._landscape_api import (
+    materialize_landscape_variable,
+    prepare_landscape_variable_data,
+    register_landscape_vector_source,
+)
 from cleo.unification.unifier import Unifier
 
 
@@ -38,7 +43,7 @@ def _copy_default_turbine(atlas_path: Path) -> None:
 
 
 class MockAtlas:
-    """Minimal Atlas-like object for unifier integration tests."""
+    """Minimal Atlas-like object for landscape materialization tests."""
 
     def __init__(
         self,
@@ -145,10 +150,9 @@ def test_vector_register_prepare_materialize_flow(tmp_path: Path) -> None:
     _create_elevation_raster(tmp_path)
     atlas.build_canonical()
 
-    u = Unifier(chunk_policy=atlas.chunk_policy, fingerprint_method=atlas.fingerprint_method)
     gdf = _sample_vector()
 
-    changed = u.register_landscape_vector_source(
+    changed = register_landscape_vector_source(
         atlas,
         name="overnight_stays",
         shape=gdf,
@@ -158,7 +162,11 @@ def test_vector_register_prepare_materialize_flow(tmp_path: Path) -> None:
     )
     assert changed is True
 
-    staged = u.prepare_landscape_variable_data(atlas, "overnight_stays")
+    staged = prepare_landscape_variable_data(
+        atlas,
+        "overnight_stays",
+        chunk_policy=atlas.chunk_policy,
+    )
     assert staged.name == "overnight_stays"
     assert staged.dims == ("y", "x")
     assert staged.dtype == np.float32
@@ -168,7 +176,13 @@ def test_vector_register_prepare_materialize_flow(tmp_path: Path) -> None:
     assert {10.0, 25.0}.issubset(unique)
     assert unique.issubset({0.0, 10.0, 25.0})
 
-    written = u.materialize_landscape_variable(atlas, "overnight_stays", if_exists="error")
+    written = materialize_landscape_variable(
+        atlas,
+        "overnight_stays",
+        chunk_policy=atlas.chunk_policy,
+        fingerprint_method=atlas.fingerprint_method,
+        if_exists="error",
+    )
     assert written is True
 
     ds = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
@@ -192,9 +206,8 @@ def test_vector_noop_requires_exact_match(tmp_path: Path) -> None:
     _create_elevation_raster(tmp_path)
     atlas.build_canonical()
 
-    u = Unifier(chunk_policy=atlas.chunk_policy, fingerprint_method=atlas.fingerprint_method)
     gdf = _sample_vector()
-    u.register_landscape_vector_source(
+    register_landscape_vector_source(
         atlas,
         name="overnight_stays",
         shape=gdf,
@@ -202,9 +215,15 @@ def test_vector_noop_requires_exact_match(tmp_path: Path) -> None:
         all_touched=False,
         if_exists="error",
     )
-    u.materialize_landscape_variable(atlas, "overnight_stays", if_exists="error")
+    materialize_landscape_variable(
+        atlas,
+        "overnight_stays",
+        chunk_policy=atlas.chunk_policy,
+        fingerprint_method=atlas.fingerprint_method,
+        if_exists="error",
+    )
 
-    changed = u.register_landscape_vector_source(
+    changed = register_landscape_vector_source(
         atlas,
         name="overnight_stays",
         shape=gdf,
@@ -214,13 +233,19 @@ def test_vector_noop_requires_exact_match(tmp_path: Path) -> None:
     )
     assert changed is False
 
-    written = u.materialize_landscape_variable(atlas, "overnight_stays", if_exists="noop")
+    written = materialize_landscape_variable(
+        atlas,
+        "overnight_stays",
+        chunk_policy=atlas.chunk_policy,
+        fingerprint_method=atlas.fingerprint_method,
+        if_exists="noop",
+    )
     assert written is False
 
     modified = gdf.copy()
     modified.loc[0, "overnight_stays"] = 99.0
     with pytest.raises(ValueError, match="if_exists='replace'"):
-        u.register_landscape_vector_source(
+        register_landscape_vector_source(
             atlas,
             name="overnight_stays",
             shape=modified,

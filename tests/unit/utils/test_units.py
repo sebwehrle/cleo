@@ -29,35 +29,18 @@ class TestGetUnitAttr:
 
         assert get_unit_attr(da) == "m/s"
 
-    def test_reads_legacy_unit_attr_fallback(self):
-        """Falls back to 'unit' when 'units' absent."""
-        da = xr.DataArray([1, 2, 3])
-        da.attrs["unit"] = "km"
-
-        assert get_unit_attr(da) == "km"
-
     def test_returns_none_when_no_unit_attr(self):
         """Returns None when neither attr present."""
         da = xr.DataArray([1, 2, 3])
 
         assert get_unit_attr(da) is None
 
-    def test_prefers_canonical_over_legacy(self):
-        """When both present and same, returns canonical."""
+    def test_ignores_legacy_unit_attr_when_units_absent(self):
+        """Ignores legacy 'unit' attr now that canonical key is required."""
         da = xr.DataArray([1, 2, 3])
-        da.attrs["units"] = "m"
-        da.attrs["unit"] = "m"
-
-        assert get_unit_attr(da) == "m"
-
-    def test_raises_on_conflict(self):
-        """Raises ValueError when both exist with different values."""
-        da = xr.DataArray([1, 2, 3])
-        da.attrs["units"] = "m"
         da.attrs["unit"] = "km"
 
-        with pytest.raises(ValueError, match="Conflicting unit attrs"):
-            get_unit_attr(da)
+        assert get_unit_attr(da) is None
 
 
 class TestSetUnitAttr:
@@ -71,8 +54,8 @@ class TestSetUnitAttr:
 
         assert result.attrs["units"] == "m/s"
 
-    def test_removes_legacy_unit_by_default(self):
-        """Removes legacy 'unit' attr by default."""
+    def test_strips_legacy_unit_attr_if_present(self):
+        """Strips stale legacy 'unit' attr if present."""
         da = xr.DataArray([1, 2, 3])
         da.attrs["unit"] = "old_unit"
 
@@ -80,16 +63,6 @@ class TestSetUnitAttr:
 
         assert result.attrs["units"] == "new_unit"
         assert "unit" not in result.attrs
-
-    def test_preserves_legacy_when_requested(self):
-        """Preserves legacy 'unit' when remove_legacy=False."""
-        da = xr.DataArray([1, 2, 3])
-        da.attrs["unit"] = "old_unit"
-
-        result = set_unit_attr(da, "new_unit", remove_legacy=False)
-
-        assert result.attrs["units"] == "new_unit"
-        assert result.attrs["unit"] == "old_unit"
 
     def test_preserves_other_attrs(self):
         """Preserves non-unit attrs."""
@@ -202,17 +175,6 @@ class TestConvertDataarray:
         np.testing.assert_array_equal(result.values, [1000.0, 2000.0, 3000.0])
         assert result.attrs["units"] == "m"
 
-    def test_reads_legacy_unit_attr(self):
-        """Falls back to legacy 'unit' attr."""
-        da = xr.DataArray([1.0, 2.0, 3.0])
-        da.attrs["unit"] = "m"
-
-        result = convert_dataarray(da, "cm")
-
-        np.testing.assert_array_equal(result.values, [100.0, 200.0, 300.0])
-        assert result.attrs["units"] == "cm"
-        assert "unit" not in result.attrs  # Legacy removed
-
     def test_preserves_other_attrs(self):
         """Preserves non-unit attrs."""
         da = xr.DataArray([1.0, 2.0, 3.0])
@@ -269,6 +231,14 @@ class TestConvertDataarray:
     def test_raises_when_no_unit_source(self):
         """Raises ValueError when no unit source available."""
         da = xr.DataArray([1.0, 2.0, 3.0])
+
+        with pytest.raises(ValueError, match="No unit attr found"):
+            convert_dataarray(da, "cm")
+
+    def test_raises_when_only_legacy_unit_attr_exists(self):
+        """Raises ValueError when only legacy 'unit' attr exists."""
+        da = xr.DataArray([1.0, 2.0, 3.0])
+        da.attrs["unit"] = "m"
 
         with pytest.raises(ValueError, match="No unit attr found"):
             convert_dataarray(da, "cm")
@@ -362,8 +332,6 @@ class TestCanonicalUnitsRegistry:
     def test_registry_contains_weibull_params(self):
         """Registry has canonical units for Weibull parameters."""
         assert CANONICAL_UNITS["weibull_A"] == "m/s"
-        assert CANONICAL_UNITS["weibull_a"] == "m/s"
-        assert CANONICAL_UNITS["weibull_K"] == "1"
         assert CANONICAL_UNITS["weibull_k"] == "1"
         assert CANONICAL_UNITS["rho"] == "kg/m**3"
 

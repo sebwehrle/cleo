@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cleo.unification.vertical_policy import (
+from cleo.policies.vertical_policy import (
     HASH_ALGORITHM,
     HASH_SCHEMA_VERSION,
     canonical_json_dumps,

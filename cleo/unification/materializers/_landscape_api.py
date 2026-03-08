@@ -1,8 +1,7 @@
-"""Public API functions for landscape materialization.
+"""Landscape registration and materialization helpers.
 
-This private module contains the user-facing functions for registering sources
-and materializing landscape variables. These are re-exported from the main
-landscape.py facade.
+This private module owns the active-store registration/materialization flow for
+incremental landscape variables.
 """
 
 from __future__ import annotations
@@ -45,7 +44,6 @@ logger = logging.getLogger(__name__)
 
 
 def register_landscape_source(
-    unifier,
     atlas,
     *,
     name: str,
@@ -70,7 +68,6 @@ def register_landscape_source(
 
 
 def register_landscape_vector_source(
-    unifier,
     atlas,
     *,
     name: str,
@@ -80,7 +77,6 @@ def register_landscape_vector_source(
     if_exists: str = "error",
 ) -> bool:
     """Register a vector source in manifest for later rasterization/materialization."""
-    del unifier
     source_path, semantic_hash = _canonical_vector_source_artifact(
         atlas,
         shape=shape,
@@ -100,26 +96,28 @@ def register_landscape_vector_source(
 
 
 def prepare_landscape_variable_data(
-    unifier,
     atlas,
     variable_name: str,
+    *,
+    chunk_policy: dict[str, int] | None = None,
 ) -> xr.DataArray:
     """Prepare a landscape variable DataArray from a registered source.
 
     Reads/writes are scoped to the active store routing (base or selected area).
 
-    :param unifier: Unifier instance providing chunk policy and helpers.
-    :param atlas: Atlas-like object with store routing context.
+    :param atlas: Atlas instance with active store routing context.
     :param variable_name: Target landscape variable name.
+    :param chunk_policy: Chunking policy used when opening or chunking stores.
     :returns: Prepared DataArray aligned to active wind/landscape grids.
     :rtype: xarray.DataArray
     """
+    chunk_policy = chunk_policy or {}
     store_path = resolve_active_landscape_store_path(atlas)
     wind_path = resolve_active_wind_store_path(atlas)
 
-    wind = open_zarr_dataset(wind_path, chunk_policy=unifier.chunk_policy)
+    wind = open_zarr_dataset(wind_path, chunk_policy=chunk_policy)
     if wind.attrs.get("store_state") != "complete":
-        raise RuntimeError("wind.zarr is not complete; run Unifier.materialize_wind(atlas) first.")
+        raise RuntimeError("wind.zarr is not complete; run atlas.build() first.")
     wind_grid_id = wind.attrs.get("grid_id") or ""
 
     wind_ref = wind["weibull_A"].isel(height=0)
@@ -137,10 +135,10 @@ def prepare_landscape_variable_data(
     if wind_ref.rio.transform() is None:
         wind_ref = wind_ref.rio.write_transform(wind_ref.rio.transform(recalc=True))
 
-    land = open_zarr_dataset(store_path, chunk_policy=unifier.chunk_policy)
+    land = open_zarr_dataset(store_path, chunk_policy=chunk_policy)
     land_root = zarr.open_group(store_path, mode="r")
     if land_root.attrs.get("store_state") != "complete":
-        raise RuntimeError("landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first.")
+        raise RuntimeError("landscape.zarr is not complete; run atlas.build() first.")
     land_grid_id = land_root.attrs.get("grid_id") or ""
     if land_grid_id != wind_grid_id:
         raise RuntimeError(f"landscape.zarr grid_id mismatch: {land_grid_id!r} != wind grid_id {wind_grid_id!r}")
@@ -165,7 +163,7 @@ def prepare_landscape_variable_data(
             params=params,
             wind_ref=wind_ref,
             valid_mask=land["valid_mask"].load(),
-            chunk_policy=unifier.chunk_policy,
+            chunk_policy=chunk_policy,
         )
     else:
         aoi = _aoi_geom_or_none(atlas)
@@ -210,20 +208,21 @@ def prepare_landscape_variable_data(
         valid_mask = land["valid_mask"].load()
         da = da.where(valid_mask, np.nan)
 
-        chunk_y = unifier.chunk_policy.get("y", 1024)
-        chunk_x = unifier.chunk_policy.get("x", 1024)
+        chunk_y = chunk_policy.get("y", 1024)
+        chunk_x = chunk_policy.get("x", 1024)
         da = da.chunk({"y": chunk_y, "x": chunk_x})
     return da
 
 
 def materialize_landscape_computed_variables(
-    unifier,
     atlas,
     *,
     variables: dict[str, xr.DataArray],
+    chunk_policy: dict[str, int] | None = None,
     if_exists: str = "error",
 ) -> dict[str, list[str]]:
     """Materialize precomputed landscape variables into active landscape store."""
+    chunk_policy = chunk_policy or {}
     valid_if_exists = {"error", "replace", "noop"}
     if if_exists not in valid_if_exists:
         raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
@@ -240,7 +239,7 @@ def materialize_landscape_computed_variables(
             f"Landscape store incomplete (store_state={root.attrs.get('store_state')!r}); call atlas.build()."
         )
 
-    land = open_zarr_dataset(store_path, chunk_policy=unifier.chunk_policy)
+    land = open_zarr_dataset(store_path, chunk_policy=chunk_policy)
     if "valid_mask" not in land:
         raise RuntimeError("Active landscape store missing valid_mask.")
 
@@ -306,33 +305,36 @@ def materialize_landscape_computed_variables(
 
 
 def materialize_landscape_variable(
-    unifier,
     atlas,
     variable_name: str,
     *,
+    chunk_policy: dict[str, int] | None = None,
+    fingerprint_method: str = "path_mtime_size",
     if_exists: str = "error",
 ) -> bool:
     """Materialize a single landscape variable from a registered source.
 
     Reads/writes are scoped to the active store routing (base or selected area).
 
-    :param unifier: Unifier instance providing chunk policy and helpers.
-    :param atlas: Atlas-like object with store routing context.
+    :param atlas: Atlas instance with store routing context.
     :param variable_name: Target landscape variable name.
+    :param chunk_policy: Chunking policy used for store opens and writes.
+    :param fingerprint_method: Fingerprint method used for inputs identity updates.
     :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
     :returns: ``True`` when written, ``False`` when a validated noop is applied.
     :rtype: bool
     """
+    chunk_policy = chunk_policy or {}
     validate_if_exists_param(if_exists)
 
     store_path = resolve_active_landscape_store_path(atlas)
     wind_path = resolve_active_wind_store_path(atlas)
 
     # Get wind reference for grid alignment
-    wind_ref = get_wind_reference(wind_path, atlas.crs, chunk_policy=unifier.chunk_policy)
+    wind_ref = get_wind_reference(wind_path, atlas.crs, chunk_policy=chunk_policy)
 
     # Open and validate landscape store
-    land = open_zarr_dataset(store_path, chunk_policy=unifier.chunk_policy)
+    land = open_zarr_dataset(store_path, chunk_policy=chunk_policy)
     land_root = zarr.open_group(store_path, mode="r")
 
     _validate_landscape_store_state(land_root, wind_ref.grid_id)
@@ -351,7 +353,7 @@ def materialize_landscape_variable(
     # Prepare data
     params = json.loads(source_ctx["params_json"]) if source_ctx["params_json"] else {}
     categorical = bool(params.get("categorical", False))
-    da = prepare_landscape_variable_data(unifier, atlas, variable_name)
+    da = prepare_landscape_variable_data(atlas, variable_name, chunk_policy=chunk_policy)
 
     # Write to store
     _write_landscape_variable(
@@ -360,8 +362,9 @@ def materialize_landscape_variable(
         da=da,
         source_ctx=source_ctx,
         wind_ref=wind_ref,
-        unifier=unifier,
         atlas=atlas,
+        chunk_policy=chunk_policy,
+        fingerprint_method=fingerprint_method,
         do_replace=do_replace,
         categorical=categorical,
         preserve_attrs=dict(land_root.attrs),
@@ -373,7 +376,7 @@ def materialize_landscape_variable(
 def _validate_landscape_store_state(land_root: zarr.Group, wind_grid_id: str) -> None:
     """Validate landscape store is complete and grid matches wind."""
     if land_root.attrs.get("store_state") != "complete":
-        raise RuntimeError("landscape.zarr is not complete; run Unifier.materialize_landscape(atlas) first.")
+        raise RuntimeError("landscape.zarr is not complete; run atlas.build() first.")
 
     land_grid_id = land_root.attrs.get("grid_id") or ""
     if land_grid_id != wind_grid_id:
@@ -474,8 +477,9 @@ def _write_landscape_variable(
     da: xr.DataArray,
     source_ctx: dict[str, Any],
     wind_ref,
-    unifier,
     atlas,
+    chunk_policy: dict[str, int],
+    fingerprint_method: str,
     do_replace: bool,
     categorical: bool,
     preserve_attrs: dict[str, Any],
@@ -497,7 +501,15 @@ def _write_landscape_variable(
         _update_manifest_for_variable(store_path, variable_name, source_ctx["source_id"], categorical, da.dtype)
 
         # Update inputs_id
-        _update_inputs_id(store_path, variable_name, source_ctx, wind_ref, unifier, atlas)
+        _update_inputs_id(
+            store_path,
+            variable_name,
+            source_ctx,
+            wind_ref,
+            atlas,
+            chunk_policy=chunk_policy,
+            fingerprint_method=fingerprint_method,
+        )
 
 
 def _update_manifest_for_variable(
@@ -537,8 +549,10 @@ def _update_inputs_id(
     variable_name: str,
     source_ctx: dict[str, Any],
     wind_ref,
-    unifier,
     atlas,
+    *,
+    chunk_policy: dict[str, int],
+    fingerprint_method: str,
 ) -> None:
     """Update store inputs_id after variable write."""
     items: list[tuple[str, str]] = [
@@ -546,28 +560,31 @@ def _update_inputs_id(
         ("wind:inputs_id", wind_ref.inputs_id),
         ("mask_policy", "nan+valid_mask_in_landscape"),
         ("area", _stable_json(getattr(atlas, "area", None))),
-        ("chunk_policy", _stable_json(unifier.chunk_policy)),
+        ("chunk_policy", _stable_json(chunk_policy)),
         ("incremental_add", "landscape_add"),
         (f"layer:{variable_name}:source_id", source_ctx["source_id"]),
         (f"layer:{variable_name}:fingerprint", source_ctx["stored_fingerprint"]),
         (f"layer:{variable_name}:params_json", source_ctx["params_json"]),
     ]
 
-    new_inputs_id = hash_inputs_id(items, method=unifier.fingerprint_method)
+    new_inputs_id = hash_inputs_id(items, method=fingerprint_method)
 
     root = zarr.open_group(store_path, mode="a")
     root.attrs["inputs_id"] = new_inputs_id
 
 
 def compute_air_density_correction(
-    unifier,
     atlas,
     *,
+    chunk_policy: dict[str, int] | None = None,
     chunk_size=None,
     force: bool = False,
 ) -> xr.DataArray:
     """Compute air density correction from canonical stores."""
     from cleo.assess import compute_air_density_correction_core
+
+    del chunk_size, force
+    chunk_policy = chunk_policy or {}
 
     atlas_root = Path(atlas.path)
     wind_path = atlas_root / "wind.zarr"
@@ -580,8 +597,8 @@ def compute_air_density_correction(
         raise FileNotFoundError(f"landscape.zarr not found at {landscape_path}. Run atlas.build_canonical() first.")
 
     # 2) Open canonical stores
-    chunk_y = unifier.chunk_policy.get("y", 1024)
-    chunk_x = unifier.chunk_policy.get("x", 1024)
+    chunk_y = chunk_policy.get("y", 1024)
+    chunk_x = chunk_policy.get("x", 1024)
     chunks = {"y": chunk_y, "x": chunk_x}
 
     wind = open_zarr_dataset(wind_path, chunk_policy=chunks)
@@ -593,13 +610,12 @@ def compute_air_density_correction(
 
     if wind_state != "complete":
         raise RuntimeError(
-            f"wind.zarr store_state={wind_state!r}, expected 'complete'. "
-            "Run atlas.build_canonical() to complete unification."
+            f"wind.zarr store_state={wind_state!r}, expected 'complete'. Run atlas.build() to complete unification."
         )
     if land_state != "complete":
         raise RuntimeError(
             f"landscape.zarr store_state={land_state!r}, expected 'complete'. "
-            "Run atlas.build_canonical() to complete unification."
+            "Run atlas.build() to complete unification."
         )
 
     # 4) Get template from wind store

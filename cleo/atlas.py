@@ -350,7 +350,6 @@ class Atlas:
         :returns: Flattened :class:`pandas.DataFrame`.
         :raises ValueError: If ``domain`` is unsupported.
         """
-        from types import SimpleNamespace
         from cleo.utils import flatten as flatten_data
 
         if domain == "wind":
@@ -358,17 +357,15 @@ class Atlas:
         elif domain == "landscape":
             data = self.landscape_data
         elif domain == "both":
-            wind_proxy = SimpleNamespace(data=self.wind_data)
-            land_proxy = SimpleNamespace(data=self.landscape_data)
             wind_df = flatten_data(
-                wind_proxy,
+                self.wind_data,
                 digits=digits,
                 exclude_template=exclude_template,
                 cast_binary_to_int=cast_binary_to_int,
                 include_only=None,
             )
             land_df = flatten_data(
-                land_proxy,
+                self.landscape_data,
                 digits=digits,
                 exclude_template=exclude_template,
                 cast_binary_to_int=cast_binary_to_int,
@@ -399,9 +396,8 @@ class Atlas:
         else:
             raise ValueError(f"Unsupported domain {domain!r}; expected 'wind', 'landscape', or 'both'.")
 
-        proxy = SimpleNamespace(data=data)
         return flatten_data(
-            proxy,
+            data,
             digits=digits,
             exclude_template=exclude_template,
             cast_binary_to_int=cast_binary_to_int,

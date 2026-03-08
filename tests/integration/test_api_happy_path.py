@@ -188,9 +188,9 @@ def test_api_happy_path(offline_atlas: Atlas, tmp_path: Path) -> None:
     # Landscape must have valid_mask
     assert "valid_mask" in land_ds
 
-    # Wind var naming: allow common aliases
-    assert any(v in wind_ds.data_vars for v in ("weibull_A", "weibull_a"))
-    assert any(v in wind_ds.data_vars for v in ("weibull_k", "weibull_K", "weibull_kappa"))
+    # Wind var naming: canonical current-store names only
+    assert "weibull_A" in wind_ds.data_vars
+    assert "weibull_k" in wind_ds.data_vars
 
     # === Deterministic fixture guards ===
     # Guard 1: valid_mask must have at least one True
@@ -199,11 +199,10 @@ def test_api_happy_path(offline_atlas: Atlas, tmp_path: Path) -> None:
     )
 
     # Guard 2: weibull_A at height=100 must have at least one non-NaN on valid_mask
-    weibull_A_var = "weibull_A" if "weibull_A" in wind_ds.data_vars else "weibull_a"
-    weibull_A_100 = wind_ds[weibull_A_var].sel(height=100)
+    weibull_A_100 = wind_ds["weibull_A"].sel(height=100)
     valid_weibull = land_ds["valid_mask"] & weibull_A_100.notnull()
     assert bool(valid_weibull.any().compute()) is True, (
-        f"Fixture sanity: {weibull_A_var} at height=100 must have valid data on valid_mask"
+        "Fixture sanity: weibull_A at height=100 must have valid data on valid_mask"
     )
 
     # === Guard 3: Default turbine discovery ===

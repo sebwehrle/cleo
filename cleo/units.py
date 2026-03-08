@@ -3,8 +3,7 @@
 This module provides canonical unit metadata handling and conversion utilities
 that are dask-friendly and preserve xarray attrs.
 
-Canonical attr key is 'units' (plural). Legacy 'unit' (singular) is supported
-for reads during migration but should not be written.
+Canonical attr key is 'units' (plural).
 """
 
 from __future__ import annotations
@@ -16,14 +15,10 @@ _UREG: UnitRegistry = UnitRegistry()
 
 # Canonical attr key (normative)
 UNIT_ATTR_KEY = "units"
-LEGACY_UNIT_ATTR_KEY = "unit"
 
 
 def get_unit_attr(da: xr.DataArray) -> str | None:
-    """Get unit attr with legacy fallback.
-
-    Reads canonical 'units' first, falls back to legacy 'unit'.
-    Raises if both exist and differ.
+    """Get canonical unit attr.
 
     Args:
         da: DataArray to read unit from
@@ -31,43 +26,27 @@ def get_unit_attr(da: xr.DataArray) -> str | None:
     Returns:
         Unit string or None if no unit attr present
 
-    Raises:
-        ValueError: If both 'units' and 'unit' exist with different values
     """
-    canonical = da.attrs.get(UNIT_ATTR_KEY)
-    legacy = da.attrs.get(LEGACY_UNIT_ATTR_KEY)
-
-    if canonical is not None and legacy is not None:
-        if canonical != legacy:
-            raise ValueError(
-                f"Conflicting unit attrs: units={canonical!r}, unit={legacy!r}. Normalize to canonical 'units' attr."
-            )
-    return canonical if canonical is not None else legacy
+    return da.attrs.get(UNIT_ATTR_KEY)
 
 
 def set_unit_attr(
     da: xr.DataArray,
     unit: str,
-    *,
-    remove_legacy: bool = True,
 ) -> xr.DataArray:
     """Set canonical unit attr on DataArray.
 
-    Removes legacy 'unit' attr by default.
     Returns new DataArray with updated attrs (does not mutate input).
 
     Args:
         da: Input DataArray
         unit: Unit string to set
-        remove_legacy: If True, removes legacy 'unit' attr if present
-
     Returns:
         New DataArray with updated attrs
     """
     new_attrs = dict(da.attrs)
     new_attrs[UNIT_ATTR_KEY] = unit
-    if remove_legacy and LEGACY_UNIT_ATTR_KEY in new_attrs:
-        del new_attrs[LEGACY_UNIT_ATTR_KEY]
+    new_attrs.pop("unit", None)
     # Create new DataArray with explicit attrs (not merge)
     return xr.DataArray(
         da.data,
@@ -122,7 +101,7 @@ def convert_dataarray(
     """Convert DataArray to new unit.
 
     Dask-friendly: computes scalar factor and multiplies.
-    Preserves all attrs except updates 'units' and removes legacy 'unit'.
+    Preserves all attrs except updates 'units'.
 
     Args:
         da: Input DataArray
@@ -151,8 +130,7 @@ def convert_dataarray(
     # Preserve original attrs, update unit
     new_attrs = dict(da.attrs)
     new_attrs[UNIT_ATTR_KEY] = to_unit
-    if LEGACY_UNIT_ATTR_KEY in new_attrs:
-        del new_attrs[LEGACY_UNIT_ATTR_KEY]
+    new_attrs.pop("unit", None)
 
     # Create new DataArray with explicit attrs (not merge)
     return xr.DataArray(
@@ -225,9 +203,7 @@ CANONICAL_UNITS: dict[str, str | None] = {
     "turbine_commissioning_year": None,  # year, no unit
     # Wind physics (Weibull parameters)
     "weibull_A": "m/s",  # scale parameter
-    "weibull_a": "m/s",  # lowercase variant
-    "weibull_K": "1",  # shape parameter (dimensionless)
-    "weibull_k": "1",  # lowercase variant
+    "weibull_k": "1",  # shape parameter (dimensionless)
     "rho": "kg/m**3",  # air density
     # Power curve
     "power_curve": "1",  # dimensionless (capacity factor)

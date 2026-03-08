@@ -258,8 +258,7 @@ class TestWindDomainCompute:
         # Deterministic validity guard
         wind = atlas.wind_data
         land = atlas.landscape_data
-        var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
-        ok = wind[var_A].sel(height=100).notnull() & land["valid_mask"]
+        ok = wind["weibull_A"].sel(height=100).notnull() & land["valid_mask"]
         assert bool(ok.any().compute()) is True, "Fixture must have valid cells"
 
         # Compute mean wind speed (compute() returns DomainResult, use .data for DataArray)
@@ -370,8 +369,7 @@ class TestCapacityFactorsEnforcement:
         # Mandatory fixture guard
         wind = atlas.wind_data
         land = atlas.landscape_data
-        var_A = "weibull_A" if "weibull_A" in wind else "weibull_a"
-        ok = wind[var_A].sel(height=100).notnull() & land["valid_mask"]
+        ok = wind["weibull_A"].sel(height=100).notnull() & land["valid_mask"]
         assert bool(ok.any().compute()) is True, "Fixture must have valid cells"
 
         # Get turbine IDs

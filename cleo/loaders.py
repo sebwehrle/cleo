@@ -328,7 +328,7 @@ def load_weibull_parameters(self, height):
     try:
         a = _maybe_chunk_auto(rxr.open_rasterio(a_path))
         k = _maybe_chunk_auto(rxr.open_rasterio(k_path))
-        a.name = "weibull_a"
+        a.name = "weibull_A"
         k.name = "weibull_k"
 
         # Ensure CRS is set before reprojection
@@ -464,9 +464,7 @@ def load_nuts(self, resolution="01M", year=2024, crs=4326):
     inner ZIP for the selected resolution/year/CRS, then safely extracts
     shapefile contents into ``<atlas.path>/data/nuts``.
 
-    Accepts either:
-    - a legacy loader wrapper exposing ``.parent`` (with ``path``/``country``), or
-    - an Atlas-like object directly exposing ``path``/``country``.
+    Expects an atlas object exposing ``path``.
 
     :param resolution: NUTS geometry resolution (``"01M"``, ``"03M"``,
         ``"10M"``, ``"20M"``, ``"60M"``).
@@ -490,11 +488,10 @@ def load_nuts(self, resolution="01M", year=2024, crs=4326):
     if crs not in CRS:
         raise ValueError(f"Invalid crs: {crs}")
 
-    atlas_like = getattr(self, "parent", self)
-    if not hasattr(atlas_like, "path"):
-        raise TypeError("load_nuts expects an Atlas-like object or wrapper exposing .parent with .path.")
+    if not hasattr(self, "path"):
+        raise TypeError("load_nuts expects an atlas object exposing .path.")
 
-    nuts_path = Path(atlas_like.path) / "data" / "nuts"
+    nuts_path = Path(self.path) / "data" / "nuts"
     nuts_path.mkdir(parents=True, exist_ok=True)
 
     url = "https://gisco-services.ec.europa.eu/distribution/v2/nuts/download/"

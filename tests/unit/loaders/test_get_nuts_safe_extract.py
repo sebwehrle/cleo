@@ -34,8 +34,7 @@ def test_load_nuts_rejects_zip_slip(tmp_path, monkeypatch):
 
     monkeypatch.setattr(L, "download_to_path", mock_download_to_path)
 
-    parent = SimpleNamespace(path=tmp_path)
-    self = SimpleNamespace(parent=parent)
+    self = SimpleNamespace(path=tmp_path)
 
     with pytest.raises(ValueError, match="Unsafe zip member"):
         L.load_nuts(self, resolution=resolution, year=year, crs=crs)

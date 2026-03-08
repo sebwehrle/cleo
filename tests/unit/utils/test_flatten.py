@@ -1,7 +1,5 @@
 """utils: flatten tests."""
 
-from types import SimpleNamespace
-
 import numpy as np
 import xarray as xr
 import pytest
@@ -26,9 +24,7 @@ def test_flatten_excludes_template_and_flattens_2d_and_3d():
         },
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0], "height": [50, 100]},
     )
-    self = SimpleNamespace(data=ds)
-
-    df = flatten(self)
+    df = flatten(ds)
 
     assert "template" not in df.columns
     assert "v2" in df.columns
@@ -42,9 +38,7 @@ def test_flatten_can_include_template():
         {"template": (("y", "x"), np.array([[1.0, 2.0], [3.0, 4.0]]))},
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
     )
-    self = SimpleNamespace(data=ds)
-
-    df = flatten(self, exclude_template=False)
+    df = flatten(ds, exclude_template=False)
 
     assert "template" in df.columns
     assert len(df) == 4
@@ -55,13 +49,11 @@ def test_flatten_raises_for_non_spatial_variable_dims():
         {"bad": (("t",), np.array([1.0, 2.0]))},
         coords={"t": [0, 1]},
     )
-    self = SimpleNamespace(data=ds)
-
     with pytest.raises(
         ValueError,
         match="Only 2D \\('x','y'\\) or 3D data with one non-spatial dimension plus 'x' and 'y' are supported",
     ):
-        flatten(self)
+        flatten(ds)
 
 
 def test_flatten_template_only_returns_empty_frame_with_spatial_index():
@@ -69,9 +61,7 @@ def test_flatten_template_only_returns_empty_frame_with_spatial_index():
         {"template": (("y", "x"), np.array([[1.0, 2.0], [3.0, 4.0]]))},
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
     )
-    self = SimpleNamespace(data=ds)
-
-    df = flatten(self, exclude_template=True)
+    df = flatten(ds, exclude_template=True)
 
     assert list(df.index.names) == ["y", "x"]
     assert df.shape == (4, 0)
@@ -86,9 +76,7 @@ def test_flatten_cast_binary_to_int_casts_only_binary_columns():
         },
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
     )
-    self = SimpleNamespace(data=ds)
-
-    df = flatten(self, cast_binary_to_int=True)
+    df = flatten(ds, cast_binary_to_int=True)
 
     assert str(df["binary_bool"].dtype) == "Int8"
     assert str(df["binary_float"].dtype) == "Int8"
@@ -103,9 +91,7 @@ def test_flatten_include_only_selects_columns_in_order():
         },
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
     )
-    self = SimpleNamespace(data=ds)
-
-    df = flatten(self, include_only=["b", "a"])
+    df = flatten(ds, include_only=["b", "a"])
     assert list(df.columns) == ["b", "a"]
 
 
@@ -114,7 +100,5 @@ def test_flatten_include_only_unknown_column_raises():
         {"a": (("y", "x"), np.array([[1.0, 2.0], [3.0, 4.0]]))},
         coords={"x": [0.0, 1.0], "y": [1.0, 0.0]},
     )
-    self = SimpleNamespace(data=ds)
-
     with pytest.raises(ValueError, match="include_only contains unknown columns"):
-        flatten(self, include_only=["a", "missing"])
+        flatten(ds, include_only=["a", "missing"])

@@ -1,45 +1,7 @@
 # %% imports
 import numpy as np
 import pandas as pd
-
-from cleo.units import (
-    conversion_factor,
-    get_unit_attr,
-    set_unit_attr,
-)
-
-
-def convert(self, data_variable, to_unit, from_unit=None, inplace=False):
-    """
-    Convert one or more data variables to a new unit.
-
-    Contract:
-    - Preserves existing attrs; updates 'units' (canonical key).
-    - Reads from 'units' first, falls back to legacy 'unit'.
-    - Dask-friendly: computes a scalar factor once and multiplies the DataArray by that factor.
-    """
-    if isinstance(data_variable, str):
-        data_variable = [data_variable]
-    elif not isinstance(data_variable, list):
-        raise ValueError("data_variable must be a string or a list of strings.")
-
-    converted_arrays = {}
-
-    for var in data_variable:
-        data_var = self.data[var]
-
-        unit = from_unit if from_unit is not None else get_unit_attr(data_var)
-        if unit is None:
-            raise ValueError(f"No from-unit given and no 'units'/'unit' attr present for variable '{var}'.")
-
-        factor = conversion_factor(unit, to_unit)
-        result = data_var * factor
-        converted_arrays[var] = set_unit_attr(result, to_unit)
-
-    if inplace:
-        self.data.update(converted_arrays)
-    else:
-        return converted_arrays
+import xarray as xr
 
 
 def _cast_binary_series_to_int(s: pd.Series) -> pd.Series:
@@ -61,7 +23,7 @@ def _cast_binary_series_to_int(s: pd.Series) -> pd.Series:
 
 
 def flatten(
-    self,
+    data: xr.Dataset,
     digits=5,
     exclude_template=True,
     cast_binary_to_int=False,
@@ -73,7 +35,7 @@ def flatten(
     'digits' value of 5 results in a precision loss of about 1.1 m in latitude per 1e-5 degrees; longitude scales
     by cos(latitude).
 
-    :param self: an instance of the WindResourceAtlas- or SiteData-class
+    :param data: dataset to flatten
     :param digits: number of digits to round x and y coordinates to
     :param exclude_template: a boolean flag to exclude the template-data variable
     :param cast_binary_to_int: if True, cast binary columns (bool or {0,1}) to nullable Int8.
@@ -85,12 +47,12 @@ def flatten(
 
     collect_df = []
 
-    data_variables = self.data.data_vars
+    data_variables = data.data_vars
     if exclude_template:
         data_variables = [data_var for data_var in data_variables if data_var != "template"]
 
     for var_name in data_variables:
-        data_var = self.data[var_name]
+        data_var = data[var_name]
         # drop non-dimensional coordinates
         non_dim_coords = set(data_var.coords) - set(data_var.dims)
         data_var = data_var.drop_vars(non_dim_coords)
@@ -129,9 +91,9 @@ def flatten(
     if not collect_df:
         # No variables selected (e.g., template-only with exclude_template=True):
         # return an empty frame with rounded spatial index when available.
-        if {"x", "y"}.issubset(set(self.data.coords)):
-            y_vals = np.round(np.asarray(self.data.coords["y"].values), digits)
-            x_vals = np.round(np.asarray(self.data.coords["x"].values), digits)
+        if {"x", "y"}.issubset(set(data.coords)):
+            y_vals = np.round(np.asarray(data.coords["y"].values), digits)
+            x_vals = np.round(np.asarray(data.coords["x"].values), digits)
             index = pd.MultiIndex.from_product([y_vals, x_vals], names=["y", "x"])
             return pd.DataFrame(index=index)
         empty_index = pd.MultiIndex.from_arrays([[], []], names=["y", "x"])

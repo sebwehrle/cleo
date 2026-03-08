@@ -458,5 +458,5 @@ class TestZarrV3Compatibility:
 
         # Should open successfully without consolidated metadata
         ds = xr.open_zarr(tmp_path / "wind.zarr", consolidated=False)
-        assert "weibull_A" in ds.data_vars or "weibull_a" in ds.data_vars
+        assert "weibull_A" in ds.data_vars
         assert "weibull_k" in ds.data_vars

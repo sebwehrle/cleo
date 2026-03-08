@@ -7,7 +7,7 @@ import pytest
 import xarray as xr
 import zarr
 
-from cleo.unification.unifier import Unifier
+from cleo.unification.materializers._landscape_api import materialize_landscape_computed_variables
 
 
 class _AtlasStub:
@@ -57,10 +57,10 @@ def test_materialize_distance_variables_writes_to_active_region_store(tmp_path: 
         name="distance_roads",
     )
 
-    u = Unifier(chunk_policy=atlas.chunk_policy, fingerprint_method=atlas.fingerprint_method)
-    summary = u.materialize_landscape_computed_variables(
+    summary = materialize_landscape_computed_variables(
         atlas,
         variables={"distance_roads": dist},
+        chunk_policy=atlas.chunk_policy,
         if_exists="error",
     )
 
@@ -91,14 +91,14 @@ def test_materialize_distance_variables_reports_partial_failure(tmp_path: Path) 
         name="distance_water",
     )
 
-    u = Unifier(chunk_policy=atlas.chunk_policy, fingerprint_method=atlas.fingerprint_method)
     with pytest.raises(RuntimeError, match="written=.*skipped=.*failed=") as exc_info:
-        u.materialize_landscape_computed_variables(
+        materialize_landscape_computed_variables(
             atlas,
             variables={
                 "distance_roads": ok,
                 "distance_water": bad,
             },
+            chunk_policy=atlas.chunk_policy,
             if_exists="error",
         )
 

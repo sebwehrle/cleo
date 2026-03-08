@@ -38,14 +38,11 @@ cleo.results : Result wrapper and materialization
 
 # %% imports
 import json
-from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 from pathlib import Path
 
-if TYPE_CHECKING:
-    from cleo.unification import Unifier
 from cleo.results import DomainResult, normalize_metric_for_active_wind_store
 from cleo.spatial import distance_to_positive_mask
 from cleo.wind_metrics import (
@@ -56,6 +53,13 @@ from cleo.wind_metrics import (
     required_economics_fields,
     flat_cf_kwargs,
     flat_economics_kwargs,
+)
+from cleo.unification.materializers._landscape_api import (
+    materialize_landscape_computed_variables,
+    materialize_landscape_variable,
+    prepare_landscape_variable_data,
+    register_landscape_source,
+    register_landscape_vector_source,
 )
 from cleo.unification.store_io import (
     open_zarr_dataset,
@@ -681,7 +685,7 @@ class WindDomain:
         :param variable: Variable name in ``atlas.wind.data``.
         :param to_unit: Target unit string (e.g., ``"EUR/kWh"``, ``"km"``).
         :param from_unit: Source unit. If ``None``, reads from the variable's
-            ``units`` attr (with legacy ``unit`` fallback).
+            ``units`` attr.
         :param inplace: If ``True``, stages the converted DataArray as a computed
             overlay so it appears in ``atlas.wind.data``. If ``False``, returns
             the converted DataArray without modifying state.
@@ -931,20 +935,6 @@ class LandscapeDomain:
         if if_exists not in valid_if_exists:
             raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
 
-    def _build_unifier(self) -> "Unifier":
-        """
-        Build Unifier configured from owning Atlas settings.
-
-        :returns: Configured :class:`cleo.unification.unifier.Unifier`.
-        """
-        from cleo.unification import Unifier
-
-        atlas = self._atlas
-        return Unifier(
-            chunk_policy=atlas.chunk_policy,
-            fingerprint_method=getattr(atlas, "fingerprint_method", "path_mtime_size"),
-        )
-
     def _store_data(self) -> xr.Dataset:
         """Open/cache the active landscape store dataset without staged overlays."""
         if self._data is not None:
@@ -1007,7 +997,7 @@ class LandscapeDomain:
         :param variable: Variable name in ``atlas.landscape.data``.
         :param to_unit: Target unit string (e.g., ``"km"``, ``"ft"``).
         :param from_unit: Source unit. If ``None``, reads from the variable's
-            ``units`` attr (with legacy ``unit`` fallback).
+            ``units`` attr.
         :param inplace: If ``True``, stages the converted DataArray as an
             overlay so it appears in ``atlas.landscape.data``. If ``False``,
             returns the converted DataArray without modifying state.
@@ -1148,10 +1138,11 @@ class LandscapeDomain:
         if not getattr(atlas, "_canonical_ready", False):
             atlas.build_canonical()
 
-        u = self._build_unifier()
-        u.materialize_landscape_variable(
+        materialize_landscape_variable(
             atlas,
-            variable_name=name,
+            name,
+            chunk_policy=atlas.chunk_policy,
+            fingerprint_method=getattr(atlas, "fingerprint_method", "path_mtime_size"),
             if_exists=if_exists,
         )
 
@@ -1183,11 +1174,11 @@ class LandscapeDomain:
         staged_to_write = {name: self._staged_overlays[name] for name in names if name in self._staged_overlays}
 
         if staged_to_write:
-            u = self._build_unifier()
             try:
-                summary = u.materialize_landscape_computed_variables(
+                summary = materialize_landscape_computed_variables(
                     atlas,
                     variables=staged_to_write,
+                    chunk_policy=atlas.chunk_policy,
                     if_exists=if_exists,
                 )
             except RuntimeError as exc:
@@ -1259,7 +1250,6 @@ class LandscapeDomain:
         *,
         name: str,
         if_exists: str,
-        u,
         store_ds: xr.Dataset,
         staged_exists: bool,
         store_exists: bool,
@@ -1282,9 +1272,10 @@ class LandscapeDomain:
                     noop_existing=True,
                 )
 
-        staged = u.prepare_landscape_variable_data(
+        staged = prepare_landscape_variable_data(
             self._atlas,
-            variable_name=name,
+            name,
+            chunk_policy=self._atlas.chunk_policy,
         )
         staged = staged.reset_coords(drop=True)
         self._staged_overlays[name] = staged
@@ -1343,8 +1334,7 @@ class LandscapeDomain:
                     f"  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
                 )
 
-        u = self._build_unifier()
-        u.register_landscape_source(
+        register_landscape_source(
             atlas,
             name=name,
             source_path=Path(source_path),
@@ -1355,7 +1345,6 @@ class LandscapeDomain:
         return self._stage_registered_variable(
             name=name,
             if_exists=if_exists,
-            u=u,
             store_ds=store_ds,
             staged_exists=staged_exists,
             store_exists=store_exists,
@@ -1406,8 +1395,7 @@ class LandscapeDomain:
                     "  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
                 )
 
-        u = self._build_unifier()
-        u.register_landscape_vector_source(
+        register_landscape_vector_source(
             atlas,
             name=name,
             shape=shape,
@@ -1418,7 +1406,6 @@ class LandscapeDomain:
         return self._stage_registered_variable(
             name=name,
             if_exists=if_exists,
-            u=u,
             store_ds=store_ds,
             staged_exists=staged_exists,
             store_exists=store_exists,

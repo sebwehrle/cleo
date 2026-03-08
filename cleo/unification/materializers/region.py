@@ -331,10 +331,9 @@ def _ensure_area_stores_ready(
         )
         shutil.rmtree(expected_root)
 
-    # Always delegate freshness/completeness decision to materialize_area().
-    # It performs the full compatibility check (including base inputs linkage)
-    # and can no-op when area stores are already up-to-date.
-    unifier.materialize_area(atlas, area_id)
+    # Keep area freshness/completeness checks in one place so area routing
+    # cannot bypass canonical base-store linkage validation.
+    materialize_area(unifier, atlas, area_id)
 
     if not (expected_wind.exists() and expected_land.exists()):
         details = {

@@ -26,6 +26,10 @@ import cleo
 import json
 
 from cleo.unification.gwa_io import GWA_HEIGHTS
+from cleo.unification.materializers._landscape_api import (
+    materialize_landscape_variable,
+    register_landscape_source,
+)
 from cleo.unification.unifier import Unifier
 
 
@@ -94,11 +98,7 @@ class MockAtlas:
         if not self._canonical_ready:
             self.build_canonical()
 
-        u = Unifier(
-            chunk_policy=self.chunk_policy,
-            fingerprint_method=self.fingerprint_method,
-        )
-        u.register_landscape_source(
+        register_landscape_source(
             self,
             name=name,
             source_path=Path(source_path),
@@ -106,7 +106,12 @@ class MockAtlas:
             params=params or {},
         )
         if materialize:
-            u.materialize_landscape_variable(self, variable_name=name)
+            materialize_landscape_variable(
+                self,
+                name,
+                chunk_policy=self.chunk_policy,
+                fingerprint_method=self.fingerprint_method,
+            )
 
 
 def _create_gwa_raster(
@@ -477,7 +482,7 @@ class TestLandscapeAddIncremental:
         extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
         _create_extra_layer_raster(extra_path, fill_value=42.0)
 
-        with pytest.raises(ValueError, match="Only kind='raster' supported"):
+        with pytest.raises(ValueError, match="Only kind='raster' is currently supported"):
             atlas.landscape_add(
                 "extra_layer",
                 extra_path,

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import cleo.domains as domains_module
 from cleo.domains import LandscapeAddResult, LandscapeDomain
 from tests.helpers.domains import make_landscape_domain_atlas_stub
 
@@ -38,18 +39,19 @@ def test_rasterize_routes_to_vector_registration_and_stages_overlay(
 
     calls: dict[str, object] = {}
 
-    class _StubUnifier:
-        def register_landscape_vector_source(self, atlas_obj, **kwargs):  # noqa: ANN001
-            calls["atlas"] = atlas_obj
-            calls["register_kwargs"] = kwargs
-            return True
+    def _register_landscape_vector_source(atlas_obj, **kwargs):  # noqa: ANN001
+        calls["atlas"] = atlas_obj
+        calls["register_kwargs"] = kwargs
+        return True
 
-        def prepare_landscape_variable_data(self, atlas_obj, variable_name):  # noqa: ANN001
-            calls["prepare_atlas"] = atlas_obj
-            calls["prepare_variable_name"] = variable_name
-            return staged_da
+    def _prepare_landscape_variable_data(atlas_obj, variable_name, *, chunk_policy):  # noqa: ANN001
+        calls["prepare_atlas"] = atlas_obj
+        calls["prepare_variable_name"] = variable_name
+        calls["prepare_chunk_policy"] = chunk_policy
+        return staged_da
 
-    monkeypatch.setattr(domain, "_build_unifier", lambda: _StubUnifier())
+    monkeypatch.setattr(domains_module, "register_landscape_vector_source", _register_landscape_vector_source)
+    monkeypatch.setattr(domains_module, "prepare_landscape_variable_data", _prepare_landscape_variable_data)
 
     op = domain.rasterize(
         "dummy.geojson",
@@ -64,6 +66,7 @@ def test_rasterize_routes_to_vector_registration_and_stages_overlay(
     assert calls["atlas"] is atlas
     assert calls["prepare_atlas"] is atlas
     assert calls["prepare_variable_name"] == "overnight_stays"
+    assert calls["prepare_chunk_policy"] == atlas.chunk_policy
     assert calls["register_kwargs"] == {
         "name": "overnight_stays",
         "shape": "dummy.geojson",
@@ -97,17 +100,18 @@ def test_rasterize_noop_with_existing_store_var_returns_existing_without_prepare
 
     calls = {"prepare": 0}
 
-    class _StubUnifier:
-        def register_landscape_vector_source(self, atlas_obj, **kwargs):  # noqa: ANN001
-            del atlas_obj, kwargs
-            return False
+    monkeypatch.setattr(
+        domains_module,
+        "register_landscape_vector_source",
+        lambda atlas_obj, **kwargs: False,  # noqa: ARG005
+    )
 
-        def prepare_landscape_variable_data(self, atlas_obj, variable_name):  # noqa: ANN001
-            del atlas_obj, variable_name
-            calls["prepare"] += 1
-            raise AssertionError("prepare_landscape_variable_data should not be called")
+    def _prepare_landscape_variable_data(atlas_obj, variable_name, *, chunk_policy):  # noqa: ANN001
+        del atlas_obj, variable_name, chunk_policy
+        calls["prepare"] += 1
+        raise AssertionError("prepare_landscape_variable_data should not be called")
 
-    monkeypatch.setattr(domain, "_build_unifier", lambda: _StubUnifier())
+    monkeypatch.setattr(domains_module, "prepare_landscape_variable_data", _prepare_landscape_variable_data)
 
     op = domain.rasterize(
         "dummy.geojson",

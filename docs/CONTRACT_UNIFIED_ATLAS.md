@@ -641,9 +641,7 @@ The repository must provide a contract check that:
 ### B9.1 Canonical Attr Key
 
 - The canonical unit metadata attr key is `units` (plural).
-- Legacy attr key `unit` (singular) is supported for reads during migration.
-- Writing unit metadata must use `units` only.
-- If both `unit` and `units` exist on the same DataArray and differ, operations must raise `ValueError`.
+- Unit metadata reads and writes use `units` only.
 
 ### B9.2 Canonical Units for Public Variables
 
@@ -660,8 +658,8 @@ The repository must provide a contract check that:
 | `turbine_capacity` | `kW` | Rated power |
 | `turbine_hub_height` | `m` | Above ground |
 | `turbine_rotor_diameter` | `m` | Rotor diameter |
-| `weibull_A` / `weibull_a` | `m/s` | Scale parameter |
-| `weibull_K` / `weibull_k` | `1` | Shape parameter (dimensionless) |
+| `weibull_A` | `m/s` | Scale parameter |
+| `weibull_k` | `1` | Shape parameter (dimensionless) |
 | `rho` | `kg/m³` | Air density |
 
 ### B9.3 Conversion Invariants

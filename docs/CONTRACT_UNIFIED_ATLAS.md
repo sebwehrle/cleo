@@ -1,9 +1,9 @@
 # Unified Atlas Contract
 
 Status: **Normative**
-Scope: This document defines **both** (A) the stable *user-facing API* and (B) the *architectural / data invariants* of Cleo’s unified atlas.
+Scope: This document defines **both** (A) the stable *user-facing API* and persisted artifact behavior and (B) the *architectural / data invariants* and principles that govern CLEO. It protects user-visible behavior and explicit principles, not concrete internal module topology, import boundaries, facade layout, or helper seams.
 
-**No backward compatibility is required.** The codebase is expected to change to satisfy this contract.
+**No backward compatibility is required for internal cleanup unless a behavior or principle below is explicitly protected.** The codebase is expected to change to satisfy this contract.
 
 ---
 
@@ -119,6 +119,7 @@ Normative:
 - Area selection must be changeable **at any time** after construction.
 - Selection API supports optional disambiguation and copy-vs-inplace semantics:
   - `select(area=..., nuts_level=0|1|2|3|None, inplace=False|True)`
+- Clone-style selection via `select(..., inplace=False)` is a protected workflow.
 - Area selection affects:
   - *what computations operate on* (they apply a mask/subset), and
   - *where derived outputs are written on disk* (area-scoped stores).
@@ -136,6 +137,7 @@ Normative:
 - Creates/updates **base stores**:
   - `wind.zarr` (country-wide wind inputs, incl. turbine metadata needed for hub-height computations),
   - `landscape.zarr` (country-wide landscape inputs, incl. `valid_mask`).
+- These base stores are the canonical unified inputs for downstream compute, materialization, and export flows.
 - Must be **idempotent**.
 - When required GWA wind rasters are missing, build must attempt deterministic
   download of the required file set for the configured country before failing.
@@ -610,15 +612,18 @@ Landscape materialization must source elevation deterministically using:
 
 ---
 
-## B7. I/O Layer Boundaries (normative)
+## B7. Architectural Principles (normative)
 
-- `cleo/unification/**` is the canonical location for raw geospatial/base-store/area-store I/O.
-- `cleo/results.py` is the canonical location for results-store persistence/open/export internals.
-- `cleo/exports.py` is the canonical location for consolidated analysis export I/O (schema-versioned Zarr exports).
-- `cleo/atlas_policies/**` is policy-only and must not perform direct raw/store/filesystem I/O.
-- `cleo/atlas.py` is orchestration/control-plane only and should delegate storage operations to dedicated I/O helpers.
-- `cleo/domains.py` should access stores through storage helper functions (not direct raw-I/O call sites).
-- `cleo/assess.py` remains pure compute only: no raw/store/network I/O and no eager evaluation triggers.
+- Atlas is the central user object and orchestration entry point.
+- Raw inputs must be unified before downstream processing, materialization, or export is performed on top of them.
+- Public behavior, documented workflows, returned-object behavior, and persisted artifacts are protected by this contract.
+- Internal modules are not part of the public compatibility surface, and this contract does **not** freeze internal module topology, import boundaries, facade layout, or helper seams.
+- No compatibility aliases are required for internal cleanup unless explicitly protected elsewhere in this contract.
+- Grouped metric syntax is protected for composed wind metrics.
+- Clone-style selection via `select(..., inplace=False)` is protected.
+- The raster/vector split is protected:
+  - `landscape.add(...)` ingests rasters.
+  - `landscape.rasterize(...)` consumes vector/shape inputs.
 
 ---
 

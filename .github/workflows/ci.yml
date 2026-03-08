@@ -150,11 +150,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run architecture guardrails
-        run: python -m pytest -q tests/unit/compat
-
       - name: Run unit tests
-        run: python -m pytest -q tests/unit --ignore=tests/unit/compat
+        run: python -m pytest -q tests/unit
 
       - name: Run integration tests
         run: python -m pytest -q tests/integration

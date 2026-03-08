@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Developer benchmark helpers are no longer shipped in the runtime package as `cleo.bench`; maintainer benchmarking now lives under `tools/bench.py`
 
 ### Fixed
+- Fixed CI test execution to stop referencing the removed internal compat test directory.
 - Normalize test-suite formatting so Ruff format checks pass in CI
 - Pin Ruff to `0.15.2` in dev dependencies and CI so local and GitHub formatting checks use the same version
 - Stabilized the phase-3 materialization golden test by pinning its turbine inventory so packaged turbine additions do not spuriously change the expected wind `inputs_id`

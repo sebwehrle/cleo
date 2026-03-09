@@ -66,6 +66,7 @@ def http_post(
     *,
     headers: dict | None = None,
     json_body: dict | list | None = None,
+    data_body: dict | list | None = None,
     timeout: tuple[int, int] | int = (10, 60),
     stream: bool = True,
     proxies: dict | None = None,
@@ -78,6 +79,7 @@ def http_post(
     :param url: URL to post to.
     :param headers: Optional HTTP headers dictionary.
     :param json_body: Optional JSON request payload.
+    :param data_body: Optional form/body payload.
     :param timeout: Connection/read timeout as ``(connect, read)`` tuple or single int.
     :param stream: If ``True``, stream response body.
     :param proxies: Optional proxy mapping (for example ``{"http": ..., "https": ...}``).
@@ -89,6 +91,7 @@ def http_post(
         url,
         headers=headers,
         json=json_body,
+        data=data_body,
         timeout=timeout,
         stream=stream,
         proxies=proxies,

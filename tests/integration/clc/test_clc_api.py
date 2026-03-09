@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import rasterio
 import rioxarray as rxr
+import zarr
 from rasterio.crs import CRS
 
 from cleo import Atlas
@@ -80,6 +81,21 @@ def _create_clc_source(atlas_path: Path) -> Path:
     return path
 
 
+def _create_compact_clc_source(atlas_path: Path) -> Path:
+    filename = CLC_SOURCES["clc2018"]["filename"]
+    path = atlas_path / "data" / "raw" / "clc" / filename
+    # Compact ids 23/24 correspond to canonical CLC codes 311/312.
+    clc = np.full((50, 50), 18.0, dtype=np.float32)
+    clc[10:30, 10:30] = 23.0
+    clc[30:45, 30:45] = 24.0
+    _create_raster(
+        path,
+        data=clc,
+        bounds=(3990000, 2590000, 4110000, 2710000),
+    )
+    return path
+
+
 def _build_atlas(tmp_path: Path) -> Atlas:
     atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
     _create_all_gwa_rasters(tmp_path)
@@ -108,6 +124,46 @@ def test_materialize_clc_and_add_categories(tmp_path: Path) -> None:
     atlas.landscape.add_clc_category([311, 312], name="forest")
     ds = atlas.landscape.data
     assert "forest" in ds.data_vars
+
+
+def test_materialize_clc_compact_ids_are_exposed_as_canonical_codes(tmp_path: Path) -> None:
+    atlas = _build_atlas(tmp_path)
+    _create_compact_clc_source(tmp_path)
+
+    prepared = atlas.build_clc()
+    assert prepared.exists()
+
+    atlas.landscape.add_clc_category(311)
+    ds = atlas.landscape.data
+    values = ds["broad_leaved_forest"].values
+    finite = values[np.isfinite(values)]
+    assert float(np.nanmax(finite)) == 1.0
+    assert float(np.nansum(finite)) > 0.0
+
+
+def test_build_clc_prepared_raster_respects_landscape_valid_mask(tmp_path: Path) -> None:
+    atlas = _build_atlas(tmp_path)
+    _create_clc_source(tmp_path)
+    atlas.build()
+
+    root = zarr.open_group(tmp_path / "landscape.zarr", mode="r+")
+    valid_mask = np.asarray(root["valid_mask"][:], dtype=bool)
+    valid_mask[5, 5] = False
+    root["valid_mask"][:] = valid_mask
+
+    prepared = atlas.build_clc(force_prepare=True)
+    da = rxr.open_rasterio(prepared).squeeze(drop=True)
+
+    assert np.isnan(da.values[5, 5])
+    assert int(np.isfinite(da.values[~valid_mask]).sum()) == 0
+
+    atlas.landscape.add_clc_category("all")
+    ds = atlas.landscape.data
+    assert np.isnan(ds["land_cover"].values[5, 5])
+
+    atlas.landscape.add_clc_category(311)
+    ds = atlas.landscape.data
+    assert np.isnan(ds["broad_leaved_forest"].values[5, 5])
 
 
 def test_add_clc_category_requires_name_for_multi_code(tmp_path: Path) -> None:

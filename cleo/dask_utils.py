@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from contextlib import contextmanager, nullcontext
 from importlib.util import find_spec
 from typing import Any, Literal, Mapping, TypeAlias, overload
@@ -243,9 +244,38 @@ def _local_scheduler_name(backend: ComputeBackend) -> str | None:
     raise ValueError(f"Unknown compute_backend: {backend!r}")
 
 
+def _ensure_process_backend_entrypoint() -> None:
+    """Validate that the current ``__main__`` module is safe for process workers.
+
+    The local ``processes`` scheduler relies on multiprocessing spawn/import
+    semantics. Interactive consoles, notebooks, and ``python -`` style entry
+    points do not provide a reliably importable ``__main__`` module, which can
+    surface as noisy shutdown-time ``sys.excepthook`` output even after a
+    successful computation.
+
+    :raises RuntimeError: If the active ``__main__`` module is not file-backed.
+    """
+    main_module = sys.modules.get("__main__")
+    main_file = getattr(main_module, "__file__", None) if main_module is not None else None
+    if isinstance(main_file, str) and main_file and not main_file.startswith("<"):
+        return
+    raise RuntimeError(
+        "compute_backend='processes' requires running CLEO from an importable Python script entrypoint. "
+        "Interactive consoles, notebooks, `python -`, and similar sessions should use "
+        "compute_backend='threads' or 'serial', or run the script behind "
+        '`if __name__ == "__main__":`.'
+    )
+
+
 @contextmanager
 def scheduler_context(*, backend: ComputeBackend, num_workers: ComputeWorkers = None):
-    """Context manager that applies the requested compute backend."""
+    """Context manager that applies the requested compute backend.
+
+    :param backend: Requested local or distributed execution backend.
+    :param num_workers: Optional worker limit for local schedulers.
+    :raises RuntimeError: If ``backend="processes"`` is requested from a
+        non-importable console-style entrypoint.
+    """
     backend_n = normalize_compute_backend(backend)
     workers_n = normalize_compute_workers(num_workers, backend=backend_n)
     if backend_n == "distributed":
@@ -256,6 +286,8 @@ def scheduler_context(*, backend: ComputeBackend, num_workers: ComputeWorkers = 
         return
 
     # Local scheduler modes use dask config context for deterministic execution policy.
+    if backend_n == "processes":
+        _ensure_process_backend_entrypoint()
     ensure_dask_available(feature=f"compute_backend={backend_n}")
     import dask
 

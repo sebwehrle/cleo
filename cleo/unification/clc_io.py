@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from importlib import resources
 from pathlib import Path
 
 import numpy as np
@@ -87,10 +88,72 @@ def raster_band_count(path: Path) -> int | None:
     try:
         import rasterio
 
-        with rasterio.open(path) as dataset:
-            return int(dataset.count)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
+            with rasterio.open(path) as dataset:
+                return int(dataset.count)
     except (ModuleNotFoundError, OSError, ValueError, RuntimeError, TypeError):
         return None
+
+
+def _compact_clc_value_map(atlas_path: Path) -> dict[int, int]:
+    """Return mapping from compact CLMS raster ids to canonical CLC codes.
+
+    Some CLMS raster packages encode CLC categories as compact sequential ids
+    ``1..44`` instead of canonical codes such as ``311``. The packaged
+    ``clc_codes.yml`` resource defines the canonical ordering, so compact id
+    ``1`` maps to the first listed code, compact id ``2`` to the second, and so on.
+
+    :param atlas_path: Atlas root path used to load packaged CLC resources.
+    :type atlas_path: pathlib.Path
+    :returns: Compact-id to canonical-code mapping.
+    :rtype: dict[int, int]
+    """
+    try:
+        clc_codes = load_clc_codes(atlas_path)
+    except FileNotFoundError:
+        resource = resources.files("cleo.resources").joinpath("clc_codes.yml")
+        with resource.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        raw = data.get("clc_codes", {})
+        clc_codes = {int(k): str(v).strip() for k, v in raw.items()}
+    return {idx: code for idx, code in enumerate(clc_codes.keys(), start=1)}
+
+
+def _expand_compact_clc_classes(clc: xr.DataArray, *, atlas_path: Path) -> xr.DataArray:
+    """Convert compact CLC raster ids to canonical CLC codes when detected.
+
+    :param clc: Prepared CLC raster candidate.
+    :type clc: xarray.DataArray
+    :param atlas_path: Atlas root path for loading canonical CLC code ordering.
+    :type atlas_path: pathlib.Path
+    :returns: CLC raster with canonical class codes.
+    :rtype: xarray.DataArray
+    """
+    values = np.asarray(clc.values)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return clc
+
+    rounded = np.rint(finite)
+    if not np.allclose(finite, rounded):
+        return clc
+
+    compact_ids = rounded.astype(np.int64, copy=False)
+    if np.any(compact_ids < 1) or np.any(compact_ids > 44):
+        return clc
+    compact_map = _compact_clc_value_map(atlas_path)
+    if np.any(compact_ids > len(compact_map)):
+        return clc
+
+    lookup = np.zeros(len(compact_map) + 1, dtype=np.float32)
+    for compact_id, canonical_code in compact_map.items():
+        lookup[compact_id] = float(canonical_code)
+
+    out = values.astype(np.float32, copy=True)
+    mask = np.isfinite(out)
+    out[mask] = lookup[np.rint(out[mask]).astype(np.int64)]
+    return xr.DataArray(out, coords=clc.coords, dims=clc.dims, attrs=clc.attrs, name=clc.name)
 
 
 def prepare_clc_to_wind_grid(
@@ -98,6 +161,8 @@ def prepare_clc_to_wind_grid(
     source_path: Path,
     prepared_path: Path,
     ref: xr.DataArray,
+    valid_mask: xr.DataArray | None = None,
+    atlas_path: Path,
     source_crs: str,
     source_on_ref_grid: bool = False,
 ) -> Path:
@@ -109,6 +174,11 @@ def prepare_clc_to_wind_grid(
     :type prepared_path: pathlib.Path
     :param ref: Wind-grid reference template.
     :type ref: xarray.DataArray
+    :param valid_mask: Optional canonical landscape validity mask on the same
+        grid as ``ref``. If omitted, validity falls back to ``ref.notnull()``.
+    :type valid_mask: xarray.DataArray | None
+    :param atlas_path: Atlas root path for resource-backed CLC code normalization.
+    :type atlas_path: pathlib.Path
     :param source_crs: Fallback source CRS used when source raster omits CRS metadata.
     :type source_crs: str
     :param source_on_ref_grid: If ``True``, interpret source as already sampled
@@ -118,7 +188,13 @@ def prepare_clc_to_wind_grid(
     :rtype: pathlib.Path
     :raises RuntimeError: If no valid wind cells exist for clipping.
     """
-    valid = ref.notnull()
+    valid = ref.notnull() if valid_mask is None else valid_mask.astype(bool)
+    if "x" not in valid.dims or "y" not in valid.dims:
+        raise ValueError("CLC valid_mask must include spatial dims 'y' and 'x'.")
+    if not np.array_equal(np.asarray(valid.coords["y"].data), np.asarray(ref.coords["y"].data)):
+        raise ValueError("CLC valid_mask y coordinates must match the wind reference grid.")
+    if not np.array_equal(np.asarray(valid.coords["x"].data), np.asarray(ref.coords["x"].data)):
+        raise ValueError("CLC valid_mask x coordinates must match the wind reference grid.")
 
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
@@ -170,6 +246,7 @@ def prepare_clc_to_wind_grid(
         y=slice(int(y_any.min()), int(y_any.max()) + 1),
         x=slice(int(x_any.min()), int(x_any.max()) + 1),
     )
+    clc = _expand_compact_clc_classes(clc, atlas_path=atlas_path)
     clc = clc.astype(np.float32)
     clc = clc.rio.write_nodata(np.nan)
     clc.rio.to_raster(prepared_path)

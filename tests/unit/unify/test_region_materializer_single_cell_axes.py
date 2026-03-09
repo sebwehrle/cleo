@@ -8,7 +8,7 @@ import geopandas as gpd
 import numpy as np
 import pytest
 import xarray as xr
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from cleo.unification.materializers.region import materialize_area
 
@@ -120,4 +120,28 @@ def test_region_materialization_handles_single_cell_axes(
         assert bool(wind_region["weibull_A"].notnull().any().compute()) is True
     finally:
         wind_region.close()
+        land_region.close()
+
+
+def test_region_materialization_keeps_valid_mask_boolean(tmp_path: Path) -> None:
+    """Area masking should preserve a boolean valid_mask with false cells outside the polygon."""
+    _write_base_stores(tmp_path)
+
+    triangle = Polygon([(0.0, 30.0), (20.0, 30.0), (0.0, 10.0)])
+    region_gdf = gpd.GeoDataFrame({"geometry": [triangle]}, crs="EPSG:3035")
+    atlas = _AtlasStub(path=tmp_path, region_gdf=region_gdf)
+    unifier = _UnifierStub()
+
+    materialize_area(unifier, atlas, "ATX3")
+
+    land_region_path = tmp_path / "areas" / "ATX3" / "landscape.zarr"
+    land_region = xr.open_zarr(land_region_path, consolidated=False)
+
+    try:
+        valid_mask = land_region["valid_mask"].compute()
+        assert valid_mask.dtype == np.dtype(bool)
+        assert bool(valid_mask.any()) is True
+        assert bool((~valid_mask).any()) is True
+        assert np.isnan(land_region["elevation"].compute().values[~valid_mask.values]).all()
+    finally:
         land_region.close()

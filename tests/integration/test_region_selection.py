@@ -422,6 +422,30 @@ class TestRegionStores:
         assert n_before >= len(subset)
         region_after.close()
 
+    def test_region_stores_rebuild_when_area_valid_mask_is_not_boolean(self, region_atlas: Atlas) -> None:
+        """Area stores rebuild when an existing landscape valid_mask has the wrong dtype."""
+        atlas = region_atlas
+
+        atlas.select(area="Niederösterreich", inplace=True)
+        atlas.build()
+        region_id = atlas._area_id
+        region_land_path = atlas.path / "areas" / region_id / "landscape.zarr"
+
+        region_before = xr.open_zarr(region_land_path, consolidated=False)
+        corrupted = region_before.assign(
+            valid_mask=region_before["valid_mask"].astype(np.float32).where(region_before["valid_mask"], np.nan)
+        )
+        region_before.close()
+        corrupted.to_zarr(region_land_path, mode="w", consolidated=False)
+
+        atlas.build()
+
+        region_after = xr.open_zarr(region_land_path, consolidated=False)
+        try:
+            assert region_after["valid_mask"].dtype == np.dtype(bool)
+        finally:
+            region_after.close()
+
 
 class TestRegionMaterialization:
     """Tests for DomainResult.materialize() with area selection."""

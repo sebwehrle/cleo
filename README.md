@@ -164,6 +164,7 @@ Less common arguments:
 
 - `chunk_policy`: chunk sizes for `y/x` when opening Zarr datasets.
 - `compute_backend`: backend used when CLEO evaluates and writes computed results (`"serial"|"threads"|"processes"|"distributed"`).
+  `processes` requires running from a normal Python script entrypoint; interactive consoles and `python -` should use `threads` or `serial`.
 - `compute_workers`: optional worker cap for local backends (`threads`/`processes`).
   Must be `None` or `1` for `serial`; must be `None` for `distributed`.
 - `area`: optional initial area selection, applied on `build()`.
@@ -373,6 +374,7 @@ Skip this section if you only need wind metrics.
   - optional helper for land-cover workflows; prepares CORINE Land Cover (CLC) data aligned to the wind/GWA grid.
   - with `url=None`, CLC2018 auto-download uses the CLMS API prepackaged-download workflow and expects CLMS auth via
     `CLEO_CLMS_ACCESS_TOKEN` or service key envs (`CLEO_CLMS_SERVICE_KEY_JSON`, `CLEO_CLMS_SERVICE_KEY_PATH`, `CLMS_API_SERVICE_KEY`).
+  - the prepared CLC GeoTIFF is masked to the canonical landscape `valid_mask`, and CLMS raster packages that encode categories as compact ids `1..44` are normalized to canonical CLC codes such as `311` and `312`.
   - multiband rendered inputs (for example RGB/RGBA imagery) are rejected; CLEO expects single-band categorical CLC class rasters.
 - `atlas.landscape.add_clc_category(categories, *, name=None, source="clc2018", if_exists="error")`
   - `categories="all"`: full categorical layer (`land_cover` default name).
@@ -414,6 +416,28 @@ export CLMS_API_SERVICE_KEY="/absolute/path/to/clms_service_key.json"
 export CLEO_CLMS_SERVICE_KEY_JSON='{"service_name":"...","secret":"...","username":"..."}'
 ```
 
+These variables are process configuration, not command-line-only flags. CLEO is a library, so you normally set them in whatever starts Python for your workflow: a shell startup file, IDE run configuration, notebook kernel, service manager, or another application-level environment loader.
+
+Persistent local setup for regular library use:
+
+- Recommended: keep the downloaded service-key JSON in a private file and point `CLEO_CLMS_SERVICE_KEY_PATH` at it.
+- For a source checkout, a path under `.local/secrets/` works well because `.local/` is git-ignored.
+- For an installed dependency, keep the file in your application's private config/secrets location; the path does not need to live inside the CLEO package.
+
+Example shell startup config:
+
+```bash
+export CLEO_CLMS_SERVICE_KEY_PATH="$HOME/.config/cleo/copernicus_service_key.json"
+```
+
+Example source-checkout layout:
+
+```bash
+export CLEO_CLMS_SERVICE_KEY_PATH="/absolute/path/to/your/repo/.local/secrets/copernicus_token.json"
+```
+
+If you launch Python from an IDE, set the same environment variable in the run/debug configuration instead of a shell profile. Once that variable is present, your Python code stays unchanged:
+
 Then run:
 
 ```python
@@ -423,8 +447,10 @@ atlas.build_clc(source="clc2018")
 Notes:
 
 - If both are set, `CLEO_CLMS_ACCESS_TOKEN` is used first.
-- Direct service-key login in CLEO expects JSON fields `service_name`, `secret`, and `username`.
-- If your CLMS key uses another schema (for example `client_id`/`private_key`), mint a bearer token externally and set `CLEO_CLMS_ACCESS_TOKEN`.
+- File-based and inline service-key auth accept both supported CLMS schemas:
+  - legacy keys with `service_name`, `secret`, and `username`
+  - current Copernicus keys with `client_id`, `private_key`, `user_id`, `key_id`, and `token_uri`
+- Current Copernicus service keys are exchanged for a bearer token automatically before the CLMS download request, and CLEO resolves the CLC package through the current `land.copernicus.eu/api` search/data-request endpoints, including the documented finished-request lookup for pre-packaged artifacts.
 - If no CLMS credential env var is set and `url=None`, `build_clc` raises an explicit authentication error.
 - You can always bypass CLMS auth by passing an explicit `url=...` to `build_clc`.
 - CLMS references: `https://land.copernicus.eu/en/how-to-guides/how-to-download-spatial-data/how-to-download-m2m` and `https://eea.github.io/clms-api-docs/authentication.html`.
@@ -523,6 +549,7 @@ Chunking and execution behavior are controlled through `chunk_policy`, dataset c
 - Dask-backed arrays can stay lazy until materialization paths (`materialize`, `persist`, export).
 - Local backend worker cap is controlled by `compute_workers`.
 - `compute_backend="distributed"` requires an active `dask.distributed.Client`.
+- `compute_backend="processes"` requires an importable Python script entrypoint (`if __name__ == "__main__":` for scripts). Use `threads` or `serial` in Python consoles, notebooks, and `python -`.
 
 ```python
 atlas = Atlas(..., compute_backend="processes", compute_workers=4)
@@ -633,6 +660,10 @@ export CLEO_CLMS_SERVICE_KEY_PATH="/path/to/clms_service_key.json"
 export CLEO_CLMS_ACCESS_TOKEN="<your-access-token>"
 ```
 
+For regular library use, set the variable in the environment that launches Python, such as your IDE run configuration, notebook kernel, service manager, or shell startup file.
+
+If CLEO reports that a cached CLC source is unreadable, replace that stale cache entry by retrying with valid CLMS credentials or with `force_download=True`.
+
 **Alternative: provide an explicit download URL**
 
 If you already know the remote CLC file URL, pass it explicitly:
@@ -663,6 +694,7 @@ CLEO processes large rasters. For memory-constrained systems:
    ```python
    atlas = Atlas(..., compute_backend="processes", compute_workers=2)
    ```
+   Use this from a normal Python script, not from a console session.
 
 ### GWA Download Issues
 

@@ -89,7 +89,16 @@ def _check_area_stores_fresh(
 ) -> bool:
     """Check if area stores already exist, are complete, and match base inputs.
 
-    Returns True if stores are fresh and can be skipped.
+    :param paths: Canonical and area store paths.
+    :type paths: _AreaPaths
+    :param area_id: Area identifier being materialized.
+    :type area_id: str
+    :param base_wind_inputs_id: Current canonical wind ``inputs_id``.
+    :type base_wind_inputs_id: str | None
+    :param base_land_inputs_id: Current canonical landscape ``inputs_id``.
+    :type base_land_inputs_id: str | None
+    :returns: ``True`` when both area stores are fresh and reusable.
+    :rtype: bool
     """
     if not (paths.wind_area.exists() and paths.land_area.exists()):
         return False
@@ -107,6 +116,13 @@ def _check_area_stores_fresh(
             and land_area.attrs.get("area_id") == area_id
         )
         if not stores_complete:
+            return False
+        if "valid_mask" in land_area and land_area["valid_mask"].dtype != np.dtype(bool):
+            logger.info(
+                "Area stores for %r use a non-boolean valid_mask (%s); rebuilding.",
+                area_id,
+                land_area["valid_mask"].dtype,
+            )
             return False
 
         base_ids_available = bool(base_wind_inputs_id) and bool(base_land_inputs_id)
@@ -228,10 +244,26 @@ def _create_geometry_mask(
 
 
 def _apply_mask_to_spatial_vars(ds: xr.Dataset, mask_da: xr.DataArray) -> xr.Dataset:
-    """Apply mask only to spatial variables."""
+    """Apply an area mask to spatial variables while preserving boolean masks.
+
+    :param ds: Dataset containing spatial variables on the target area grid.
+    :type ds: xarray.Dataset
+    :param mask_da: Boolean geometry mask with dims ``("y", "x")``.
+    :type mask_da: xarray.DataArray
+    :returns: Dataset with area masking applied.
+    :rtype: xarray.Dataset
+    """
     spatial_vars = [name for name, var in ds.data_vars.items() if "y" in var.dims and "x" in var.dims]
-    if spatial_vars:
-        ds[spatial_vars] = ds[spatial_vars].where(mask_da)
+    if not spatial_vars:
+        return ds
+
+    mask_bool = mask_da.fillna(False).astype(bool)
+    for name in spatial_vars:
+        var = ds[name]
+        if np.issubdtype(var.dtype, np.bool_):
+            ds[name] = var.fillna(False).astype(bool) & mask_bool
+        else:
+            ds[name] = var.where(mask_bool)
     return ds
 
 

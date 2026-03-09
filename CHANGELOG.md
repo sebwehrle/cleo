@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Minimum supported Python version is now 3.11 because the required stable Zarr v3 releases are not available for Python 3.10
-- README now gives a clearer first-time-user path: source-checkout installation, first-run download expectations, defined CLC/NUTS terminology, optional CLC setup, Europe-focused scope notes, remote-only `build_clc(url=...)`, and a more common-path-first API section
+- README now gives a clearer first-time-user path: source-checkout installation, first-run download expectations, defined CLC/NUTS terminology, optional CLC setup, persistent CLMS environment configuration for library and IDE workflows, Europe-focused scope notes, remote-only `build_clc(url=...)`, and a more common-path-first API section
 - `atlas.wind.compute("min_lcoe_turbine", ...)` now masks invalid pixels at the public API boundary instead of surfacing the internal `-1` nodata sentinel
 - Wind public API now uses explicit wind-assessment method vocabulary:
   `capacity_factors` accepts `method`/`interpolation` instead of legacy `mode`,
@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stabilized the phase-3 materialization golden test by pinning its turbine inventory so packaged turbine additions do not spuriously change the expected wind `inputs_id`
 - Removed transient rollout wording from internal prose, renamed integration test modules to stable names, and replaced legacy runtime/provenance labels with canonical identifiers
 - Clarified and regression-tested chunked dask selection for `optimal_power` and `optimal_energy`, confirming the current economics path avoids unsupported fancy indexing
+- `compute_backend="processes"` now fails fast in console-style entrypoints without an importable `__main__` script, avoiding stray multiprocessing shutdown `sys.excepthook` noise and directing users to `threads`/`serial` or a guarded script entrypoint
+- `atlas.build_clc(url=None)` now accepts current Copernicus service-key JSON files for CLMS authentication, follows the current `land.copernicus.eu/api` prepackaged-download flow through finished-request lookup, normalizes CLMS artifact URLs to the documented machine-download path, and raises clearer errors when an unreadable cached CLC source must be refreshed
+- `atlas.build_clc(...)` now masks the prepared CLC GeoTIFF to the canonical landscape validity mask and normalizes compact CLMS raster class ids back to canonical CLC codes so `land_cover` values and `add_clc_category(311)` style selections match the documented CORINE code vocabulary
+- Area landscape stores now preserve `valid_mask` as boolean during polygon masking and rebuild automatically when an older area store contains the broken float/NaN mask representation
 
 ### Security
 - Added a pinned `detect-secrets` workflow with a shared `tools/secret_scan.sh` entrypoint for CI and optional local maintainer checks, replacing the invalid CI `audit --baseline` flow and removing dependence on an activated shell for local pre-commit runs

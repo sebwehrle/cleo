@@ -1,7 +1,9 @@
-"""Phase 5 dask_utils fallback/error path tests."""
+"""dask_utils fallback and error-path tests."""
 
 from __future__ import annotations
 
+import sys
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import numpy as np
@@ -62,3 +64,29 @@ def test_scheduler_context_distributed_path(monkeypatch: pytest.MonkeyPatch) -> 
     with D.scheduler_context(backend="distributed"):
         pass
     assert called["n"] == 1
+
+
+def test_scheduler_context_processes_rejects_console_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "__main__", SimpleNamespace())
+    with pytest.raises(RuntimeError, match="requires running CLEO from an importable Python script entrypoint"):
+        with D.scheduler_context(backend="processes"):
+            pass
+
+
+def test_scheduler_context_processes_accepts_file_backed_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "__main__", SimpleNamespace(__file__="/tmp/cleo_probe.py"))
+    monkeypatch.setattr("cleo.dask_utils.ensure_dask_available", lambda feature: None)
+
+    captured: list[dict[str, object]] = []
+
+    @contextmanager
+    def _capturing_set(**kwargs: object):
+        captured.append(kwargs)
+        yield
+
+    monkeypatch.setitem(sys.modules, "dask", SimpleNamespace(config=SimpleNamespace(set=_capturing_set)))
+
+    with D.scheduler_context(backend="processes", num_workers=2):
+        pass
+
+    assert captured == [{"scheduler": "processes", "num_workers": 2}]

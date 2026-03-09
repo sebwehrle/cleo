@@ -160,72 +160,127 @@ def _validate_values(
     :param context: Context string for error messages
     :raises ValueError: If validation fails
     """
+    validation = _resolved_validation_mode(da, validation)
     if validation == "none":
         return
-
-    if validation == "auto":
-        validation = "probe" if _is_dask_backed(da) else "full"
-
     if validation == "full":
-        # Full-array checks using xarray reductions
-        # bool()/float() on 0-dim result triggers compute if dask-backed
+        _validate_values_full(
+            da,
+            check_nan=check_nan,
+            check_positive=check_positive,
+            check_range=check_range,
+            context=context,
+        )
+        return
+    _validate_values_probe(
+        da,
+        ds,
+        check_nan=check_nan,
+        check_positive=check_positive,
+        check_range=check_range,
+        context=context,
+    )
 
-        if check_nan:
-            # Check for NaN or Inf
-            is_invalid = da.isnull() | np.isinf(da)
-            if bool(is_invalid.any()):
-                nan_count = int(is_invalid.sum())
-                raise ValueError(f"Invalid values {context}: {nan_count} NaN/Inf values found.")
 
-        # For remaining checks, work with finite values only
-        finite_da = da.where(np.isfinite(da))
+def _resolved_validation_mode(da: xr.DataArray, validation: Validation) -> Validation:
+    """Resolve ``auto`` validation to a concrete mode.
 
-        if check_positive:
-            min_val = finite_da.min(skipna=True)
-            # min of empty array (all NaN) returns NaN
-            if not np.isnan(float(min_val)) and float(min_val) <= 0:
-                raise ValueError(f"Invalid values {context}: values must be > 0. Found min={float(min_val):.6g}")
+    :param da: DataArray being validated.
+    :param validation: Requested validation mode.
+    :returns: Concrete validation mode.
+    :rtype: Validation
+    :raises ValueError: If ``validation`` is not one of the supported modes.
+    """
+    allowed: set[str] = {"auto", "full", "probe", "none"}
+    if validation not in allowed:
+        raise ValueError(f"validation must be one of {sorted(allowed)!r}; got {validation!r}")
+    if validation != "auto":
+        return validation
+    return "probe" if _is_dask_backed(da) else "full"
 
-        if check_range is not None:
-            median_val = finite_da.median(skipna=True)
-            # median of empty array (all NaN) returns NaN
-            if not np.isnan(float(median_val)):
-                lo, hi = check_range
-                if not (lo <= float(median_val) <= hi):
-                    raise ValueError(
-                        f"Invalid values {context}: median={float(median_val):.6g} outside expected range [{lo}, {hi}]"
-                    )
 
-    elif validation == "probe":
-        pts = _get_probe_points(ds)
-        if not pts:
-            # Template absent -> skip probe value check (non-fatal)
-            # Structural checks still apply elsewhere
-            return
+def _validate_values_full(
+    da: xr.DataArray,
+    *,
+    check_nan: bool,
+    check_positive: bool,
+    check_range: tuple[float, float] | None,
+    context: str,
+) -> None:
+    """Run full-array value validation.
 
-        vals = _probe_scalars(da, pts)
+    :param da: DataArray to validate.
+    :param check_nan: Check for NaN/Inf values.
+    :param check_positive: Check that finite values are strictly positive.
+    :param check_range: Check that finite-value median lies in range.
+    :param context: Context string for error messages.
+    :raises ValueError: If validation fails.
+    """
+    if check_nan:
+        is_invalid = da.isnull() | np.isinf(da)
+        if bool(is_invalid.any()):
+            nan_count = int(is_invalid.sum())
+            raise ValueError(f"Invalid values {context}: {nan_count} NaN/Inf values found.")
 
-        if check_nan:
-            if np.any(~np.isfinite(vals)):
-                nan_count = int(np.sum(~np.isfinite(vals)))
-                raise ValueError(f"Invalid values {context}: {nan_count}/{len(vals)} probe points are NaN/Inf.")
+    finite_da = da.where(np.isfinite(da))
 
-        if check_positive:
-            finite_vals = vals[np.isfinite(vals)]
-            if finite_vals.size > 0 and np.min(finite_vals) <= 0:
-                raise ValueError(
-                    f"Invalid values {context}: probe values must be > 0. Found min={np.min(finite_vals):.6g}"
-                )
+    if check_positive:
+        min_val = finite_da.min(skipna=True)
+        if not np.isnan(float(min_val)) and float(min_val) <= 0:
+            raise ValueError(f"Invalid values {context}: values must be > 0. Found min={float(min_val):.6g}")
 
-        if check_range is not None:
-            finite_vals = vals[np.isfinite(vals)]
-            if finite_vals.size > 0:
-                median = float(np.nanmedian(finite_vals))
-                lo, hi = check_range
-                if not (lo <= median <= hi):
-                    raise ValueError(
-                        f"Invalid values {context}: probe median={median:.6g} outside expected range [{lo}, {hi}]"
-                    )
+    if check_range is None:
+        return
+    median_val = finite_da.median(skipna=True)
+    if np.isnan(float(median_val)):
+        return
+    lo, hi = check_range
+    if not (lo <= float(median_val) <= hi):
+        raise ValueError(
+            f"Invalid values {context}: median={float(median_val):.6g} outside expected range [{lo}, {hi}]"
+        )
+
+
+def _validate_values_probe(
+    da: xr.DataArray,
+    ds: xr.Dataset,
+    *,
+    check_nan: bool,
+    check_positive: bool,
+    check_range: tuple[float, float] | None,
+    context: str,
+) -> None:
+    """Run probe-point value validation.
+
+    :param da: DataArray to validate.
+    :param ds: Dataset providing probe-point context.
+    :param check_nan: Check for NaN/Inf values.
+    :param check_positive: Check that finite values are strictly positive.
+    :param check_range: Check that finite-value median lies in range.
+    :param context: Context string for error messages.
+    :raises ValueError: If validation fails.
+    """
+    pts = _get_probe_points(ds)
+    if not pts:
+        return
+
+    vals = _probe_scalars(da, pts)
+
+    if check_nan and np.any(~np.isfinite(vals)):
+        nan_count = int(np.sum(~np.isfinite(vals)))
+        raise ValueError(f"Invalid values {context}: {nan_count}/{len(vals)} probe points are NaN/Inf.")
+
+    finite_vals = vals[np.isfinite(vals)]
+
+    if check_positive and finite_vals.size > 0 and np.min(finite_vals) <= 0:
+        raise ValueError(f"Invalid values {context}: probe values must be > 0. Found min={np.min(finite_vals):.6g}")
+
+    if check_range is None or finite_vals.size == 0:
+        return
+    median = float(np.nanmedian(finite_vals))
+    lo, hi = check_range
+    if not (lo <= median <= hi):
+        raise ValueError(f"Invalid values {context}: probe median={median:.6g} outside expected range [{lo}, {hi}]")
 
 
 # =============================================================================
@@ -422,17 +477,14 @@ def _distance_2d_positive_mask(
     return out
 
 
-def distance_to_positive_mask(
-    source: xr.DataArray,
-    valid_mask: xr.DataArray,
-) -> xr.DataArray:
-    """Distance (meters) to nearest finite positive cell in ``source``.
+def _validate_distance_inputs(source: xr.DataArray, valid_mask: xr.DataArray) -> str | None:
+    """Validate distance inputs and return the optional extra dimension.
 
-    Contract:
-    - ``source`` must have spatial dims ``("y", "x")`` with optional one extra non-spatial dim.
-    - ``valid_mask`` must be on the exact same y/x grid and marks cells included in output.
-    - CRS must be projected metric (meters).
-    - Outside ``valid_mask`` output is NaN.
+    :param source: Source raster with spatial dimensions.
+    :param valid_mask: Boolean mask on the same spatial grid.
+    :returns: Extra non-spatial dimension name, if present.
+    :rtype: str | None
+    :raises ValueError: If input dimensions or coordinates are invalid.
     """
     if "x" not in source.dims or "y" not in source.dims:
         raise ValueError("distance source must include spatial dims 'y' and 'x'.")
@@ -449,7 +501,21 @@ def distance_to_positive_mask(
         raise ValueError("distance source x coordinates must match valid_mask exactly.")
     if not np.array_equal(source.coords["y"].values, valid_mask.coords["y"].values):
         raise ValueError("distance source y coordinates must match valid_mask exactly.")
+    return extra_dims[0] if extra_dims else None
 
+
+def _resolve_distance_context(
+    source: xr.DataArray,
+    valid_mask: xr.DataArray,
+) -> tuple[object | None, np.ndarray, float, float]:
+    """Resolve CRS, mask, and spacing context for distance computation.
+
+    :param source: Source raster with spatial dimensions.
+    :param valid_mask: Boolean mask on the same spatial grid.
+    :returns: Tuple of source CRS, boolean valid mask, y spacing, and x spacing.
+    :rtype: tuple[object | None, numpy.ndarray, float, float]
+    :raises ValueError: If CRS or grid spacing is invalid.
+    """
     src_crs = getattr(source.rio, "crs", None)
     mask_crs = getattr(valid_mask.rio, "crs", None)
     crs_input = src_crs if src_crs is not None else mask_crs
@@ -473,47 +539,108 @@ def distance_to_positive_mask(
 
     y_spacing = _axis_spacing_meters(source.coords["y"], dim="y")
     x_spacing = _axis_spacing_meters(source.coords["x"], dim="x")
-
     valid_np = np.asarray(valid_mask.values, dtype=bool)
+    return src_crs, valid_np, y_spacing, x_spacing
 
-    if not extra_dims:
-        dist_np = _distance_2d_positive_mask(
-            np.asarray(source.values),
-            valid_np,
-            y_spacing_m=y_spacing,
-            x_spacing_m=x_spacing,
-        )
-        out = xr.DataArray(
-            dist_np,
-            dims=("y", "x"),
-            coords={"y": source.coords["y"].values, "x": source.coords["x"].values},
-            name=source.name,
-        )
-    else:
-        dim = extra_dims[0]
-        values = []
-        for i in range(source.sizes[dim]):
-            src_slice = source.isel({dim: i})
-            dist_np = _distance_2d_positive_mask(
-                np.asarray(src_slice.values),
+
+def _distance_result_2d(
+    source: xr.DataArray,
+    *,
+    valid_np: np.ndarray,
+    y_spacing: float,
+    x_spacing: float,
+) -> xr.DataArray:
+    """Build a 2D distance result aligned to the source grid.
+
+    :param source: 2D source raster.
+    :param valid_np: Boolean valid-mask array.
+    :param y_spacing: Grid spacing in meters along y.
+    :param x_spacing: Grid spacing in meters along x.
+    :returns: 2D distance result.
+    :rtype: xarray.DataArray
+    """
+    dist_np = _distance_2d_positive_mask(
+        np.asarray(source.values),
+        valid_np,
+        y_spacing_m=y_spacing,
+        x_spacing_m=x_spacing,
+    )
+    return xr.DataArray(
+        dist_np,
+        dims=("y", "x"),
+        coords={"y": source.coords["y"].values, "x": source.coords["x"].values},
+        name=source.name,
+    )
+
+
+def _distance_result_stacked(
+    source: xr.DataArray,
+    *,
+    extra_dim: str,
+    valid_np: np.ndarray,
+    y_spacing: float,
+    x_spacing: float,
+) -> xr.DataArray:
+    """Build a distance result over one extra non-spatial dimension.
+
+    :param source: Source raster with one extra dimension.
+    :param extra_dim: Non-spatial dimension name.
+    :param valid_np: Boolean valid-mask array.
+    :param y_spacing: Grid spacing in meters along y.
+    :param x_spacing: Grid spacing in meters along x.
+    :returns: Distance result with the same dimension order as ``source``.
+    :rtype: xarray.DataArray
+    """
+    values = [
+        xr.DataArray(
+            _distance_2d_positive_mask(
+                np.asarray(source.isel({extra_dim: i}).values),
                 valid_np,
                 y_spacing_m=y_spacing,
                 x_spacing_m=x_spacing,
-            )
-            values.append(
-                xr.DataArray(
-                    dist_np,
-                    dims=("y", "x"),
-                    coords={"y": source.coords["y"].values, "x": source.coords["x"].values},
-                )
-            )
-        if dim in source.coords:
-            dim_coord = source.coords[dim]
-            out = xr.concat(values, dim=dim_coord)
-        else:
-            out = xr.concat(values, dim=dim)
-        out = out.transpose(*source.dims)
-        out.name = source.name
+            ),
+            dims=("y", "x"),
+            coords={"y": source.coords["y"].values, "x": source.coords["x"].values},
+        )
+        for i in range(source.sizes[extra_dim])
+    ]
+    dim_key = source.coords[extra_dim] if extra_dim in source.coords else extra_dim
+    out = xr.concat(values, dim=dim_key)
+    out = out.transpose(*source.dims)
+    out.name = source.name
+    return out
+
+
+def distance_to_positive_mask(
+    source: xr.DataArray,
+    valid_mask: xr.DataArray,
+) -> xr.DataArray:
+    """Distance (meters) to nearest finite positive cell in ``source``.
+
+    Contract:
+    - ``source`` must have spatial dims ``("y", "x")`` with optional one extra non-spatial dim.
+    - ``valid_mask`` must be on the exact same y/x grid and marks cells included in output.
+    - CRS must be projected metric (meters).
+    - Outside ``valid_mask`` output is NaN.
+    """
+    extra_dim = _validate_distance_inputs(source, valid_mask)
+    src_crs, valid_np, y_spacing, x_spacing = _resolve_distance_context(source, valid_mask)
+
+    if extra_dim is None:
+        out = _distance_result_2d(
+            source,
+            valid_np=valid_np,
+            y_spacing=y_spacing,
+            x_spacing=x_spacing,
+        )
+    else:
+        out = _distance_result_stacked(
+            source,
+            extra_dim=extra_dim,
+            valid_np=valid_np,
+            y_spacing=y_spacing,
+            x_spacing=x_spacing,
+        )
 
     if src_crs is not None:
         out = out.rio.write_crs(src_crs)

@@ -139,6 +139,44 @@ def test_distance_to_positive_mask_rejects_irregular_grid() -> None:
         distance_to_positive_mask(source, valid_mask)
 
 
+def test_distance_to_positive_mask_rejects_mismatched_coords() -> None:
+    source = xr.DataArray(
+        np.ones((2, 2), dtype=np.float64),
+        dims=("y", "x"),
+        coords={"y": [0.0, 1.0], "x": [0.0, 1.0]},
+        name="roads",
+    )
+    valid_mask = xr.DataArray(
+        np.ones((2, 2), dtype=bool),
+        dims=("y", "x"),
+        coords={"y": [0.0, 1.0], "x": [0.0, 2.0]},
+    )
+    source = _with_crs(source)
+    valid_mask = _with_crs(valid_mask)
+
+    with pytest.raises(ValueError, match="x coordinates must match"):
+        distance_to_positive_mask(source, valid_mask)
+
+
+def test_distance_to_positive_mask_rejects_multiple_extra_dims() -> None:
+    source = xr.DataArray(
+        np.ones((2, 2, 2, 2), dtype=np.float64),
+        dims=("band", "time", "y", "x"),
+        coords={"band": [1, 2], "time": [0, 1], "y": [0.0, 1.0], "x": [0.0, 1.0]},
+        name="roads",
+    )
+    valid_mask = xr.DataArray(
+        np.ones((2, 2), dtype=bool),
+        dims=("y", "x"),
+        coords={"y": [0.0, 1.0], "x": [0.0, 1.0]},
+    )
+    source = _with_crs(source)
+    valid_mask = _with_crs(valid_mask)
+
+    with pytest.raises(ValueError, match="at most one non-spatial dimension"):
+        distance_to_positive_mask(source, valid_mask)
+
+
 def test_distance_to_positive_mask_rejects_geographic_crs() -> None:
     source = xr.DataArray(
         np.ones((2, 2), dtype=np.float64),

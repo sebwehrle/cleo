@@ -169,6 +169,16 @@ class TestValidateValues:
         # Should NOT raise even with check_positive=True
         _validate_values(da, ds, validation="none", check_positive=True, context="test")
 
+    def test_invalid_validation_mode_raises(self):
+        """Unsupported validation mode should raise explicitly."""
+        ds = self._make_ds_with_template()
+        y = ds.coords["y"].values
+        x = ds.coords["x"].values
+        da = xr.DataArray(np.ones((10, 10)), dims=("y", "x"), coords={"y": y, "x": x})
+
+        with pytest.raises(ValueError, match="validation must be one of"):
+            _validate_values(da, ds, validation="bogus", context="test")  # type: ignore[arg-type]
+
     def test_validation_full_checks_all_values(self):
         """validation='full' checks all values in array."""
         ds = self._make_ds_with_template()

@@ -175,6 +175,13 @@ class NutsAreaName(str):
 
 
 class Atlas:
+    """Atlas-centered public entry point for CLEO workflows.
+
+    ``Atlas`` owns workspace state, canonical store paths, optional area
+    selection, runtime configuration, and access to the wind and landscape
+    domain facades.
+    """
+
     DEFAULT_NUTS_LEVEL = 2
     _VALID_NUTS_LEVELS = (0, 1, 2, 3)
     DEFAULT_HOURS_PER_YEAR = 8766.0

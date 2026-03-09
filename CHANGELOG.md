@@ -19,11 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - This changelog
 
 ### Changed
-- Tightened mypy configuration: enabled `check_untyped_defs` and `warn_unused_ignores`, aligned the local maintainer hook to read the tracked `pyproject.toml` config instead of a divergent local mypy profile, and kept the existing `warn_return_any` suppression until the wider xarray typing backlog is addressed
+- Tightened packaging and static-type metadata: `pyproject.toml` now uses an SPDX-style `MIT` license string compatible with current setuptools guidance, and the tracked mypy configuration now reflects the current passing maintainer-tool state with the obsolete `misc` suppression removed while retaining the error-code families still needed by the checked toolchain
 - Tightened complexity check threshold from Grade E (CC > 30) to Grade D (CC > 20)
 - Refactored turbine selection/configuration validation onto a neutral internal helper module so `WindDomain.select()` keeps its `list|tuple` contract, `Atlas.configure_turbines()` still accepts general `Sequence[str]`, and both paths share the same turbine-ID normalization rules
 - Minimum supported Python version is now 3.11 because the required stable Zarr v3 releases are not available for Python 3.10
-- README now gives a clearer first-time-user path: source-checkout installation, first-run download expectations, defined CLC/NUTS terminology, optional CLC setup, persistent CLMS environment configuration for library and IDE workflows, Europe-focused scope notes, remote-only `build_clc(url=...)`, and a more common-path-first API section
+- README and API-adjacent documentation now give a clearer first-time-user path: source-checkout installation, first-run download expectations, defined CLC/NUTS terminology, optional CLC setup, persistent CLMS environment configuration for library and IDE workflows, Europe-focused scope notes, remote-only `build_clc(url=...)`, a more common-path-first API section, the full `configure_economics(...)` option list including `grid_connect_cost_eur_per_kw`, and complete public docstrings for the remaining Atlas and dask utility surfaces
 - `atlas.wind.compute("min_lcoe_turbine", ...)` now masks invalid pixels at the public API boundary instead of surfacing the internal `-1` nodata sentinel
 - Wind public API now uses explicit wind-assessment method vocabulary:
   `capacity_factors` accepts `method`/`interpolation` instead of legacy `mode`,

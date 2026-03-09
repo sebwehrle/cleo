@@ -212,9 +212,10 @@ The two main datasets are `atlas.wind.data` and `atlas.landscape.data`.
   - default is 8766.0 hours/year when not configured.
 - `atlas.timebase_configured`
   - configured timebase dict (`{"hours_per_year": float}`) or `None`.
-- `atlas.configure_economics(discount_rate, lifetime_a, om_fixed_eur_per_kw_a, om_variable_eur_per_kwh, bos_cost_share)`
+- `atlas.configure_economics(discount_rate, lifetime_a, om_fixed_eur_per_kw_a, om_variable_eur_per_kwh, bos_cost_share, grid_connect_cost_eur_per_kw)`
   - configure baseline economics assumptions for LCOE-family metrics.
   - all parameters are optional; multiple calls merge values.
+  - `grid_connect_cost_eur_per_kw` defaults to `50.0` when not configured; set it to `0.0` to exclude grid-connection costs.
   - per-call overrides via `economics={...}` take precedence over baseline.
 - `atlas.economics_configured`
   - configured economics dict or `None`.
@@ -313,12 +314,17 @@ The most common starting points are `wind_speed`, `capacity_factors`, and `lcoe`
     - `cf={...}`: CF parameters. Keys: `method`, `interpolation`, `air_density`, `rews_n`, `loss_factor`.
       Defaults: `method="rotor_node_average"`, `interpolation="auto"`, `air_density=False`, `rews_n=12`, `loss_factor=1.0`.
     - `economics={...}`: Economics parameters. Required: `discount_rate`, `lifetime_a`,
-      `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`. Optional: `bos_cost_share` (default 0.0).
+      `om_fixed_eur_per_kw_a`, `om_variable_eur_per_kwh`. Optional: `bos_cost_share` (default 0.0),
+      `grid_connect_cost_eur_per_kw` (default 50.0; use 0.0 to exclude grid-connection costs).
     - Economics can be pre-configured at Atlas level via `atlas.configure_economics(...)`.
   - Timebase (`hours_per_year`) is configured at Atlas level via `atlas.configure_timebase(...)`.
   - Example:
     ```python
-    atlas.configure_economics(discount_rate=0.05, lifetime_a=25)
+    atlas.configure_economics(
+        discount_rate=0.05,
+        lifetime_a=25,
+        grid_connect_cost_eur_per_kw=50.0,
+    )
     atlas.wind.compute(
         "lcoe",
         cf={"method": "hub_height_weibull"},

@@ -159,7 +159,9 @@ def maybe_chunk(
     *,
     chunks: ChunksArg,
     enabled: bool = True,
-) -> xr.DataArray: ...
+) -> xr.DataArray:
+    """Typed overload for chunking a ``DataArray`` input."""
+    ...
 
 
 @overload
@@ -168,7 +170,9 @@ def maybe_chunk(
     *,
     chunks: ChunksArg,
     enabled: bool = True,
-) -> xr.Dataset: ...
+) -> xr.Dataset:
+    """Typed overload for chunking a ``Dataset`` input."""
+    ...
 
 
 def maybe_chunk(
@@ -300,11 +304,15 @@ def scheduler_context(*, backend: ComputeBackend, num_workers: ComputeWorkers = 
 
 
 @overload
-def compute(obj: xr.DataArray, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.DataArray: ...
+def compute(obj: xr.DataArray, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.DataArray:
+    """Typed overload for computing a ``DataArray`` input."""
+    ...
 
 
 @overload
-def compute(obj: xr.Dataset, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.Dataset: ...
+def compute(obj: xr.Dataset, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.Dataset:
+    """Typed overload for computing a ``Dataset`` input."""
+    ...
 
 
 def compute(
@@ -320,11 +328,15 @@ def compute(
 
 
 @overload
-def persist(obj: xr.DataArray, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.DataArray: ...
+def persist(obj: xr.DataArray, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.DataArray:
+    """Typed overload for persisting a ``DataArray`` input."""
+    ...
 
 
 @overload
-def persist(obj: xr.Dataset, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.Dataset: ...
+def persist(obj: xr.Dataset, *, backend: ComputeBackend, num_workers: ComputeWorkers = None) -> xr.Dataset:
+    """Typed overload for persisting a ``Dataset`` input."""
+    ...
 
 
 def persist(

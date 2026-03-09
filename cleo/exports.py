@@ -152,6 +152,114 @@ def _assert_exact_shared_spatial_grid(wind_ds: xr.Dataset, landscape_ds: xr.Data
             )
 
 
+def _build_single_domain_export(
+    ds: xr.Dataset | None,
+    *,
+    domain: Literal["wind", "landscape"],
+    include_only: Sequence[str] | None,
+    exclude_template: bool,
+) -> xr.Dataset:
+    """Filter one export domain and raise if the source dataset is missing.
+
+    :param ds: Source dataset for the requested domain.
+    :param domain: Domain label used in error reporting.
+    :param include_only: Optional variable subset.
+    :param exclude_template: Whether to exclude template variables.
+    :returns: Filtered export dataset.
+    :raises ValueError: If the required source dataset is missing.
+    """
+    if ds is None:
+        raise ValueError(f"{domain}_ds required for domain={domain!r}")
+    return _filter_variables(ds, include_only=include_only, exclude_template=exclude_template)
+
+
+def _split_combined_include_only(
+    include_only: Sequence[str] | None,
+    *,
+    prefix: bool,
+) -> tuple[Sequence[str] | None, Sequence[str] | None]:
+    """Split combined-export selections into wind and landscape subsets.
+
+    :param include_only: Optional combined export selection.
+    :param prefix: Whether combined exports require domain prefixes.
+    :returns: Tuple ``(wind_include, landscape_include)``.
+    :raises ValueError: If a prefixed combined selection includes an invalid name.
+    """
+    if include_only is None or not prefix:
+        return include_only, include_only
+
+    wind_vars: list[str] = []
+    land_vars: list[str] = []
+    for name in include_only:
+        if name.startswith("wind__"):
+            wind_vars.append(name[6:])
+        elif name.startswith("landscape__"):
+            land_vars.append(name[11:])
+        else:
+            raise ValueError(
+                f"Variable {name!r} does not have expected prefix "
+                f"('wind__' or 'landscape__') for domain='both' with prefix=True"
+            )
+    return wind_vars, land_vars
+
+
+def _filter_combined_domain(
+    ds: xr.Dataset,
+    *,
+    include_only: Sequence[str] | None,
+    exclude_template: bool,
+) -> xr.Dataset:
+    """Filter one side of a combined export.
+
+    :param ds: Source dataset for one export domain.
+    :param include_only: Optional variable subset for that domain.
+    :param exclude_template: Whether to exclude template variables.
+    :returns: Filtered dataset or an empty dataset for an intentionally skipped domain.
+    """
+    if include_only is not None and len(include_only) == 0:
+        return _empty_dataset()
+    return _filter_variables(ds, include_only=include_only, exclude_template=exclude_template)
+
+
+def _merge_combined_export_domains(
+    wind_filtered: xr.Dataset,
+    landscape_filtered: xr.Dataset,
+    *,
+    prefix: bool,
+) -> xr.Dataset:
+    """Merge filtered wind and landscape export datasets.
+
+    :param wind_filtered: Filtered wind export dataset.
+    :param landscape_filtered: Filtered landscape export dataset.
+    :param prefix: Whether to prefix variables before merging.
+    :returns: Merged export dataset.
+    :raises ValueError: If both datasets contribute data on mismatched grids, if
+        unprefixed names collide, or if the final export has no data variables.
+    """
+    if wind_filtered.data_vars and landscape_filtered.data_vars:
+        _assert_exact_shared_spatial_grid(wind_filtered, landscape_filtered)
+
+    if prefix:
+        wind_export = _prefix_variables(wind_filtered, "wind__")
+        landscape_export = _prefix_variables(landscape_filtered, "landscape__")
+    else:
+        wind_var_names = set(wind_filtered.data_vars.keys())
+        landscape_var_names = set(landscape_filtered.data_vars.keys())
+        overlap = wind_var_names & landscape_var_names
+        if overlap:
+            raise ValueError(
+                f"Variable name collision when exporting domain='both' with prefix=False: "
+                f"{sorted(overlap)}. Set prefix=True to avoid collisions."
+            )
+        wind_export = wind_filtered
+        landscape_export = landscape_filtered
+
+    result = xr.merge([wind_export, landscape_export], compat="override")
+    if len(result.data_vars) == 0:
+        raise ValueError("No variables to export after filtering. Check include_only and exclude_template settings.")
+    return result
+
+
 def build_analysis_export_dataset(
     wind_ds: xr.Dataset | None,
     landscape_ds: xr.Dataset | None,
@@ -194,19 +302,17 @@ def build_analysis_export_dataset(
         landscape exports do not share the same ``x``/``y`` grid.
     """
     if domain == "wind":
-        if wind_ds is None:
-            raise ValueError("wind_ds required for domain='wind'")
-        result = _filter_variables(
+        result = _build_single_domain_export(
             wind_ds,
+            domain="wind",
             include_only=include_only,
             exclude_template=exclude_template,
         )
 
     elif domain == "landscape":
-        if landscape_ds is None:
-            raise ValueError("landscape_ds required for domain='landscape'")
-        result = _filter_variables(
+        result = _build_single_domain_export(
             landscape_ds,
+            domain="landscape",
             include_only=include_only,
             exclude_template=exclude_template,
         )
@@ -216,76 +322,18 @@ def build_analysis_export_dataset(
             raise ValueError("wind_ds required for domain='both'")
         if landscape_ds is None:
             raise ValueError("landscape_ds required for domain='both'")
-
-        # Filter each domain first (before prefixing, using raw variable names)
-        # For include_only with prefixed names, we need to handle differently
-        if include_only is not None and prefix:
-            # Parse prefixed names to determine which vars from each domain
-            wind_vars = []
-            land_vars = []
-            for name in include_only:
-                if name.startswith("wind__"):
-                    wind_vars.append(name[6:])  # Remove "wind__" prefix
-                elif name.startswith("landscape__"):
-                    land_vars.append(name[11:])  # Remove "landscape__" prefix
-                else:
-                    raise ValueError(
-                        f"Variable {name!r} does not have expected prefix "
-                        f"('wind__' or 'landscape__') for domain='both' with prefix=True"
-                    )
-            # None means "all vars", empty list means "no vars from this domain"
-            wind_include = wind_vars if wind_vars else []
-            land_include = land_vars if land_vars else []
-        else:
-            wind_include = include_only
-            land_include = include_only
-
-        # Preserve one-sided selections like ["wind__capacity_factors"] while
-        # still rejecting fully empty exports after the merge below.
-        if wind_include is not None and len(wind_include) == 0:
-            wind_filtered = _empty_dataset()
-        else:
-            wind_filtered = _filter_variables(
-                wind_ds,
-                include_only=wind_include,
-                exclude_template=exclude_template,
-            )
-
-        if land_include is not None and len(land_include) == 0:
-            land_filtered = _empty_dataset()
-        else:
-            land_filtered = _filter_variables(
-                landscape_ds,
-                include_only=land_include,
-                exclude_template=exclude_template,
-            )
-
-        if wind_filtered.data_vars and land_filtered.data_vars:
-            _assert_exact_shared_spatial_grid(wind_filtered, land_filtered)
-
-        if prefix:
-            wind_prefixed = _prefix_variables(wind_filtered, "wind__")
-            land_prefixed = _prefix_variables(land_filtered, "landscape__")
-        else:
-            # Check for collisions
-            wind_var_names: set[str] = set(wind_filtered.data_vars.keys())
-            land_var_names: set[str] = set(land_filtered.data_vars.keys())
-            overlap = wind_var_names & land_var_names
-            if overlap:
-                raise ValueError(
-                    f"Variable name collision when exporting domain='both' with prefix=False: "
-                    f"{sorted(overlap)}. Set prefix=True to avoid collisions."
-                )
-            wind_prefixed = wind_filtered
-            land_prefixed = land_filtered
-
-        # Merge datasets
-        # Use the wind coords as primary (both should have same y/x)
-        result = xr.merge([wind_prefixed, land_prefixed], compat="override")
-        if len(result.data_vars) == 0:
-            raise ValueError(
-                "No variables to export after filtering. Check include_only and exclude_template settings."
-            )
+        wind_include, land_include = _split_combined_include_only(include_only, prefix=prefix)
+        wind_filtered = _filter_combined_domain(
+            wind_ds,
+            include_only=wind_include,
+            exclude_template=exclude_template,
+        )
+        land_filtered = _filter_combined_domain(
+            landscape_ds,
+            include_only=land_include,
+            exclude_template=exclude_template,
+        )
+        result = _merge_combined_export_domains(wind_filtered, land_filtered, prefix=prefix)
 
     else:
         raise ValueError(f"Invalid domain {domain!r}. Expected 'wind', 'landscape', or 'both'.")

@@ -43,6 +43,7 @@ import numpy as np
 import xarray as xr
 from pathlib import Path
 
+from cleo._turbine_validation import _normalize_turbine_ids, _validate_sequence_not_scalar
 from cleo.results import DomainResult, normalize_metric_for_active_wind_store
 from cleo.spatial import distance_to_positive_mask
 from cleo.wind_metrics import (
@@ -66,6 +67,32 @@ from cleo.unification.store_io import (
     turbine_ids_from_json,
 )
 from cleo.validation import validate_dataset, ValidationError
+
+
+def _validate_turbine_index_list(
+    indices: list[object],
+    available: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Validate turbine indices and convert to turbine IDs.
+
+    :param indices: List of integer indices to validate.
+    :param available: Available turbine IDs.
+    :returns: Tuple of turbine IDs corresponding to validated indices.
+    :raises ValueError: If any index is not an int, out of range, or duplicate.
+    """
+    n = len(available)
+    selected: list[str] = []
+    seen: set[int] = set()
+    for idx in indices:
+        if not isinstance(idx, int) or isinstance(idx, bool):
+            raise ValueError(f"Each turbine index must be an integer, got {type(idx).__name__}")
+        if idx < 0 or idx >= n:
+            raise ValueError(f"turbine index out of range: {idx}. Valid range is [0, {n - 1}]")
+        if idx in seen:
+            raise ValueError(f"Duplicate turbine index: {idx}")
+        seen.add(idx)
+        selected.append(available[idx])
+    return tuple(selected)
 
 
 _DISTANCE_SPEC_ALGO = "edt"
@@ -298,7 +325,7 @@ def _resolve_turbines_for_metric(
     else:
         if len(turbines) == 0:
             raise ValueError("turbines must be non-empty; see atlas.wind.turbines")
-        turbines = domain._validate_turbines(list(turbines))
+        turbines = _normalize_turbine_ids(list(turbines), available=domain.turbines)
     kwargs["turbines"] = turbines
 
 
@@ -502,21 +529,6 @@ class WindDomain:
         """
         return self._atlas._wind_selected_turbines
 
-    def _validate_turbines(self, turbines: list[str]) -> tuple[str, ...]:
-        """
-        Validate turbine IDs against available turbines.
-
-        :param turbines: Turbine IDs to validate.
-        :returns: Validated turbine IDs.
-        :raises ValueError: If any requested turbine ID is unknown.
-        """
-        available = set(self.turbines)
-        requested = set(turbines)
-        unknown = requested - available
-        if unknown:
-            raise ValueError(f"Unknown turbines: {sorted(unknown)}; see atlas.wind.turbines")
-        return tuple(turbines)
-
     def _apply_public_turbine_index(self, ds: xr.Dataset) -> xr.Dataset:
         """
         Make turbine selection user-facing by name, while keeping internal ids.
@@ -589,60 +601,26 @@ class WindDomain:
         if (turbines is None) == (turbine_indices is None):
             raise ValueError("Provide exactly one of turbines=... or turbine_indices=....")
 
-        if turbines is not None:
-            if isinstance(turbines, (str, bytes)):
-                raise ValueError(
-                    "turbines must be a non-empty list/tuple of turbine IDs; "
-                    "got a single string/bytes value. Use turbines=[...]."
-                )
-            if not isinstance(turbines, (list, tuple)):
-                raise ValueError(f"turbines must be a list/tuple of strings, got {type(turbines).__name__}")
-            if not turbines:
-                raise ValueError("turbines must be non-empty; use clear_selection() to clear")
-
-            # Validate: strings, strip, reject empty, reject duplicates
-            cleaned = []
-            seen = set()
-            for item in turbines:
-                if not isinstance(item, str):
-                    raise ValueError(f"Each turbine ID must be a string, got {type(item).__name__}")
-                stripped = item.strip()
-                if not stripped:
-                    raise ValueError("Turbine ID cannot be empty or whitespace-only")
-                if stripped in seen:
-                    raise ValueError(f"Duplicate turbine ID: {stripped!r}")
-                seen.add(stripped)
-                cleaned.append(stripped)
-
-            # Validate against available turbines
-            validated = self._validate_turbines(cleaned)
-            self._atlas._wind_selected_turbines = validated
-            return None
-
-        # turbine_indices path
-        if isinstance(turbine_indices, (str, bytes)):
-            raise ValueError("turbine_indices must be a non-empty list/tuple of integers; got a string/bytes value.")
-        if not isinstance(turbine_indices, (list, tuple)):
-            raise ValueError(f"turbine_indices must be a list/tuple of integers, got {type(turbine_indices).__name__}")
-        if not turbine_indices:
-            raise ValueError("turbine_indices must be non-empty; use clear_selection() to clear")
-
         available = self.turbines
-        n_available = len(available)
-        selected: list[str] = []
-        seen_indices: set[int] = set()
-        for idx in turbine_indices:
-            if not isinstance(idx, int) or isinstance(idx, bool):
-                raise ValueError(f"Each turbine index must be an integer, got {type(idx).__name__}")
-            if idx < 0 or idx >= n_available:
-                raise ValueError(f"turbine index out of range: {idx}. Valid range is [0, {n_available - 1}]")
-            if idx in seen_indices:
-                raise ValueError(f"Duplicate turbine index: {idx}")
-            seen_indices.add(idx)
-            selected.append(available[idx])
 
-        self._atlas._wind_selected_turbines = tuple(selected)
-        return None
+        if turbines is not None:
+            items = _validate_sequence_not_scalar(
+                turbines,
+                "turbines",
+                "turbine IDs",
+                empty_hint="use clear_selection() to clear",
+            )
+            validated = _normalize_turbine_ids(items, available=available)
+        else:
+            items = _validate_sequence_not_scalar(
+                turbine_indices,
+                "turbine_indices",
+                "integers",
+                empty_hint="use clear_selection() to clear",
+            )
+            validated = _validate_turbine_index_list(items, available)
+
+        self._atlas._wind_selected_turbines = validated
 
     def clear_selection(self) -> None:
         """

@@ -48,30 +48,30 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install radon vulture
 
-      - name: Check cyclomatic complexity (fail on grade E)
+      - name: Check cyclomatic complexity (fail on grade D)
         run: |
-          echo "Checking for very high complexity functions (grade E, CC > 30)..."
-          GRADE_E=$(radon cc cleo --min E -s 2>/dev/null || true)
-          if [[ -n "$GRADE_E" ]]; then
-            echo "FAIL: Functions with complexity grade E found (CC > 30):"
-            echo "$GRADE_E"
+          echo "Checking for blocking complexity functions (grade D or worse, CC > 20)..."
+          GRADE_D_OR_WORSE=$(radon cc cleo --min D -s 2>/dev/null || true)
+          if [[ -n "$GRADE_D_OR_WORSE" ]]; then
+            echo "FAIL: Functions with complexity grade D or worse found (CC > 20):"
+            echo "$GRADE_D_OR_WORSE"
             echo ""
             echo "These functions must be refactored to reduce complexity."
             exit 1
           fi
-          echo "OK: No grade E functions found"
+          echo "OK: No grade D or worse functions found"
 
-      - name: Check cyclomatic complexity (warn on grade D)
+      - name: Check cyclomatic complexity (report grade E)
         run: |
-          echo "Checking for high complexity functions (grade D, CC 21-30)..."
-          GRADE_D=$(radon cc cleo --min D --max D -s 2>/dev/null || true)
-          if [[ -n "$GRADE_D" ]]; then
-            echo "WARNING: Functions with complexity grade D found (CC 21-30):"
-            echo "$GRADE_D"
+          echo "Checking for critical complexity functions (grade E, CC > 30)..."
+          GRADE_E=$(radon cc cleo --min E -s 2>/dev/null || true)
+          if [[ -n "$GRADE_E" ]]; then
+            echo "Critical functions with complexity grade E found (CC > 30):"
+            echo "$GRADE_E"
             echo ""
-            echo "Consider refactoring these functions in future PRs."
+            echo "These are a subset of the grade D-or-worse failure threshold."
           else
-            echo "OK: No grade D functions found"
+            echo "OK: No grade E functions found"
           fi
 
       - name: Check maintainability index

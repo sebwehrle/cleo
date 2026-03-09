@@ -171,7 +171,7 @@ def _evaluate_for_io(
     """
     if callable(evaluator):
         return evaluator(obj)
-    return dask_compute(obj, backend=backend, num_workers=workers)  # type: ignore[call-overload]
+    return dask_compute(obj, backend=backend, num_workers=workers)
 
 
 @dataclass(frozen=True)

@@ -9,6 +9,7 @@ Verifies:
 import pytest
 import zarr
 import json
+from collections import UserList
 from pathlib import Path
 from types import SimpleNamespace
 from cleo.atlas import Atlas
@@ -156,6 +157,38 @@ class TestAtlasConstructorContractA2:
                 compute_backend="distributed",
                 compute_workers=2,
             )
+
+    def test_configure_turbines_normalizes_and_preserves_order(self, tmp_path: Path) -> None:
+        atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
+
+        atlas.configure_turbines([" Vestas.V90.2000 ", "Enercon.E40.500"])
+
+        assert atlas.turbines_configured == ("Vestas.V90.2000", "Enercon.E40.500")
+
+    def test_configure_turbines_rejects_single_string(self, tmp_path: Path) -> None:
+        atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
+
+        with pytest.raises(ValueError, match="single string/bytes"):
+            atlas.configure_turbines("Enercon.E40.500")  # type: ignore[arg-type]
+
+    def test_configure_turbines_rejects_none(self, tmp_path: Path) -> None:
+        atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
+
+        with pytest.raises(ValueError, match="sequence of turbine IDs"):
+            atlas.configure_turbines(None)  # type: ignore[arg-type]
+
+    def test_configure_turbines_accepts_general_sequence(self, tmp_path: Path) -> None:
+        atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
+
+        atlas.configure_turbines(UserList([" Vestas.V90.2000 ", "Enercon.E40.500"]))
+
+        assert atlas.turbines_configured == ("Vestas.V90.2000", "Enercon.E40.500")
+
+    def test_configure_turbines_rejects_duplicate_ids(self, tmp_path: Path) -> None:
+        atlas = Atlas(tmp_path, country="AUT", crs="epsg:3035")
+
+        with pytest.raises(ValueError, match="Duplicate turbine ID"):
+            atlas.configure_turbines(["Enercon.E40.500", " Enercon.E40.500 "])
 
     def test_atlas_construction_performs_no_heavy_io(self, tmp_path: Path) -> None:
         """Atlas construction performs no heavy I/O per contract A2.

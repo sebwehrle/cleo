@@ -72,7 +72,7 @@ def normalize_compute_backend(backend: str) -> ComputeBackend:
         raise ValueError(
             f"Unknown compute_backend {backend!r}. Expected one of: 'serial', 'threads', 'processes', 'distributed'."
         )
-    return normalized  # type: ignore[return-value]
+    return normalized
 
 
 def normalize_compute_workers(workers: int | None, *, backend: ComputeBackend) -> int | None:
@@ -117,7 +117,7 @@ def chunks_for_rasterio(*, chunks: ChunksArg, enabled: bool = True) -> dict[str,
 def _is_duck_dask_array(arr: Any) -> bool:
     """Return ``True`` if ``arr`` behaves like a dask-backed array."""
     try:
-        from xarray.core.utils import is_duck_dask_array  # type: ignore
+        from xarray.core.utils import is_duck_dask_array
     except (ImportError, ModuleNotFoundError):
         return False
     try:
@@ -193,7 +193,7 @@ def maybe_chunk(
     ensure_dask_available(feature="Chunking")
     if chunks == "auto":
         try:
-            return obj.chunk("auto")  # type: ignore[arg-type]
+            return obj.chunk("auto")
         except (ValueError, TypeError, AttributeError, RuntimeError) as e:
             raise ValueError(f"Failed to chunk object with chunks='auto'. Available dims: {tuple(obj.dims)!r}") from e
 
@@ -204,7 +204,7 @@ def maybe_chunk(
             chunks_n = {"band": 1, **chunks_n}
 
     try:
-        return obj.chunk(chunks_n)  # type: ignore[arg-type]
+        return obj.chunk(chunks_n)
     except (ValueError, TypeError, AttributeError, RuntimeError) as e:
         raise ValueError(f"Failed to chunk object with chunks={chunks_n!r}. Available dims: {tuple(obj.dims)!r}") from e
 

@@ -383,7 +383,7 @@ def _open_gwa_raster(
     _ensure_proj_crs_preflight(target_crs)
 
     da_raw = rxr.open_rasterio(path, chunks=None)
-    da: xr.DataArray = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
+    da: xr.DataArray = da_raw.squeeze(drop=True)
 
     # Ensure CRS is set (use cache if needed)
     if da.rio.crs is None:

@@ -689,6 +689,118 @@ def _rio_clip_robust(da, geoms, *, drop: bool, all_touched_primary: bool = False
             raise ClipNoDataInBounds("Geometry does not overlap raster bounds") from e
 
 
+def _validate_clip_inputs(self, clip_shape: gpd.GeoDataFrame) -> tuple[xr.Dataset, object]:
+    """Validate clip inputs and return the source dataset plus raster CRS.
+
+    :param self: Domain-like object exposing ``data`` and ``parent.crs``.
+    :param clip_shape: Geometry used for clipping.
+    :returns: Tuple ``(source_dataset, raster_crs)``.
+    :raises ValueError: If the source dataset, CRS, or clip geometry is invalid.
+    :raises TypeError: If ``clip_shape`` is not a GeoDataFrame.
+    """
+    if self.data is None:
+        raise ValueError(f"There is no data in {self}")
+
+    raster_crs = self.data.rio.crs
+    if raster_crs is None:
+        raise ValueError("Atlas data has no CRS set (self.data.rio.crs is None).")
+    if self.parent is None or getattr(self.parent, "crs", None) is None:
+        raise ValueError("Atlas parent CRS is missing (self.parent.crs is None).")
+    if not crs_equal(raster_crs, self.parent.crs):
+        raise ValueError(
+            f"CRS inconsistency: data.rio.crs={raster_crs} but parent.crs={self.parent.crs}. This must never happen."
+        )
+    if not isinstance(clip_shape, gpd.GeoDataFrame):
+        raise TypeError("clip_shape must be a geopandas.GeoDataFrame. Path arguments should be handled by the caller.")
+    if clip_shape.empty:
+        raise ValueError("Clipping geometry is empty.")
+    if clip_shape.crs is None:
+        raise ValueError("Clipping geometry CRS is missing (clip_shape.crs is None).")
+
+    return self.data, raster_crs
+
+
+def _repair_clip_geometry_feature(geom):
+    """Repair one geometry feature if possible.
+
+    :param geom: Shapely geometry or ``None``.
+    :returns: Repaired geometry, the original geometry, or ``None``.
+    """
+    if geom is None:
+        return None
+    try:
+        from shapely.make_valid import make_valid
+
+        return make_valid(geom)
+    except ImportError:
+        try:
+            return geom.buffer(0)
+        except (AttributeError, TypeError, ValueError):
+            return geom
+
+
+def _repair_clip_shape_if_needed(clip_shape: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Repair invalid clip geometries when needed.
+
+    :param clip_shape: Candidate clipping geometry.
+    :returns: Original or repaired clipping geometry.
+    :raises ValueError: If repair leaves the geometry invalid or empty.
+    """
+    invalid_mask = ~clip_shape.is_valid
+    if not invalid_mask.any():
+        return clip_shape
+
+    n_invalid = int(invalid_mask.sum())
+    logger.warning(f"Clipping geometry has {n_invalid} invalid feature(s); attempting auto-repair.")
+
+    repaired = clip_shape.copy()
+    repaired["geometry"] = repaired.geometry.apply(_repair_clip_geometry_feature)
+    if repaired.empty or repaired.geometry.is_empty.all():
+        raise ValueError("Clipping geometry became empty after auto-repair.")
+    if not repaired.is_valid.all():
+        raise ValueError("Clipping geometry remains invalid after auto-repair; aborting.")
+    return repaired
+
+
+def _build_clipped_dataset_template(source_ds: xr.Dataset, raster_crs) -> xr.Dataset:
+    """Build an empty clipped dataset template with metadata preserved.
+
+    :param source_ds: Source dataset being clipped.
+    :param raster_crs: CRS to write onto the clipped dataset.
+    :returns: Empty dataset with preserved attrs and non-spatial coords.
+    """
+    data_clipped = xr.Dataset().rio.write_crs(raster_crs.to_string())
+    for name, coord in source_ds.coords.items():
+        if name in ("x", "y", "spatial_ref"):
+            continue
+        if ("x" in coord.dims) or ("y" in coord.dims):
+            continue
+        data_clipped = data_clipped.assign_coords({name: coord})
+    data_clipped.attrs = dict(source_ds.attrs)
+    return data_clipped
+
+
+def _clip_dataset_variables(source_ds: xr.Dataset, geoms: list, target_ds: xr.Dataset) -> xr.Dataset:
+    """Clip all data variables from a source dataset into the target dataset.
+
+    :param source_ds: Source dataset being clipped.
+    :param geoms: Iterable of clip geometries.
+    :param target_ds: Target dataset receiving clipped variables.
+    :returns: Target dataset with clipped variables populated.
+    :raises ValueError: If clipping fails or the geometry does not overlap the raster.
+    """
+    from cleo.errors import ClipNoDataInBounds
+
+    for var_name, var in source_ds.data_vars.items():
+        try:
+            target_ds[var_name] = _rio_clip_robust(var, geoms, drop=True, all_touched_primary=False)
+        except ClipNoDataInBounds as e:
+            raise ValueError(f"Clipping geometry does not overlap raster bounds for variable '{var_name}'.") from e
+        except (ValueError, TypeError, RuntimeError) as e:
+            raise ValueError(f"Error clipping data variable '{var_name}'") from e
+    return target_ds
+
+
 # %% methods
 def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> tuple[xr.Dataset, gpd.GeoDataFrame]:
     """
@@ -710,96 +822,17 @@ def clip_to_geometry(self, clip_shape: gpd.GeoDataFrame) -> tuple[xr.Dataset, gp
     :raises ValueError: If data/CRS/geometry is invalid or empty.
     :raises TypeError: If ``clip_shape`` is not a GeoDataFrame.
     """
-    # Ensure data is loaded
-    if self.data is None:
-        raise ValueError(f"There is no data in {self}")
+    source_ds, raster_crs = _validate_clip_inputs(self, clip_shape)
+    clip_shape = _repair_clip_shape_if_needed(clip_shape)
 
-    # Enforce Atlas CRS consistency invariant (per Sebastian)
-    if self.data.rio.crs is None:
-        raise ValueError("Atlas data has no CRS set (self.data.rio.crs is None).")
-    if self.parent is None or getattr(self.parent, "crs", None) is None:
-        raise ValueError("Atlas parent CRS is missing (self.parent.crs is None).")
-    # Semantic CRS comparison using centralized helper
-    if not crs_equal(self.data.rio.crs, self.parent.crs):
-        raise ValueError(
-            f"CRS inconsistency: data.rio.crs={self.data.rio.crs} "
-            f"but parent.crs={self.parent.crs}. This must never happen."
-        )
-
-    # Validate clip_shape type (primitives-only: no path handling here)
-    if not isinstance(clip_shape, gpd.GeoDataFrame):
-        raise TypeError("clip_shape must be a geopandas.GeoDataFrame. Path arguments should be handled by the caller.")
-
-    if clip_shape.empty:
-        raise ValueError("Clipping geometry is empty.")
-
-    if clip_shape.crs is None:
-        raise ValueError("Clipping geometry CRS is missing (clip_shape.crs is None).")
-
-    # A2: auto-repair invalid geometries (explicit and safe)
-    invalid_mask = ~clip_shape.is_valid
-    if invalid_mask.any():
-        n_invalid = int(invalid_mask.sum())
-        logger.warning(f"Clipping geometry has {n_invalid} invalid feature(s); attempting auto-repair.")
-
-        # Prefer make_valid if available (shapely>=2); fallback to buffer(0)
-        def _repair_geom(geom):
-            if geom is None:
-                return None
-            try:
-                from shapely.make_valid import make_valid  # shapely>=2
-
-                return make_valid(geom)
-            except ImportError:
-                # buffer(0) is a common repair for self-intersections
-                try:
-                    return geom.buffer(0)
-                except (AttributeError, TypeError, ValueError):
-                    return geom
-
-        clip_shape = clip_shape.copy()
-        clip_shape["geometry"] = clip_shape.geometry.apply(_repair_geom)
-
-        # Re-check validity and non-emptiness after repair
-        if clip_shape.empty or clip_shape.geometry.is_empty.all():
-            raise ValueError("Clipping geometry became empty after auto-repair.")
-        if not clip_shape.is_valid.all():
-            raise ValueError("Clipping geometry remains invalid after auto-repair; aborting.")
-
-    # Reproject clip_shape to raster CRS if needed (using centralized helper)
-    raster_crs = self.data.rio.crs
     try:
         clip_shape = to_crs_if_needed(clip_shape, self.parent.crs)
     except (ValueError, TypeError, pyproj.exceptions.CRSError) as e:
         raise ValueError(f"Error reprojecting clipping geometry to {self.parent.crs}") from e
 
-    # Clip each DataArray in the Dataset using the clip_shape geometry
-    data_clipped = xr.Dataset().rio.write_crs(raster_crs.to_string())
-
-    # Preserve non-spatial coords (e.g. WindAtlas wind_speed) which are not in data_vars
-    for name, c in self.data.coords.items():
-        if name in ("x", "y", "spatial_ref"):
-            continue
-        if ("x" in c.dims) or ("y" in c.dims):
-            continue
-        data_clipped = data_clipped.assign_coords({name: c})
-
-    # Copy attrs from source dataset
-    data_clipped.attrs = dict(self.data.attrs)
-
-    # rioxarray expects an iterable of geometries
+    data_clipped = _build_clipped_dataset_template(source_ds, raster_crs)
     geoms = list(clip_shape.geometry)
-
-    from cleo.errors import ClipNoDataInBounds
-
-    for var_name, var in self.data.data_vars.items():
-        try:
-            data_clipped[var_name] = _rio_clip_robust(var, geoms, drop=True, all_touched_primary=False)
-        except ClipNoDataInBounds as e:
-            raise ValueError(f"Clipping geometry does not overlap raster bounds for variable '{var_name}'.") from e
-        except (ValueError, TypeError, RuntimeError) as e:
-            raise ValueError(f"Error clipping data variable '{var_name}'") from e
-
+    data_clipped = _clip_dataset_variables(source_ds, geoms, data_clipped)
     logger.info("Data clipped")
     return data_clipped, clip_shape
 

@@ -255,6 +255,129 @@ def _validate_dataset_deep(ds: xr.Dataset, kind: StoreKind, errors: list[str]) -
 # -----------------------------------------------------------------------------
 
 
+def _validate_store_path(store_path: Path) -> None:
+    """Validate basic Zarr store path properties.
+
+    :param store_path: Candidate store path.
+    :type store_path: pathlib.Path
+    :raises FileNotFoundError: If the store does not exist.
+    :raises ValidationError: If the path is not a directory.
+    """
+    if not store_path.exists():
+        raise FileNotFoundError(f"Store not found: {store_path}")
+    if not store_path.is_dir():
+        raise ValidationError(f"Store path is not a directory: {store_path}")
+
+
+def _append_store_state_error(attrs: dict[str, object], *, allow_incomplete: bool, errors: list[str]) -> None:
+    """Append store-state validation errors.
+
+    :param attrs: Store attributes.
+    :param allow_incomplete: Whether incomplete stores are allowed.
+    :param errors: Mutable error accumulator.
+    :returns: ``None``
+    :rtype: None
+    """
+    if allow_incomplete:
+        return
+    store_state = attrs.get("store_state")
+    if store_state != "complete":
+        errors.append(
+            f"store_state is {store_state!r}, expected 'complete' (use allow_incomplete=True to skip this check)"
+        )
+
+
+def _append_required_attr_errors(
+    attrs: dict[str, object],
+    *,
+    required_attrs: frozenset[str],
+    allow_incomplete: bool,
+    errors: list[str],
+) -> None:
+    """Append errors for missing required store attributes.
+
+    :param attrs: Store attributes.
+    :param required_attrs: Required attribute names for the store kind.
+    :param allow_incomplete: Whether to ignore missing ``store_state``.
+    :param errors: Mutable error accumulator.
+    :returns: ``None``
+    :rtype: None
+    """
+    check_attrs = required_attrs - {"store_state"} if allow_incomplete else required_attrs
+    missing_attrs = check_attrs - set(attrs.keys())
+    if missing_attrs:
+        errors.append(f"Missing required attrs: {sorted(missing_attrs)}")
+
+
+def _append_kind_attr_errors(kind: StoreKind, attrs: dict[str, object], errors: list[str]) -> None:
+    """Append store-kind-specific attribute errors.
+
+    :param kind: Expected store kind.
+    :param attrs: Store attributes.
+    :param errors: Mutable error accumulator.
+    :returns: ``None``
+    :rtype: None
+    """
+    if kind == "wind":
+        _validate_json_array_attr(attrs.get("cleo_turbines_json"), attr_name="cleo_turbines_json", errors=errors)
+        return
+    if kind == "export":
+        schema_version = attrs.get("schema_version")
+        if schema_version is not None and not isinstance(schema_version, int):
+            errors.append(f"schema_version is {type(schema_version).__name__}, expected int")
+
+
+def _append_export_store_errors(store_path: Path, errors: list[str]) -> None:
+    """Append export-store-specific validation errors.
+
+    :param store_path: Export store path.
+    :param errors: Mutable error accumulator.
+    :returns: ``None``
+    :rtype: None
+    """
+    try:
+        ds = xr.open_zarr(store_path, consolidated=False)
+    except Exception as e:
+        errors.append(f"Failed to open export store dataset: {e}")
+        return
+
+    try:
+        if len(ds.data_vars) == 0:
+            errors.append("Export store contains no data variables")
+    finally:
+        close = getattr(ds, "close", None)
+        if callable(close):
+            close()
+
+
+def _append_store_content_errors(
+    *,
+    kind: StoreKind,
+    required_vars: frozenset[str],
+    group: zarr.Group,
+    store_path: Path,
+    errors: list[str],
+) -> None:
+    """Append store-content validation errors for the given store kind.
+
+    :param kind: Expected store kind.
+    :param required_vars: Required data-variable names for the store kind.
+    :param group: Open Zarr group handle.
+    :param store_path: Store path.
+    :param errors: Mutable error accumulator.
+    :returns: ``None``
+    :rtype: None
+    """
+    array_names = set(group.array_keys()) if hasattr(group, "array_keys") else set()
+    if kind in {"wind", "landscape"}:
+        missing_vars = required_vars - array_names
+        if missing_vars:
+            errors.append(f"Missing required arrays: {sorted(missing_vars)}")
+        return
+    if kind == "export":
+        _append_export_store_errors(store_path, errors)
+
+
 def validate_store(
     path: str | Path,
     *,
@@ -291,12 +414,7 @@ def validate_store(
     payloads.
     """
     store_path = Path(path)
-
-    if not store_path.exists():
-        raise FileNotFoundError(f"Store not found: {store_path}")
-
-    if not store_path.is_dir():
-        raise ValidationError(f"Store path is not a directory: {store_path}")
+    _validate_store_path(store_path)
 
     # Open zarr group to read attrs
     try:
@@ -307,59 +425,22 @@ def validate_store(
     attrs = dict(group.attrs)
     errors: list[str] = []
 
-    # Check store_state
-    store_state = attrs.get("store_state")
-    if not allow_incomplete:
-        if store_state != "complete":
-            errors.append(
-                f"store_state is {store_state!r}, expected 'complete' (use allow_incomplete=True to skip this check)"
-            )
-
     required_attrs, required_vars, _required_dims = _requirements_for_kind(kind)
-
-    # Check required attributes (skip store_state if allow_incomplete)
-    check_attrs = required_attrs
-    if allow_incomplete:
-        check_attrs = check_attrs - {"store_state"}
-
-    missing_attrs = check_attrs - set(attrs.keys())
-    if missing_attrs:
-        errors.append(f"Missing required attrs: {sorted(missing_attrs)}")
-
-    # Wind-specific: validate turbines JSON
-    if kind == "wind":
-        _validate_json_array_attr(attrs.get("cleo_turbines_json"), attr_name="cleo_turbines_json", errors=errors)
-
-    # Export-specific: validate schema_version is integer
-    if kind == "export":
-        schema_version = attrs.get("schema_version")
-        if schema_version is not None and not isinstance(schema_version, int):
-            errors.append(f"schema_version is {type(schema_version).__name__}, expected int")
-
-    # Check required arrays exist in store
-    array_names = set(group.array_keys()) if hasattr(group, "array_keys") else set()
-
-    if kind == "wind":
-        missing_vars = required_vars - array_names
-        if missing_vars:
-            errors.append(f"Missing required arrays: {sorted(missing_vars)}")
-    elif kind == "landscape":
-        missing_vars = required_vars - array_names
-        if missing_vars:
-            errors.append(f"Missing required arrays: {sorted(missing_vars)}")
-    elif kind == "export":
-        try:
-            ds = xr.open_zarr(store_path, consolidated=False)
-        except Exception as e:
-            errors.append(f"Failed to open export store dataset: {e}")
-        else:
-            try:
-                if len(ds.data_vars) == 0:
-                    errors.append("Export store contains no data variables")
-            finally:
-                close = getattr(ds, "close", None)
-                if callable(close):
-                    close()
+    _append_store_state_error(attrs, allow_incomplete=allow_incomplete, errors=errors)
+    _append_required_attr_errors(
+        attrs,
+        required_attrs=required_attrs,
+        allow_incomplete=allow_incomplete,
+        errors=errors,
+    )
+    _append_kind_attr_errors(kind, attrs, errors)
+    _append_store_content_errors(
+        kind=kind,
+        required_vars=required_vars,
+        group=group,
+        store_path=store_path,
+        errors=errors,
+    )
 
     if errors:
         raise ValidationError(

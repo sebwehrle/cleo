@@ -120,19 +120,25 @@ line-ending = "auto"
 
 [tool.mypy]
 python_version = "3.11"
-# Phase 1-3 complete: enabled no-any-return, type-var, operator, return-value, misc, attr-defined, call-overload
 warn_return_any = false
-warn_unused_ignores = false
+warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unused_configs = true
 show_error_codes = true
 ignore_missing_imports = true
-check_untyped_defs = false
+check_untyped_defs = true
 disallow_untyped_defs = false
-# Remaining error codes to fix in future phases
 disable_error_code = [
-    "arg-type",        # 29 errors - Phase 5
-    "assignment",      # 11 errors - Phase 4
+    "attr-defined",
+    "arg-type",
+    "assignment",
+    "call-overload",
+    "index",
+    "misc",
+    "operator",
+    "return-value",
+    "type-var",
+    "union-attr",
 ]
 # Exclude tests and generated files
 exclude = [

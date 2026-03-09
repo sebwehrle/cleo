@@ -167,7 +167,7 @@ def _open_local_elevation(
     import warnings
 
     da_raw = rxr.open_rasterio(elev_path, parse_coordinates=True)
-    da: xr.DataArray = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
+    da: xr.DataArray = da_raw.squeeze(drop=True)
 
     if da.rio.crs is None:
         # Safer default: assume wind CRS but warn clearly
@@ -275,7 +275,7 @@ def _open_raster(
         DataArray with raster data.
     """
     da_raw = rxr.open_rasterio(path, parse_coordinates=parse_coordinates, chunks=chunks)
-    da: xr.DataArray = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
+    da: xr.DataArray = da_raw.squeeze(drop=True)
     return da
 
 

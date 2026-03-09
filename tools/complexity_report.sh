@@ -31,8 +31,8 @@ if ! command -v radon &> /dev/null; then
     exit 1
 fi
 
-# Grade E functions (CC > 30) - MUST FIX
-echo -e "${BOLD}Grade E functions (CC > 30) - MUST FIX:${NC}"
+# Grade E functions (CC > 30) - CRITICAL
+echo -e "${BOLD}Grade E functions (CC > 30) - CRITICAL:${NC}"
 GRADE_E=$(radon cc cleo --min E -s 2>/dev/null || true)
 if [[ -n "$GRADE_E" ]]; then
     echo -e "${RED}$GRADE_E${NC}"
@@ -43,8 +43,8 @@ else
 fi
 echo ""
 
-# Grade D functions (CC 21-30) - SHOULD FIX
-echo -e "${BOLD}Grade D functions (CC 21-30) - SHOULD FIX:${NC}"
+# Grade D functions (CC 21-30) - BLOCKING
+echo -e "${BOLD}Grade D functions (CC 21-30) - BLOCKING:${NC}"
 GRADE_D=$(radon cc cleo --min D --max D -s 2>/dev/null || true)
 if [[ -n "$GRADE_D" ]]; then
     echo -e "${YELLOW}$GRADE_D${NC}"
@@ -96,16 +96,16 @@ fi
 
 # Summary
 echo -e "${BOLD}=== Summary ===${NC}"
-echo "  Grade E (CC > 30):  $GRADE_E_COUNT functions - MUST FIX before merge"
-echo "  Grade D (CC 21-30): $GRADE_D_COUNT functions - Should fix"
+echo "  Grade E (CC > 30):  $GRADE_E_COUNT functions - Critical"
+echo "  Grade D (CC 21-30): $GRADE_D_COUNT functions - Blocks merge"
 echo "  Grade C (CC 11-20): $GRADE_C_COUNT functions - Monitor"
 echo ""
 
-# Exit status based on grade E presence
-if [[ "$GRADE_E_COUNT" -gt 0 ]]; then
-    echo -e "${RED}FAIL: Grade E functions must be refactored.${NC}"
+# Exit status based on grade D-or-worse presence
+if [[ "$GRADE_D_COUNT" -gt 0 || "$GRADE_E_COUNT" -gt 0 ]]; then
+    echo -e "${RED}FAIL: Grade D or worse functions must be refactored.${NC}"
     exit 1
 else
-    echo -e "${GREEN}OK: No grade E functions.${NC}"
+    echo -e "${GREEN}OK: No grade D or worse functions.${NC}"
     exit 0
 fi

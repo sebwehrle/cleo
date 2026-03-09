@@ -47,7 +47,8 @@ from typing import TYPE_CHECKING, Sequence
 if TYPE_CHECKING:
     import pandas as pd
 
-from cleo.domains import WindDomain, LandscapeDomain
+from cleo._turbine_validation import _normalize_turbine_ids, _validate_general_sequence_not_scalar
+from cleo.domains import LandscapeDomain, WindDomain
 from cleo.atlas_policies.nuts_catalog import load_nuts_area_catalog as load_nuts_area_catalog_policy
 from cleo.atlas_policies.region_selection import (
     normalize_area_name as normalize_area_name_policy,
@@ -1197,23 +1198,15 @@ class Atlas:
             >>> Atlas.configure_turbines(["Enercon.E40.500", "Vestas.V90.2000"])
             >>> Atlas.build()  # Materializes only configured turbines
         """
-        if not turbines:
-            raise ValueError("turbines must be a non-empty sequence")
+        items = _validate_general_sequence_not_scalar(
+            turbines,
+            "turbines",
+            "turbine IDs",
+            empty_hint="configure at least one turbine ID",
+        )
+        cleaned = _normalize_turbine_ids(items, available=None)
 
-        cleaned = []
-        seen = set()
-        for item in turbines:
-            if not isinstance(item, str):
-                raise ValueError(f"Each turbine ID must be a string, got {type(item).__name__}")
-            stripped = item.strip()
-            if not stripped:
-                raise ValueError("Turbine ID cannot be empty or whitespace-only")
-            if stripped in seen:
-                raise ValueError(f"Duplicate turbine ID: {stripped!r}")
-            seen.add(stripped)
-            cleaned.append(stripped)
-
-        self._turbines_configured = tuple(cleaned)
+        self._turbines_configured = cleaned
 
     @property
     def turbines_configured(self) -> tuple[str, ...] | None:

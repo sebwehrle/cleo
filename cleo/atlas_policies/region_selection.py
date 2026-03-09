@@ -126,7 +126,7 @@ def select_area_decision(
 
     inferred_level: int | None = None
     if isinstance(area, nuts_area_name_type):
-        inferred_level = int(area.level)  # type: ignore[attr-defined]  # dynamic type check
+        inferred_level = int(area.level)
     elif not isinstance(area, str):
         raise ValueError(f"area must be a string or None, got {type(area).__name__}")
 

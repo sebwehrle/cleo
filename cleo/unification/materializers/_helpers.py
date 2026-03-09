@@ -389,7 +389,7 @@ def write_dataset_to_store(
     """
 
     def _do_write() -> None:
-        ds.to_zarr(store_path, mode=mode, consolidated=False)  # type: ignore[call-overload]
+        ds.to_zarr(store_path, mode=mode, consolidated=False)
 
         if new_attrs or (preserved and preserved.attrs):
             g = zarr.open_group(store_path, mode="a")

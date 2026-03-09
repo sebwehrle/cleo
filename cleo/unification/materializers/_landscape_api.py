@@ -223,8 +223,8 @@ def _prepare_registered_raster_data(
     """
     aoi = _aoi_geom_or_none(atlas)
     da_raw = rxr.open_rasterio(source_path, parse_coordinates=True)
-    da = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
-    if da.rio.crs is None:  # type: ignore[union-attr]
+    da = da_raw.squeeze(drop=True)
+    if da.rio.crs is None:
         raise RuntimeError(f"Source raster {source_path} has no CRS; cannot materialize.")
 
     if aoi is not None:

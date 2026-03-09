@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Pre-commit hook to check for Grade E complexity functions
-# Fails if any function has cyclomatic complexity > 30
+# Complexity gate for tracked package code.
+# Fails if any function has cyclomatic complexity > 20.
 
 set -e
 
-# Check for Grade E functions
-GRADE_E=$(python -m radon cc cleo/ -s -n E 2>/dev/null | grep -v "^$" || true)
+# Check for Grade D functions (CC > 20)
+GRADE_D=$(python -m radon cc cleo/ -s -n D 2>/dev/null | grep -v "^$" || true)
 
-if [ -n "$GRADE_E" ]; then
-    echo "ERROR: Grade E functions found (CC > 30):"
-    echo "$GRADE_E"
+if [ -n "$GRADE_D" ]; then
+    echo "ERROR: Grade D functions found (CC > 20):"
+    echo "$GRADE_D"
     echo ""
     echo "Refactor these functions before committing."
     exit 1
 fi
 
-echo "OK: No grade E functions found"
+echo "OK: No grade D functions found"

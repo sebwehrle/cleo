@@ -342,7 +342,7 @@ def _sign_clms_oauth_assertion(
     :raises RuntimeError: If signing support is unavailable.
     """
     try:
-        import jwt  # type: ignore[import-not-found]
+        import jwt
     except ModuleNotFoundError:
         header_b64 = _base64url_encode(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
         claims_b64 = _base64url_encode(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8"))

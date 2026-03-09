@@ -148,7 +148,7 @@ def interp_log_linear_ln_z(
         )
 
     lnz = np.log(z)
-    lnq_da: xr.DataArray = np.log(q_stack)  # type: ignore[assignment]  # np.log preserves DataArray
+    lnq_da: xr.DataArray = np.log(q_stack)
     lnq = lnq_da.assign_coords(ln_height=("height", lnz)).swap_dims({"height": "ln_height"}).sortby("ln_height")
 
     ln_target = xr.DataArray(np.log(qh), dims=("query_height",), coords={"query_height": qh})

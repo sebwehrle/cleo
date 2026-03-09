@@ -57,7 +57,7 @@ numba==0.64.0
     # via xarray-spatial
 numcodecs==0.16.5
     # via zarr
-numpy==2.4.2
+numpy==2.4.3
     # via
     #   cftime
     #   cleo (pyproject.toml)

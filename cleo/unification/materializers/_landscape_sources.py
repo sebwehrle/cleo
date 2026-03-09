@@ -52,12 +52,7 @@ def _register_landscape_source_entry(
     :returns: ``True`` when manifest entry changes, else ``False``.
     :rtype: bool
     """
-    if kind not in {"raster", "vector"}:
-        raise ValueError(f"Unsupported landscape source kind: {kind!r}")
-
-    valid_if_exists = {"error", "replace", "noop"}
-    if if_exists not in valid_if_exists:
-        raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
+    _validate_landscape_source_registration_inputs(kind=kind, if_exists=if_exists)
 
     store_path = resolve_active_landscape_store_path(atlas)
     root = zarr.open_group(store_path, mode="r")
@@ -65,8 +60,6 @@ def _register_landscape_source_entry(
         raise RuntimeError("landscape.zarr is not complete; run atlas.build() first.")
 
     source_id = f"land:{kind}:{name}"
-    other_kind = "vector" if kind == "raster" else "raster"
-    other_source_id = f"land:{other_kind}:{name}"
     params_json = _stable_json(params)
 
     init_manifest(store_path)
@@ -74,52 +67,26 @@ def _register_landscape_source_entry(
     existing_sources = manifest.get("sources", [])
     source_by_id = {s["source_id"]: s for s in existing_sources}
 
-    if other_source_id in source_by_id:
-        if if_exists != "replace":
-            raise ValueError(
-                f"Variable {name!r} is already registered as {other_kind!r} source.\n"
-                f"  Existing source_id: {other_source_id!r}\n"
-                "  Use if_exists='replace' to replace with new source kind."
-            )
-        existing_sources = [src for src in existing_sources if src["source_id"] != other_source_id]
-        source_by_id.pop(other_source_id, None)
+    existing_sources = _drop_conflicting_other_kind_source(
+        existing_sources,
+        source_by_id=source_by_id,
+        name=name,
+        kind=kind,
+        if_exists=if_exists,
+    )
+    source_by_id = {s["source_id"]: s for s in existing_sources}
 
-    if source_id in source_by_id:
-        existing = source_by_id[source_id]
-        existing_kind = existing.get("kind", "")
-        existing_path = existing.get("path", "")
-        existing_params = existing.get("params_json", "")
-        existing_fingerprint = existing.get("fingerprint", "")
-
-        exact_match = (
-            existing_kind == kind
-            and existing_path == str(source_path)
-            and existing_params == params_json
-            and existing_fingerprint == fingerprint
-        )
-
-        if if_exists == "noop":
-            if exact_match:
-                return False
-            raise ValueError(
-                f"Source {source_id!r} already registered with different configuration.\n"
-                f"  Existing: path={existing_path!r}, params={existing_params!r}, "
-                f"fingerprint={existing_fingerprint!r}\n"
-                f"  New: path={str(source_path)!r}, params={params_json!r}, "
-                f"fingerprint={fingerprint!r}\n"
-                "  Use if_exists='replace' to overwrite."
-            )
-
-        if if_exists == "error":
-            config_matches = existing_path == str(source_path) and existing_params == params_json
-            if not config_matches:
-                raise ValueError(
-                    f"Source {source_id!r} already registered with different configuration.\n"
-                    f"  Existing: path={existing_path!r}, params={existing_params!r}\n"
-                    f"  New: path={str(source_path)!r}, params={params_json!r}\n"
-                    f"  Use if_exists='replace' to overwrite."
-                )
-            return False
+    should_write = _existing_landscape_source_decision(
+        existing=source_by_id.get(source_id),
+        source_id=source_id,
+        kind=kind,
+        source_path=source_path,
+        params_json=params_json,
+        fingerprint=fingerprint,
+        if_exists=if_exists,
+    )
+    if not should_write:
+        return False
 
     new_source = {
         "source_id": source_id,
@@ -143,6 +110,141 @@ def _register_landscape_source_entry(
 
     manifest["sources"] = updated_sources
     _write_manifest_atomic(store_path, manifest)
+    return True
+
+
+def _validate_landscape_source_registration_inputs(*, kind: str, if_exists: str) -> None:
+    """Validate source registration mode arguments.
+
+    :param kind: Source kind.
+    :param if_exists: Conflict policy.
+    :raises ValueError: If either argument is unsupported.
+    """
+    if kind not in {"raster", "vector"}:
+        raise ValueError(f"Unsupported landscape source kind: {kind!r}")
+    valid_if_exists = {"error", "replace", "noop"}
+    if if_exists not in valid_if_exists:
+        raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
+
+
+def _drop_conflicting_other_kind_source(
+    existing_sources: list[dict],
+    *,
+    source_by_id: dict[str, dict],
+    name: str,
+    kind: str,
+    if_exists: str,
+) -> list[dict]:
+    """Remove the opposite-kind source entry when replacement is allowed.
+
+    :param existing_sources: Current manifest source entries.
+    :param source_by_id: Source entries keyed by ``source_id``.
+    :param name: Target variable name.
+    :param kind: Requested source kind.
+    :param if_exists: Conflict policy.
+    :returns: Updated source-entry list.
+    :rtype: list[dict]
+    :raises ValueError: If another source kind is registered and replacement is not allowed.
+    """
+    other_kind = "vector" if kind == "raster" else "raster"
+    other_source_id = f"land:{other_kind}:{name}"
+    if other_source_id not in source_by_id:
+        return existing_sources
+    if if_exists != "replace":
+        raise ValueError(
+            f"Variable {name!r} is already registered as {other_kind!r} source.\n"
+            f"  Existing source_id: {other_source_id!r}\n"
+            "  Use if_exists='replace' to replace with new source kind."
+        )
+    return [src for src in existing_sources if src["source_id"] != other_source_id]
+
+
+def _same_registered_source(
+    existing: dict,
+    *,
+    kind: str,
+    source_path: Path,
+    params_json: str,
+    fingerprint: str,
+) -> bool:
+    """Return whether a registered source entry matches the requested source exactly.
+
+    :param existing: Existing manifest source entry.
+    :param kind: Requested source kind.
+    :param source_path: Requested source path.
+    :param params_json: Stable serialized params payload.
+    :param fingerprint: Requested source fingerprint.
+    :returns: ``True`` when all source metadata matches.
+    :rtype: bool
+    """
+    return (
+        existing.get("kind", "") == kind
+        and existing.get("path", "") == str(source_path)
+        and existing.get("params_json", "") == params_json
+        and existing.get("fingerprint", "") == fingerprint
+    )
+
+
+def _existing_landscape_source_decision(
+    *,
+    existing: dict | None,
+    source_id: str,
+    kind: str,
+    source_path: Path,
+    params_json: str,
+    fingerprint: str,
+    if_exists: str,
+) -> bool:
+    """Resolve how registration should behave for an existing same-kind source.
+
+    :param existing: Existing source entry for the same ``source_id`` if present.
+    :param source_id: Target source identifier.
+    :param kind: Requested source kind.
+    :param source_path: Requested source path.
+    :param params_json: Stable serialized params payload.
+    :param fingerprint: Requested source fingerprint.
+    :param if_exists: Conflict policy.
+    :returns: ``True`` when the manifest entry should be written, else ``False``.
+    :rtype: bool
+    :raises ValueError: If the existing registration conflicts with the requested configuration.
+    """
+    if existing is None:
+        return True
+
+    exact_match = _same_registered_source(
+        existing,
+        kind=kind,
+        source_path=source_path,
+        params_json=params_json,
+        fingerprint=fingerprint,
+    )
+    existing_path = existing.get("path", "")
+    existing_params = existing.get("params_json", "")
+    existing_fingerprint = existing.get("fingerprint", "")
+
+    if if_exists == "noop":
+        if exact_match:
+            return False
+        raise ValueError(
+            f"Source {source_id!r} already registered with different configuration.\n"
+            f"  Existing: path={existing_path!r}, params={existing_params!r}, "
+            f"fingerprint={existing_fingerprint!r}\n"
+            f"  New: path={str(source_path)!r}, params={params_json!r}, "
+            f"fingerprint={fingerprint!r}\n"
+            "  Use if_exists='replace' to overwrite."
+        )
+
+    if if_exists == "error":
+        config_matches = existing_path == str(source_path) and existing_params == params_json
+        if not config_matches:
+            raise ValueError(
+                f"Source {source_id!r} already registered with different configuration.\n"
+                f"  Existing: path={existing_path!r}, params={existing_params!r}\n"
+                f"  New: path={str(source_path)!r}, params={params_json!r}\n"
+                f"  Use if_exists='replace' to overwrite."
+            )
+        return False
+
     return True
 
 

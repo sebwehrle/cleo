@@ -95,23 +95,19 @@ def register_landscape_vector_source(
     )
 
 
-def prepare_landscape_variable_data(
+def _load_active_landscape_prepare_context(
     atlas,
-    variable_name: str,
     *,
-    chunk_policy: dict[str, int] | None = None,
-) -> xr.DataArray:
-    """Prepare a landscape variable DataArray from a registered source.
-
-    Reads/writes are scoped to the active store routing (base or selected area).
+    chunk_policy: dict[str, int],
+) -> dict[str, Any]:
+    """Load the active landscape/wind context used by registered materialization.
 
     :param atlas: Atlas instance with active store routing context.
-    :param variable_name: Target landscape variable name.
-    :param chunk_policy: Chunking policy used when opening or chunking stores.
-    :returns: Prepared DataArray aligned to active wind/landscape grids.
-    :rtype: xarray.DataArray
+    :param chunk_policy: Chunking policy used for store opens.
+    :returns: Mapping with store path, wind reference, and valid mask.
+    :rtype: dict[str, typing.Any]
+    :raises RuntimeError: If the active stores are incomplete or inconsistent.
     """
-    chunk_policy = chunk_policy or {}
     store_path = resolve_active_landscape_store_path(atlas)
     wind_path = resolve_active_wind_store_path(atlas)
 
@@ -137,80 +133,213 @@ def prepare_landscape_variable_data(
 
     land = open_zarr_dataset(store_path, chunk_policy=chunk_policy)
     land_root = zarr.open_group(store_path, mode="r")
-    if land_root.attrs.get("store_state") != "complete":
-        raise RuntimeError("landscape.zarr is not complete; run atlas.build() first.")
-    land_grid_id = land_root.attrs.get("grid_id") or ""
-    if land_grid_id != wind_grid_id:
-        raise RuntimeError(f"landscape.zarr grid_id mismatch: {land_grid_id!r} != wind grid_id {wind_grid_id!r}")
+    _validate_landscape_store_state(land_root, wind_grid_id)
     if "valid_mask" not in land:
         raise RuntimeError("landscape.zarr missing valid_mask")
 
+    return {
+        "store_path": store_path,
+        "wind_ref": wind_ref,
+        "valid_mask": land["valid_mask"].load(),
+    }
+
+
+def _resolve_registered_source_entry(
+    *,
+    store_path: Path,
+    variable_name: str,
+) -> dict[str, Any]:
+    """Resolve registered source metadata for one landscape variable.
+
+    :param store_path: Active landscape store path.
+    :param variable_name: Target variable name.
+    :returns: Mapping with resolved source kind, path, and params.
+    :rtype: dict[str, typing.Any]
+    """
     manifest = _read_manifest(store_path)
     source_id, source_entry = _resolve_landscape_source_for_variable(
         manifest=manifest,
         variable_name=variable_name,
     )
-    source_path = Path(source_entry.get("path", ""))
-    source_kind = str(source_entry.get("kind", ""))
     params_json = source_entry.get("params_json", "")
     params = json.loads(params_json) if params_json else {}
+    return {
+        "source_kind": str(source_entry.get("kind", "")),
+        "source_path": Path(source_entry.get("path", "")),
+        "params": params,
+    }
 
-    if source_kind == "vector":
-        da = _prepare_vector_landscape_variable_data(
-            atlas=atlas,
-            variable_name=variable_name,
-            source_path=source_path,
-            params=params,
-            wind_ref=wind_ref,
-            valid_mask=land["valid_mask"].load(),
-            chunk_policy=chunk_policy,
-        )
-    else:
-        aoi = _aoi_geom_or_none(atlas)
 
-        da_raw = rxr.open_rasterio(source_path, parse_coordinates=True)
-        da = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
-        if da.rio.crs is None:  # type: ignore[union-attr]
-            raise RuntimeError(f"Source raster {source_path} has no CRS; cannot materialize.")
+def _prepare_registered_vector_data(
+    *,
+    atlas,
+    variable_name: str,
+    source_path: Path,
+    params: dict[str, Any],
+    wind_ref: xr.DataArray,
+    valid_mask: xr.DataArray,
+    chunk_policy: dict[str, int],
+) -> xr.DataArray:
+    """Prepare one registered vector-backed landscape variable.
 
-        if aoi is not None:
-            aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
-            da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
+    :param atlas: Atlas instance with active store routing context.
+    :param variable_name: Target variable name.
+    :param source_path: Canonical vector artifact path.
+    :param params: Vector rasterization parameters.
+    :param wind_ref: Wind reference raster used for grid alignment.
+    :param valid_mask: Boolean active landscape validity mask.
+    :param chunk_policy: Chunking policy used for staged output.
+    :returns: Prepared variable on the active wind/landscape grid.
+    :rtype: xarray.DataArray
+    """
+    return _prepare_vector_landscape_variable_data(
+        atlas=atlas,
+        variable_name=variable_name,
+        source_path=source_path,
+        params=params,
+        wind_ref=wind_ref,
+        valid_mask=valid_mask,
+        chunk_policy=chunk_policy,
+    )
 
-        categorical = bool(params.get("categorical", False))
-        resampling = Resampling.nearest if categorical else Resampling.bilinear
 
-        da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan)
-        da = da.rename(variable_name)
+def _prepare_registered_raster_data(
+    *,
+    atlas,
+    variable_name: str,
+    source_path: Path,
+    params: dict[str, Any],
+    wind_ref: xr.DataArray,
+) -> xr.DataArray:
+    """Prepare one registered raster-backed landscape variable.
 
-        clc_codes_raw = params.get("clc_codes")
-        if clc_codes_raw is not None:
-            if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
-                raise ValueError("params['clc_codes'] must be a non-empty list of integer CLC codes.")
-            clc_codes = [int(code) for code in clc_codes_raw]
-            da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
+    :param atlas: Atlas instance with active store routing context.
+    :param variable_name: Target variable name.
+    :param source_path: Source raster path.
+    :param params: Raster preparation parameters.
+    :param wind_ref: Wind reference raster used for grid alignment.
+    :returns: Reprojected staged variable before active-mask application.
+    :rtype: xarray.DataArray
+    """
+    aoi = _aoi_geom_or_none(atlas)
+    da_raw = rxr.open_rasterio(source_path, parse_coordinates=True)
+    da = da_raw.squeeze(drop=True)  # type: ignore[union-attr]  # single-file returns DataArray
+    if da.rio.crs is None:  # type: ignore[union-attr]
+        raise RuntimeError(f"Source raster {source_path} has no CRS; cannot materialize.")
 
+    if aoi is not None:
+        aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
+        da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
+
+    categorical = bool(params.get("categorical", False))
+    resampling = Resampling.nearest if categorical else Resampling.bilinear
+    da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan)
+    da = da.rename(variable_name)
+
+    clc_codes_raw = params.get("clc_codes")
+    if clc_codes_raw is not None:
+        if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
+            raise ValueError("params['clc_codes'] must be a non-empty list of integer CLC codes.")
+        clc_codes = [int(code) for code in clc_codes_raw]
+        da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
+    return da
+
+
+def _validate_materialized_variable_grid(
+    variable_name: str,
+    da: xr.DataArray,
+    wind_ref: xr.DataArray,
+) -> None:
+    """Validate that prepared data matches the active wind reference grid.
+
+    :param variable_name: Target variable name.
+    :param da: Prepared landscape variable.
+    :param wind_ref: Wind reference raster used for alignment.
+    :raises ValueError: If the prepared variable does not match the wind grid exactly.
+    """
     wind_y = wind_ref.coords["y"].values
     wind_x = wind_ref.coords["x"].values
     da_y = da.coords["y"].values
     da_x = da.coords["x"].values
-    if not (np.array_equal(da_y, wind_y) and np.array_equal(da_x, wind_x)):
-        raise ValueError(
-            f"Materialized variable {variable_name!r} has y/x coords that do not match "
-            f"wind reference grid exactly.\n"
-            f"  wind_ref y: shape={wind_y.shape}, range=[{wind_y.min()}, {wind_y.max()}]\n"
-            f"  da y: shape={da_y.shape}, range=[{da_y.min()}, {da_y.max()}]\n"
-            f"  wind_ref x: shape={wind_x.shape}, range=[{wind_x.min()}, {wind_x.max()}]\n"
-            f"  da x: shape={da_x.shape}, range=[{da_x.min()}, {da_x.max()}]"
+    if np.array_equal(da_y, wind_y) and np.array_equal(da_x, wind_x):
+        return
+    raise ValueError(
+        f"Materialized variable {variable_name!r} has y/x coords that do not match "
+        f"wind reference grid exactly.\n"
+        f"  wind_ref y: shape={wind_y.shape}, range=[{wind_y.min()}, {wind_y.max()}]\n"
+        f"  da y: shape={da_y.shape}, range=[{da_y.min()}, {da_y.max()}]\n"
+        f"  wind_ref x: shape={wind_x.shape}, range=[{wind_x.min()}, {wind_x.max()}]\n"
+        f"  da x: shape={da_x.shape}, range=[{da_x.min()}, {da_x.max()}]"
+    )
+
+
+def _mask_and_chunk_raster_variable(
+    da: xr.DataArray,
+    *,
+    valid_mask: xr.DataArray,
+    chunk_policy: dict[str, int],
+) -> xr.DataArray:
+    """Mask a raster-backed variable to the active validity mask and rechunk.
+
+    :param da: Prepared raster-backed landscape variable.
+    :param valid_mask: Boolean active landscape validity mask.
+    :param chunk_policy: Chunking policy used for staged output.
+    :returns: Masked and rechunked variable.
+    :rtype: xarray.DataArray
+    """
+    chunk_y = chunk_policy.get("y", 1024)
+    chunk_x = chunk_policy.get("x", 1024)
+    return da.where(valid_mask, np.nan).chunk({"y": chunk_y, "x": chunk_x})
+
+
+def prepare_landscape_variable_data(
+    atlas,
+    variable_name: str,
+    *,
+    chunk_policy: dict[str, int] | None = None,
+) -> xr.DataArray:
+    """Prepare a landscape variable DataArray from a registered source.
+
+    Reads/writes are scoped to the active store routing (base or selected area).
+
+    :param atlas: Atlas instance with active store routing context.
+    :param variable_name: Target landscape variable name.
+    :param chunk_policy: Chunking policy used when opening or chunking stores.
+    :returns: Prepared DataArray aligned to active wind/landscape grids.
+    :rtype: xarray.DataArray
+    """
+    chunk_policy = chunk_policy or {}
+    context = _load_active_landscape_prepare_context(atlas, chunk_policy=chunk_policy)
+    source = _resolve_registered_source_entry(
+        store_path=context["store_path"],
+        variable_name=variable_name,
+    )
+
+    if source["source_kind"] == "vector":
+        da = _prepare_registered_vector_data(
+            atlas=atlas,
+            variable_name=variable_name,
+            source_path=source["source_path"],
+            params=source["params"],
+            wind_ref=context["wind_ref"],
+            valid_mask=context["valid_mask"],
+            chunk_policy=chunk_policy,
+        )
+    else:
+        da = _prepare_registered_raster_data(
+            atlas=atlas,
+            variable_name=variable_name,
+            source_path=source["source_path"],
+            params=source["params"],
+            wind_ref=context["wind_ref"],
+        )
+        da = _mask_and_chunk_raster_variable(
+            da,
+            valid_mask=context["valid_mask"],
+            chunk_policy=chunk_policy,
         )
 
-    if source_kind != "vector":
-        valid_mask = land["valid_mask"].load()
-        da = da.where(valid_mask, np.nan)
-
-        chunk_y = chunk_policy.get("y", 1024)
-        chunk_x = chunk_policy.get("x", 1024)
-        da = da.chunk({"y": chunk_y, "x": chunk_x})
+    _validate_materialized_variable_grid(variable_name, da, context["wind_ref"])
     return da
 
 
@@ -223,12 +352,69 @@ def materialize_landscape_computed_variables(
 ) -> dict[str, list[str]]:
     """Materialize precomputed landscape variables into active landscape store."""
     chunk_policy = chunk_policy or {}
-    valid_if_exists = {"error", "replace", "noop"}
-    if if_exists not in valid_if_exists:
-        raise ValueError(f"if_exists must be one of {sorted(valid_if_exists)!r}; got {if_exists!r}")
+    validate_if_exists_param(if_exists)
     if not variables:
         return {"written": [], "skipped": []}
 
+    store_state = _load_active_computed_landscape_store(atlas, chunk_policy=chunk_policy)
+    store_path = store_state["store_path"]
+    existing_vars = store_state["existing_vars"]
+    names = list(variables.keys())
+
+    if if_exists == "error":
+        conflicts = [name for name in names if name in existing_vars]
+        if conflicts:
+            raise ValueError(
+                f"Variable(s) already exist in active landscape store: {conflicts!r}. "
+                "Use if_exists='replace' to overwrite or if_exists='noop' to skip."
+            )
+
+    written: list[str] = []
+    skipped: list[str] = []
+
+    with single_writer_lock(zarr_store_lock_dir(store_path)):
+        for name in names:
+            try:
+                if _write_computed_landscape_variable(
+                    store_path=store_path,
+                    name=name,
+                    da=variables[name],
+                    if_exists=if_exists,
+                    existing_vars=existing_vars,
+                    y_ref=store_state["y_ref"],
+                    x_ref=store_state["x_ref"],
+                    preserve_attrs=store_state["preserve_attrs"],
+                ):
+                    written.append(name)
+                    existing_vars.add(name)
+                else:
+                    skipped.append(name)
+            except Exception as exc:
+                raise _materialize_computed_variables_error(
+                    exc,
+                    failed_name=name,
+                    names=names,
+                    written=written,
+                    skipped=skipped,
+                ) from exc
+
+    return {"written": written, "skipped": skipped}
+
+
+def _load_active_computed_landscape_store(
+    atlas,
+    *,
+    chunk_policy: dict[str, int],
+) -> dict[str, Any]:
+    """Load the active landscape store state for computed-variable writes.
+
+    :param atlas: Atlas instance with active store routing context.
+    :param chunk_policy: Chunking policy used for store opens.
+    :returns: Mapping with store path, attrs, existing variables, and reference coordinates.
+    :rtype: dict[str, typing.Any]
+    :raises FileNotFoundError: If the active landscape store is missing.
+    :raises RuntimeError: If the active landscape store is incomplete.
+    """
     store_path = resolve_active_landscape_store_path(atlas)
     if not store_path.exists():
         raise FileNotFoundError(f"Active landscape store does not exist at {store_path}; call atlas.build().")
@@ -243,65 +429,116 @@ def materialize_landscape_computed_variables(
     if "valid_mask" not in land:
         raise RuntimeError("Active landscape store missing valid_mask.")
 
-    existing_vars = set(land.data_vars)
-    names = list(variables.keys())
+    return {
+        "store_path": store_path,
+        "existing_vars": set(land.data_vars),
+        "preserve_attrs": dict(root.attrs),
+        "y_ref": land.coords["y"].values,
+        "x_ref": land.coords["x"].values,
+    }
 
-    if if_exists == "error":
-        conflicts = [name for name in names if name in existing_vars]
-        if conflicts:
-            raise ValueError(
-                f"Variable(s) already exist in active landscape store: {conflicts!r}. "
-                "Use if_exists='replace' to overwrite or if_exists='noop' to skip."
-            )
 
-    preserve_attrs = dict(root.attrs)
-    y_ref = land.coords["y"].values
-    x_ref = land.coords["x"].values
+def _validate_computed_landscape_variable_grid(
+    *,
+    name: str,
+    da: xr.DataArray,
+    y_ref: np.ndarray,
+    x_ref: np.ndarray,
+) -> None:
+    """Validate that a computed variable matches the active landscape grid.
 
-    written: list[str] = []
-    skipped: list[str] = []
+    :param name: Variable name being written.
+    :param da: Computed DataArray.
+    :param y_ref: Active landscape y coordinates.
+    :param x_ref: Active landscape x coordinates.
+    :raises ValueError: If x/y coordinates do not match the active grid.
+    """
+    if "x" not in da.dims or "y" not in da.dims:
+        return
+    if not np.array_equal(da.coords["y"].values, y_ref):
+        raise ValueError(f"Computed variable {name!r} has y coords not matching active landscape grid.")
+    if not np.array_equal(da.coords["x"].values, x_ref):
+        raise ValueError(f"Computed variable {name!r} has x coords not matching active landscape grid.")
 
-    # Acquire single-writer lock for the duration of all write operations
-    with single_writer_lock(zarr_store_lock_dir(store_path)):
-        for name in names:
-            da = variables[name]
-            exists = name in existing_vars
-            try:
-                if exists and if_exists == "noop":
-                    skipped.append(name)
-                    continue
 
-                if "x" in da.dims and "y" in da.dims:
-                    if not np.array_equal(da.coords["y"].values, y_ref):
-                        raise ValueError(f"Computed variable {name!r} has y coords not matching active landscape grid.")
-                    if not np.array_equal(da.coords["x"].values, x_ref):
-                        raise ValueError(f"Computed variable {name!r} has x coords not matching active landscape grid.")
+def _restore_store_attrs(store_path: Path, preserve_attrs: dict[str, Any]) -> None:
+    """Restore preserved root attributes after an incremental variable write.
 
-                if exists and if_exists == "replace":
-                    _atomic_replace_variable_dir(store_path, name)
-                    existing_vars.discard(name)
+    :param store_path: Target landscape store path.
+    :param preserve_attrs: Root attrs that must survive the write.
+    """
+    root_w = zarr.open_group(store_path, mode="a")
+    for key, value in preserve_attrs.items():
+        root_w.attrs[key] = value
 
-                da.rename(name).to_dataset().to_zarr(store_path, mode="a", consolidated=False)
 
-                root_w = zarr.open_group(store_path, mode="a")
-                for key, value in preserve_attrs.items():
-                    root_w.attrs[key] = value
+def _write_computed_landscape_variable(
+    *,
+    store_path: Path,
+    name: str,
+    da: xr.DataArray,
+    if_exists: str,
+    existing_vars: set[str],
+    y_ref: np.ndarray,
+    x_ref: np.ndarray,
+    preserve_attrs: dict[str, Any],
+) -> bool:
+    """Write one computed landscape variable to the active store.
 
-                written.append(name)
-                existing_vars.add(name)
+    :param store_path: Active landscape store path.
+    :param name: Variable name to write.
+    :param da: Computed DataArray.
+    :param if_exists: Conflict policy.
+    :param existing_vars: Mutable set of current variable names.
+    :param y_ref: Active landscape y coordinates.
+    :param x_ref: Active landscape x coordinates.
+    :param preserve_attrs: Root attrs that must survive the write.
+    :returns: ``True`` when written, ``False`` when skipped via noop.
+    :rtype: bool
+    """
+    exists = name in existing_vars
+    if exists and if_exists == "noop":
+        return False
 
-            except Exception as exc:
-                remaining = [n for n in names if n not in written and n not in skipped and n != name]
-                err = RuntimeError(
-                    "Failed to materialize computed landscape variables. "
-                    f"written={written!r}, skipped={skipped!r}, failed={[name] + remaining!r}"
-                )
-                setattr(err, "written", tuple(written))
-                setattr(err, "skipped", tuple(skipped))
-                setattr(err, "failed", tuple([name] + remaining))
-                raise err from exc
+    _validate_computed_landscape_variable_grid(name=name, da=da, y_ref=y_ref, x_ref=x_ref)
 
-    return {"written": written, "skipped": skipped}
+    if exists and if_exists == "replace":
+        _atomic_replace_variable_dir(store_path, name)
+        existing_vars.discard(name)
+
+    da.rename(name).to_dataset().to_zarr(store_path, mode="a", consolidated=False)
+    _restore_store_attrs(store_path, preserve_attrs)
+    return True
+
+
+def _materialize_computed_variables_error(
+    exc: Exception,
+    *,
+    failed_name: str,
+    names: list[str],
+    written: list[str],
+    skipped: list[str],
+) -> RuntimeError:
+    """Build a partial-progress error for computed landscape writes.
+
+    :param exc: Original exception.
+    :param failed_name: Variable that failed to write.
+    :param names: Requested write order.
+    :param written: Variables already written.
+    :param skipped: Variables already skipped.
+    :returns: RuntimeError with progress attributes attached.
+    :rtype: RuntimeError
+    """
+    del exc
+    remaining = [n for n in names if n not in written and n not in skipped and n != failed_name]
+    err = RuntimeError(
+        "Failed to materialize computed landscape variables. "
+        f"written={written!r}, skipped={skipped!r}, failed={[failed_name] + remaining!r}"
+    )
+    setattr(err, "written", tuple(written))
+    setattr(err, "skipped", tuple(skipped))
+    setattr(err, "failed", tuple([failed_name] + remaining))
+    return err
 
 
 def materialize_landscape_variable(

@@ -61,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `atlas.build_clc(url=None)` now accepts current Copernicus service-key JSON files for CLMS authentication, follows the current `land.copernicus.eu/api` prepackaged-download flow through finished-request lookup, normalizes CLMS artifact URLs to the documented machine-download path, and raises clearer errors when an unreadable cached CLC source must be refreshed
 - `atlas.build_clc(...)` now masks the prepared CLC GeoTIFF to the canonical landscape validity mask and normalizes compact CLMS raster class ids back to canonical CLC codes so `land_cover` values and `add_clc_category(311)` style selections match the documented CORINE code vocabulary
 - Area landscape stores now preserve `valid_mask` as boolean during polygon masking and rebuild automatically when an older area store contains the broken float/NaN mask representation
+- Simplified internal landscape source registration and materialization branching, including leaner helper contracts, while preserving active-store routing, manifest semantics, and staged/materialized landscape outputs
 
 ### Security
 - Added a pinned `detect-secrets` workflow with a shared `tools/secret_scan.sh` entrypoint for CI and optional local maintainer checks, replacing the invalid CI `audit --baseline` flow and removing dependence on an activated shell for local pre-commit runs

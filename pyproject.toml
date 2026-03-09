@@ -61,7 +61,7 @@ dev = [
   "pytest>=7.0",           # 7.0 for pythonpath config support
   "pytest-cov>=4.0",       # 4.0 for coverage 7.x compatibility
   "pytest-xdist>=3.0",     # 3.0 for parallel test execution
-  "ruff==0.15.2",          # pin formatter/linter version to match CI and local pre-commit
+  "ruff==0.15.5",          # pin formatter/linter version to match CI and local pre-commit
   "detect-secrets==1.5.0", # pin secret scanner version to match CI and local maintainer checks
   "build>=1.0",            # 1.0 for PEP 517 build
   "psutil>=5.9",           # benchmark helper memory metrics

@@ -41,7 +41,7 @@ flexparser==0.4
     # via pint
 fsspec==2026.2.0
     # via dask
-geopandas==1.1.2
+geopandas==1.1.3
     # via cleo (pyproject.toml)
 google-crc32c==1.8.0
     # via zarr

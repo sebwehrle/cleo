@@ -1,0 +1,42 @@
+site_name: CLEO Documentation
+site_description: Atlas-first wind and landscape analysis documentation
+repo_name: sebwehrle/cleo
+repo_url: https://github.com/sebwehrle/cleo
+strict: true
+exclude_docs: |
+  archive/**
+
+theme:
+  name: mkdocs
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["."]
+          options:
+            show_source: false
+            docstring_style: sphinx
+            separate_signature: true
+            show_signature_annotations: true
+
+nav:
+  - Home: index.md
+  - Start Here: start-here.md
+  - Canonical Workflow: guides/canonical-atlas-workflow.md
+  - Domain Guides:
+      - Wind: guides/wind-workflow.md
+      - Landscape: guides/landscape-workflow.md
+      - PV Domain (Planned): guides/pv-domain-planned.md
+  - Concepts:
+      - Data Model: concepts/data-model.md
+  - Maintainers:
+      - Documentation Strategy: concepts/documentation-strategy.md
+  - Reference:
+      - Knobs and Methods: reference/knobs-and-methods.md
+      - Atlas API: reference/atlas.md
+      - Domains API: reference/domains.md
+      - Result Wrapper API: reference/results.md
+      - Exports and Validation API: reference/exports-validation.md
+      - Unified Atlas Contract: CONTRACT_UNIFIED_ATLAS.md

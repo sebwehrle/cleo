@@ -24,9 +24,7 @@ def _forbid_network_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     import requests
 
     def _blocked(*args, **kwargs):  # noqa: ANN001
-        raise AssertionError(
-            "Network access is forbidden in tests. Patch cleo.*.requests.get or the relevant helper."
-        )
+        raise AssertionError("Network access is forbidden in tests. Patch cleo.*.requests.get or the relevant helper.")
 
     monkeypatch.setattr(requests, "request", _blocked, raising=True)
     monkeypatch.setattr(requests.sessions.Session, "request", _blocked, raising=True)

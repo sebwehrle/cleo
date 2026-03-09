@@ -5,33 +5,28 @@ Merged test file (imports preserved per chunk).
 import logging
 import pytest
 from pathlib import Path
-from cleo.classes import Atlas
+from cleo.atlas import Atlas
 
-# --- merged from tests/_staging/test_atlas_smoke_no_network.py ---
 
 def test_atlas_init_creates_expected_dirs_offline(tmp_path, monkeypatch):
     """
     Atlas.__init__ must NOT call any network functions.
     Verify expected directories are created without network access.
     """
+
     # Block all network-related functions - they should NOT be called during __init__
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted during Atlas.__init__")
 
-    monkeypatch.setattr("cleo.utils.download_file", _block_network)
-    monkeypatch.setattr("cleo.loaders.requests.get", _block_network)
+    monkeypatch.setattr("cleo.net.download_to_path", _block_network)
+    monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     # Create Atlas - this should NOT trigger network calls
     atlas = Atlas(tmp_path, "AUT", "EPSG:3035")
 
     # Verify expected directories exist
     assert (tmp_path / "data" / "raw" / "AUT").is_dir(), "raw/AUT directory missing"
-    assert (tmp_path / "data" / "processed").is_dir(), "processed directory missing"
     assert (tmp_path / "logs").is_dir(), "logs directory missing"
-
-    # Verify index file is created (may be empty)
-    index_file = tmp_path / "data" / "index.jsonl"
-    assert index_file.exists(), "index.jsonl file missing"
 
     # Verify resources were deployed
     resources_dir = tmp_path / "resources"
@@ -45,12 +40,13 @@ def test_atlas_init_does_not_modify_root_logger(tmp_path, monkeypatch):
     Atlas.__init__ must not add handlers to the root logger.
     Only the 'cleo' logger namespace should be configured.
     """
+
     # Block network
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted")
 
-    monkeypatch.setattr("cleo.utils.download_file", _block_network)
-    monkeypatch.setattr("cleo.loaders.requests.get", _block_network)
+    monkeypatch.setattr("cleo.net.download_to_path", _block_network)
+    monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     # Capture root logger state before
     root_logger = logging.getLogger()
@@ -69,29 +65,33 @@ def test_atlas_init_does_not_modify_root_logger(tmp_path, monkeypatch):
     )
 
 
-def test_atlas_materialize_deferred(tmp_path, monkeypatch):
+def test_atlas_build_deferred(tmp_path, monkeypatch):
     """
-    Atlas.materialize() is where data loading happens.
-    Without calling materialize(), wind/landscape should not be available.
+    Atlas.build() is where data loading happens.
+    Without calling build(), wind/landscape should not be available.
     """
+
     # Block network during init
     def _block_network(*args, **kwargs):
         raise AssertionError("Network call attempted during __init__")
 
-    monkeypatch.setattr("cleo.utils.download_file", _block_network)
-    monkeypatch.setattr("cleo.loaders.requests.get", _block_network)
+    monkeypatch.setattr("cleo.net.download_to_path", _block_network)
+    monkeypatch.setattr("cleo.net.http_get", _block_network)
 
     atlas = Atlas(tmp_path, "AUT", "EPSG:3035")
 
-    # Without materialize, accessing wind/landscape should raise
-    with pytest.raises(RuntimeError, match="materialize"):
-        _ = atlas.wind
+    # Public API: wind/landscape return domain objects without error
+    # But accessing .data raises FileNotFoundError since store doesn't exist
+    assert atlas.wind is not None  # WindDomain object
+    assert atlas.landscape is not None  # LandscapeDomain object
 
-    with pytest.raises(RuntimeError, match="materialize"):
-        _ = atlas.landscape
+    # Accessing data without canonical stores raises
+    with pytest.raises(FileNotFoundError, match="Wind store missing"):
+        _ = atlas.wind.data
 
+    with pytest.raises(FileNotFoundError, match="Landscape store missing"):
+        _ = atlas.landscape.data
 
-# --- merged from tests/_staging/test_no_gwa_elevation_download.py ---
 
 class MockParent:
     """Minimal mock of the Atlas parent object."""
@@ -121,15 +121,16 @@ def test_load_gwa_never_downloads_elevation(tmp_path, monkeypatch):
     # Track all download URLs
     recorded_urls = []
 
-    def mock_download_file(url, fpath):
+    def mock_download_to_path(url, fpath, **kwargs):
         recorded_urls.append(url)
         # Create empty file so subsequent checks see it as downloaded
         Path(fpath).parent.mkdir(parents=True, exist_ok=True)
         Path(fpath).touch()
-        return True
+        return Path(fpath)
 
     import cleo.loaders
-    monkeypatch.setattr(cleo.loaders, "download_file", mock_download_file)
+
+    monkeypatch.setattr(cleo.loaders, "download_to_path", mock_download_to_path)
 
     parent = MockParent(path=tmp_path, country="AUT")
     dummy = MockSelf(parent)
@@ -139,9 +140,7 @@ def test_load_gwa_never_downloads_elevation(tmp_path, monkeypatch):
 
     # Oracle: no URL should contain "elevation_w_bathymetry"
     elevation_urls = [u for u in recorded_urls if "elevation_w_bathymetry" in u]
-    assert len(elevation_urls) == 0, (
-        f"download_file was called with elevation_w_bathymetry URL(s): {elevation_urls}"
-    )
+    assert len(elevation_urls) == 0, f"download_file was called with elevation_w_bathymetry URL(s): {elevation_urls}"
 
 
 def test_load_gwa_skips_elevation_even_with_legacy_file(tmp_path, monkeypatch):
@@ -161,14 +160,15 @@ def test_load_gwa_skips_elevation_even_with_legacy_file(tmp_path, monkeypatch):
     # Track all download URLs
     recorded_urls = []
 
-    def mock_download_file(url, fpath):
+    def mock_download_to_path(url, fpath, **kwargs):
         recorded_urls.append(url)
         Path(fpath).parent.mkdir(parents=True, exist_ok=True)
         Path(fpath).touch()
-        return True
+        return Path(fpath)
 
     import cleo.loaders
-    monkeypatch.setattr(cleo.loaders, "download_file", mock_download_file)
+
+    monkeypatch.setattr(cleo.loaders, "download_to_path", mock_download_to_path)
 
     parent = MockParent(path=tmp_path, country="AUT")
     dummy = MockSelf(parent)
@@ -178,6 +178,4 @@ def test_load_gwa_skips_elevation_even_with_legacy_file(tmp_path, monkeypatch):
 
     # Oracle: no URL should contain "elevation_w_bathymetry"
     elevation_urls = [u for u in recorded_urls if "elevation_w_bathymetry" in u]
-    assert len(elevation_urls) == 0, (
-        f"download_file was called with elevation_w_bathymetry URL(s): {elevation_urls}"
-    )
+    assert len(elevation_urls) == 0, f"download_file was called with elevation_w_bathymetry URL(s): {elevation_urls}"

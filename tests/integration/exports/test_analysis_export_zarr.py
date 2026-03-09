@@ -349,6 +349,25 @@ class TestExportAnalysisDatasetZarr:
         # Only requested variables present
         assert set(ds.data_vars) == {"landscape__valid_mask", "landscape__elevation"}
 
+    def test_export_with_empty_include_only_raises_before_write(
+        self, atlas_with_stores: MockAtlasForExport, tmp_path: Path
+    ) -> None:
+        """An empty combined include_only selection must fail without creating a store."""
+        from cleo.exports import export_analysis_dataset_zarr
+
+        export_path = tmp_path / "export" / "empty_filtered_export.zarr"
+
+        with pytest.raises(ValueError, match="No variables to export"):
+            export_analysis_dataset_zarr(
+                atlas_with_stores,
+                export_path,
+                domain="both",
+                prefix=True,
+                include_only=[],
+            )
+
+        assert export_path.exists() is False
+
     def test_export_existing_store_raises(self, atlas_with_stores: MockAtlasForExport, tmp_path: Path) -> None:
         """Export to existing path raises FileExistsError."""
         from cleo.exports import export_analysis_dataset_zarr

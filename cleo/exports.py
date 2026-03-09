@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Sequence
 
+import numpy as np
 import xarray as xr
 import zarr
 
@@ -123,6 +124,34 @@ def _prefix_variables(ds: xr.Dataset, prefix: str) -> xr.Dataset:
     return ds.rename(rename_map)
 
 
+def _empty_dataset() -> xr.Dataset:
+    """Return an empty dataset that does not affect downstream alignment."""
+    return xr.Dataset()
+
+
+def _assert_exact_shared_spatial_grid(wind_ds: xr.Dataset, landscape_ds: xr.Dataset) -> None:
+    """Raise when both contributing export datasets do not share identical spatial coordinates.
+
+    :param wind_ds: Wind dataset candidate for combined export.
+    :type wind_ds: xarray.Dataset
+    :param landscape_ds: Landscape dataset candidate for combined export.
+    :type landscape_ds: xarray.Dataset
+    :raises ValueError: If one dataset has a spatial coordinate that the other
+        lacks, or if shared ``x``/``y`` coordinate values differ.
+    """
+    for dim in ("y", "x"):
+        wind_has_dim = dim in wind_ds.coords
+        landscape_has_dim = dim in landscape_ds.coords
+        if wind_has_dim != landscape_has_dim:
+            raise ValueError(f"Combined export requires both datasets to define {dim!r} coordinates.")
+        if not wind_has_dim:
+            continue
+        if not np.array_equal(np.asarray(wind_ds.coords[dim].values), np.asarray(landscape_ds.coords[dim].values)):
+            raise ValueError(
+                f"Combined export requires identical {dim!r} coordinates between wind and landscape datasets."
+            )
+
+
 def build_analysis_export_dataset(
     wind_ds: xr.Dataset | None,
     landscape_ds: xr.Dataset | None,
@@ -160,7 +189,9 @@ def build_analysis_export_dataset(
     ------
     ValueError
         If required domain data is missing, if there are name collisions
-        when prefix=False, or if include_only contains unknown variables.
+        when prefix=False, if include_only contains unknown variables, if no
+        variables remain after filtering, or if both contributing wind and
+        landscape exports do not share the same ``x``/``y`` grid.
     """
     if domain == "wind":
         if wind_ds is None:
@@ -209,9 +240,10 @@ def build_analysis_export_dataset(
             wind_include = include_only
             land_include = include_only
 
-        # Filter variables - handle empty include_only by creating empty dataset
+        # Preserve one-sided selections like ["wind__capacity_factors"] while
+        # still rejecting fully empty exports after the merge below.
         if wind_include is not None and len(wind_include) == 0:
-            wind_filtered = xr.Dataset(coords=wind_ds.coords)
+            wind_filtered = _empty_dataset()
         else:
             wind_filtered = _filter_variables(
                 wind_ds,
@@ -220,13 +252,16 @@ def build_analysis_export_dataset(
             )
 
         if land_include is not None and len(land_include) == 0:
-            land_filtered = xr.Dataset(coords=landscape_ds.coords)
+            land_filtered = _empty_dataset()
         else:
             land_filtered = _filter_variables(
                 landscape_ds,
                 include_only=land_include,
                 exclude_template=exclude_template,
             )
+
+        if wind_filtered.data_vars and land_filtered.data_vars:
+            _assert_exact_shared_spatial_grid(wind_filtered, land_filtered)
 
         if prefix:
             wind_prefixed = _prefix_variables(wind_filtered, "wind__")
@@ -247,6 +282,10 @@ def build_analysis_export_dataset(
         # Merge datasets
         # Use the wind coords as primary (both should have same y/x)
         result = xr.merge([wind_prefixed, land_prefixed], compat="override")
+        if len(result.data_vars) == 0:
+            raise ValueError(
+                "No variables to export after filtering. Check include_only and exclude_template settings."
+            )
 
     else:
         raise ValueError(f"Invalid domain {domain!r}. Expected 'wind', 'landscape', or 'both'.")

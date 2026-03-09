@@ -496,10 +496,15 @@ Normative:
   - If `prefix=True`, variables are prefixed with `wind__` / `landscape__`.
   - If `prefix=False`, raises `ValueError` on variable name collisions.
   - `include_only` with prefixed names (e.g., `["wind__capacity_factors", "landscape__valid_mask"]`).
+  - If the final export includes data variables from both wind and landscape,
+    the stores must have identical `x`/`y` coordinates; mismatched grids raise
+    `ValueError`.
 - When `domain="wind"` or `domain="landscape"`:
   - `prefix` parameter is ignored.
   - `include_only` uses raw variable names.
 - `exclude_template=True` removes `template` variables from the export.
+- The final export must contain at least one data variable; zero-variable exports
+  raise `ValueError`.
 - `compute=True` (default) forces dask computation before write for reliability.
 - `compute=False` skips the explicit pre-write computation step but still writes
   the export synchronously.

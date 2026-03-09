@@ -3,6 +3,7 @@
 import json
 import numpy as np
 import pytest
+import xarray as xr
 import zarr
 from pathlib import Path
 
@@ -166,12 +167,16 @@ class TestValidateStoreExport:
 
     def _create_valid_export_store(self, store_path: Path) -> None:
         """Create a minimal valid export zarr store."""
-        store_path.mkdir(parents=True, exist_ok=True)
-
-        root = zarr.open_group(store_path, mode="w")
-        root.attrs["store_state"] = "complete"
-        root.attrs["schema_version"] = 1
-        root.attrs["created_at"] = "2026-02-26T12:00:00Z"
+        ds = xr.Dataset(
+            {"wind__capacity_factors": (("y", "x"), np.ones((2, 2), dtype=np.float32))},
+            coords={"y": np.array([1.0, 0.0]), "x": np.array([0.0, 1.0])},
+            attrs={
+                "store_state": "complete",
+                "schema_version": 1,
+                "created_at": "2026-02-26T12:00:00Z",
+            },
+        )
+        ds.to_zarr(store_path, mode="w", consolidated=False)
 
     def test_valid_export_store_passes(self, tmp_path: Path) -> None:
         """A properly formed export store passes validation."""
@@ -183,12 +188,9 @@ class TestValidateStoreExport:
     def test_missing_schema_version_fails(self, tmp_path: Path) -> None:
         """Export store missing schema_version fails validation."""
         store_path = tmp_path / "export.zarr"
-        store_path.mkdir(parents=True, exist_ok=True)
-
-        root = zarr.open_group(store_path, mode="w")
-        root.attrs["store_state"] = "complete"
-        root.attrs["created_at"] = "2026-02-26T12:00:00Z"
-        # No schema_version
+        self._create_valid_export_store(store_path)
+        root = zarr.open_group(store_path, mode="a")
+        del root.attrs["schema_version"]
 
         with pytest.raises(ValidationError, match="Missing required attrs.*schema_version"):
             validate_store(store_path, kind="export")
@@ -196,14 +198,27 @@ class TestValidateStoreExport:
     def test_invalid_schema_version_type_fails(self, tmp_path: Path) -> None:
         """Export store with non-integer schema_version fails validation."""
         store_path = tmp_path / "export.zarr"
-        store_path.mkdir(parents=True, exist_ok=True)
-
-        root = zarr.open_group(store_path, mode="w")
-        root.attrs["store_state"] = "complete"
+        self._create_valid_export_store(store_path)
+        root = zarr.open_group(store_path, mode="a")
         root.attrs["schema_version"] = "1"  # String instead of int
-        root.attrs["created_at"] = "2026-02-26T12:00:00Z"
 
         with pytest.raises(ValidationError, match="schema_version is str, expected int"):
+            validate_store(store_path, kind="export")
+
+    def test_export_store_without_data_vars_fails(self, tmp_path: Path) -> None:
+        """Export store must contain at least one data variable."""
+        store_path = tmp_path / "export_empty.zarr"
+        ds = xr.Dataset(
+            coords={"y": np.array([1.0, 0.0]), "x": np.array([0.0, 1.0])},
+            attrs={
+                "store_state": "complete",
+                "schema_version": 1,
+                "created_at": "2026-02-26T12:00:00Z",
+            },
+        )
+        ds.to_zarr(store_path, mode="w", consolidated=False)
+
+        with pytest.raises(ValidationError, match="contains no data variables"):
             validate_store(store_path, kind="export")
 
 

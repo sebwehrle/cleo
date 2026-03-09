@@ -285,8 +285,10 @@ def validate_store(
 
     Notes
     -----
-    This function opens only store metadata via zarr, not full xarray datasets,
-    making it lightweight for pre-flight validation checks.
+    This function reads Zarr metadata for all store kinds. For
+    ``kind="export"``, it also opens the store with xarray metadata to
+    distinguish data variables from coordinates without materializing array
+    payloads.
     """
     store_path = Path(path)
 
@@ -345,6 +347,19 @@ def validate_store(
         missing_vars = required_vars - array_names
         if missing_vars:
             errors.append(f"Missing required arrays: {sorted(missing_vars)}")
+    elif kind == "export":
+        try:
+            ds = xr.open_zarr(store_path, consolidated=False)
+        except Exception as e:
+            errors.append(f"Failed to open export store dataset: {e}")
+        else:
+            try:
+                if len(ds.data_vars) == 0:
+                    errors.append("Export store contains no data variables")
+            finally:
+                close = getattr(ds, "close", None)
+                if callable(close):
+                    close()
 
     if errors:
         raise ValidationError(

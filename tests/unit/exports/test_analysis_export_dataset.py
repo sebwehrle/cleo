@@ -313,6 +313,55 @@ class TestBuildAnalysisExportDataset:
 
         assert set(result.data_vars) == {"wind__capacity_factors", "landscape__valid_mask"}
 
+    def test_include_only_with_single_domain_prefixed_name_keeps_other_domain_empty(self) -> None:
+        """One-sided prefixed include_only keeps the non-selected domain empty."""
+        wind_ds = self._make_wind_ds()
+        land_ds = self._make_landscape_ds()
+
+        result = build_analysis_export_dataset(
+            wind_ds,
+            land_ds,
+            domain="both",
+            include_only=["wind__capacity_factors"],
+            prefix=True,
+            exclude_template=True,
+        )
+
+        assert set(result.data_vars) == {"wind__capacity_factors"}
+        np.testing.assert_array_equal(result.coords["x"].values, wind_ds.coords["x"].values)
+        np.testing.assert_array_equal(result.coords["y"].values, wind_ds.coords["y"].values)
+
+    def test_single_domain_prefixed_selection_skips_non_exported_grid_mismatch(self) -> None:
+        """One-sided prefixed exports do not require the other domain grid to match."""
+        wind_ds = self._make_wind_ds()
+        land_ds = self._make_landscape_ds().assign_coords(x=np.array([10, 11, 12, 13]))
+
+        result = build_analysis_export_dataset(
+            wind_ds,
+            land_ds,
+            domain="both",
+            include_only=["wind__capacity_factors"],
+            prefix=True,
+            exclude_template=True,
+        )
+
+        assert set(result.data_vars) == {"wind__capacity_factors"}
+
+    def test_include_only_empty_for_both_raises(self) -> None:
+        """An empty combined include_only selection must fail."""
+        wind_ds = self._make_wind_ds()
+        land_ds = self._make_landscape_ds()
+
+        with pytest.raises(ValueError, match="No variables to export"):
+            build_analysis_export_dataset(
+                wind_ds,
+                land_ds,
+                domain="both",
+                include_only=[],
+                prefix=True,
+                exclude_template=True,
+            )
+
     def test_include_only_unprefixed_name_raises_for_both(self) -> None:
         """include_only with unprefixed name raises for domain='both' with prefix=True."""
         wind_ds = self._make_wind_ds()
@@ -378,8 +427,48 @@ class TestBuildAnalysisExportDataset:
 
         assert "y" in result.coords
         assert "x" in result.coords
-        np.testing.assert_array_equal(result.coords["y"].values, wind_ds.coords["y"].values)
-        np.testing.assert_array_equal(result.coords["x"].values, wind_ds.coords["x"].values)
+
+    def test_domain_both_rejects_mismatched_x_coords(self) -> None:
+        """Combined export requires exact x-coordinate equality."""
+        wind_ds = self._make_wind_ds()
+        land_ds = self._make_landscape_ds().assign_coords(x=np.array([10, 11, 12, 13]))
+
+        with pytest.raises(ValueError, match="identical 'x' coordinates"):
+            build_analysis_export_dataset(
+                wind_ds,
+                land_ds,
+                domain="both",
+                prefix=True,
+                exclude_template=True,
+            )
+
+    def test_domain_both_rejects_mismatched_y_coords(self) -> None:
+        """Combined export requires exact y-coordinate equality."""
+        wind_ds = self._make_wind_ds()
+        land_ds = self._make_landscape_ds().assign_coords(y=np.array([10, 11, 12]))
+
+        with pytest.raises(ValueError, match="identical 'y' coordinates"):
+            build_analysis_export_dataset(
+                wind_ds,
+                land_ds,
+                domain="both",
+                prefix=True,
+                exclude_template=True,
+            )
+
+    def test_domain_both_rejects_reversed_coordinate_order(self) -> None:
+        """Combined export rejects reversed coordinate order even with same values."""
+        wind_ds = self._make_wind_ds()
+        land_ds = self._make_landscape_ds().assign_coords(x=np.array([3, 2, 1, 0]))
+
+        with pytest.raises(ValueError, match="identical 'x' coordinates"):
+            build_analysis_export_dataset(
+                wind_ds,
+                land_ds,
+                domain="both",
+                prefix=True,
+                exclude_template=True,
+            )
 
 
 class TestExportDatasetValidation:

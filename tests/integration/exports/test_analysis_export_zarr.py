@@ -452,6 +452,60 @@ class TestExportAnalysisDatasetZarr:
         np.testing.assert_array_equal(ds.coords["y"].values, source_y)
         np.testing.assert_array_equal(ds.coords["x"].values, source_x)
 
+    def test_compute_false_matches_compute_true_with_chunked_sources(
+        self, atlas_with_stores: MockAtlasForExport, tmp_path: Path
+    ) -> None:
+        """compute=False skips precompute but preserves synchronous export output."""
+        from cleo.exports import export_analysis_dataset_zarr
+
+        atlas_with_stores.compute_backend = "threads"
+
+        export_true = tmp_path / "export" / "compute_true.zarr"
+        export_false = tmp_path / "export" / "compute_false.zarr"
+
+        export_analysis_dataset_zarr(
+            atlas_with_stores,
+            export_true,
+            domain="both",
+            prefix=True,
+            exclude_template=True,
+            compute=True,
+        )
+        export_analysis_dataset_zarr(
+            atlas_with_stores,
+            export_false,
+            domain="both",
+            prefix=True,
+            exclude_template=True,
+            compute=False,
+        )
+
+        ds_true = xr.open_zarr(export_true, consolidated=False)
+        ds_false = xr.open_zarr(export_false, consolidated=False)
+
+        assert set(ds_true.data_vars) == set(ds_false.data_vars)
+        assert set(ds_true.coords) == set(ds_false.coords)
+
+        for coord_name in ds_true.coords:
+            np.testing.assert_array_equal(ds_true.coords[coord_name].values, ds_false.coords[coord_name].values)
+
+        for var_name in ds_true.data_vars:
+            xr.testing.assert_equal(ds_true[var_name], ds_false[var_name])
+
+        attrs_true = dict(zarr.open_group(export_true, mode="r").attrs)
+        attrs_false = dict(zarr.open_group(export_false, mode="r").attrs)
+
+        for key in ("store_state", "schema_version", "cleo:package_version", "export_spec_json"):
+            assert attrs_true[key] == attrs_false[key]
+
+        if "upstream_provenance_json" in attrs_true or "upstream_provenance_json" in attrs_false:
+            assert attrs_true["upstream_provenance_json"] == attrs_false["upstream_provenance_json"]
+
+        for attrs in (attrs_true, attrs_false):
+            created_at = attrs["created_at"]
+            parsed = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            assert parsed.tzinfo is not None
+
 
 class TestAtlasExportMethod:
     """Integration tests for Atlas.export_analysis_dataset_zarr method."""

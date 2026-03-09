@@ -501,6 +501,8 @@ Normative:
   - `include_only` uses raw variable names.
 - `exclude_template=True` removes `template` variables from the export.
 - `compute=True` (default) forces dask computation before write for reliability.
+- `compute=False` skips the explicit pre-write computation step but still writes
+  the export synchronously.
 - Returns `Path` to the created Zarr store.
 
 Store attributes:

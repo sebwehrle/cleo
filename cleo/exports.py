@@ -286,8 +286,10 @@ def export_analysis_dataset_zarr(
     exclude_template : bool, default True
         If True, exclude template variables from the export.
     compute : bool, default True
-        If True, compute dask arrays before writing. If False, write lazily
-        (may fail if underlying data has issues).
+        If True, compute dask arrays before writing using the Atlas compute
+        backend for a more controlled execution path. If False, skip that
+        explicit precompute step and write synchronously via
+        :meth:`xarray.Dataset.to_zarr`.
 
     Returns
     -------
@@ -356,7 +358,8 @@ def export_analysis_dataset_zarr(
     # attrs which are added after the zarr write. Post-write validate_store()
     # handles full validation.
 
-    # Compute if requested
+    # `compute=False` skips only the explicit dataset precompute step.
+    # The export write itself remains a normal synchronous to_zarr() call.
     if compute:
         backend = getattr(atlas, "compute_backend", "serial")
         workers = getattr(atlas, "compute_workers", None)

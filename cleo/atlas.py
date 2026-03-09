@@ -1091,7 +1091,9 @@ class Atlas:
         :param exclude_template: If ``True`` (default), exclude template
             variables from the export.
         :param compute: If ``True`` (default), compute dask arrays before
-            writing. If ``False``, write lazily.
+            writing using the Atlas compute backend. If ``False``, skip the
+            explicit precompute step and write synchronously via
+            ``xarray.Dataset.to_zarr(...)``.
 
         :returns: Path to the created Zarr store.
         :rtype: pathlib.Path

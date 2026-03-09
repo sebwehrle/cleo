@@ -1,5 +1,9 @@
 # CLEO
 
+[![CI](https://github.com/sebwehrle/cleo/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/sebwehrle/cleo/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://github.com/sebwehrle/cleo/blob/master/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/sebwehrle/cleo/blob/master/LICENSE.md)
+
 CLEO is an `xarray`-based package for wind resource assessment with Global Wind Atlas (GWA) inputs.
 It creates Zarr datasets on disk, computes wind and energy metrics, and can persist or export results.
 

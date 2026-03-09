@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI now generates a dedicated full-suite coverage report artifact and uploads it to Codecov when `CODECOV_TOKEN` is configured, so repository coverage can be tracked and surfaced publicly
 - Generated coverage reports such as `coverage.xml` are now git-ignored to keep repository status clean when coverage is run locally
 - Tracked IDE metadata has been removed from the repository so ignored local `.idea/` files do not appear on GitHub
+- The coverage workflow now gates Codecov upload through a job environment variable so GitHub Actions accepts the workflow when `CODECOV_TOKEN` is configured
 - `atlas.wind.compute("min_lcoe_turbine", ...)` now masks invalid pixels at the public API boundary instead of surfacing the internal `-1` nodata sentinel
 - Wind public API now uses explicit wind-assessment method vocabulary:
   `capacity_factors` accepts `method`/`interpolation` instead of legacy `mode`,

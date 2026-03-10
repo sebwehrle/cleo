@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import warnings
 
+import numpy as np
 import xarray as xr
 import zarr
 
@@ -71,7 +72,11 @@ def open_zarr_dataset(
     :param chunk_policy: Requested chunk policy for reading. If None, uses
         stored chunk policy (if available) or DEFAULT_CHUNK_POLICY.
     :type chunk_policy: dict[str, int] | None
-    :returns: Opened xarray Dataset with aligned chunking.
+    Boolean root attrs are normalized to integer scalars on read so the
+    returned dataset remains directly serializable via
+    ``xarray.Dataset.to_netcdf(...)`` with standard backends.
+
+    :returns: Opened xarray Dataset with aligned chunking and NetCDF-safe attrs.
     :rtype: xarray.Dataset
     """
     path = Path(store_path)
@@ -99,7 +104,37 @@ def open_zarr_dataset(
         # No stored policy - use configured (backward compat for old stores)
         effective_chunks = configured_policy
 
-    return xr.open_zarr(path, consolidated=False, chunks=effective_chunks)
+    ds = xr.open_zarr(path, consolidated=False, chunks=effective_chunks)
+    return _normalize_dataset_attrs_for_netcdf(ds)
+
+
+def _normalize_attr_scalar_for_netcdf(value: object) -> object:
+    """Normalize one attribute value to a NetCDF-safe scalar when needed.
+
+    :param value: Attribute value read from a dataset or variable.
+    :type value: object
+    :returns: Original value, except boolean scalars are converted to ``0`` or
+        ``1`` for NetCDF compatibility.
+    :rtype: object
+    """
+    if isinstance(value, (bool, np.bool_)):
+        return int(value)
+    return value
+
+
+def _normalize_dataset_attrs_for_netcdf(ds: xr.Dataset) -> xr.Dataset:
+    """Return a shallow dataset copy with NetCDF-safe dataset attrs.
+
+    :param ds: Dataset whose root attrs may include boolean scalars.
+    :type ds: xarray.Dataset
+    :returns: Dataset with normalized root attrs suitable for NetCDF export.
+    :rtype: xarray.Dataset
+    """
+    has_boolean_scalars = any(isinstance(value, (bool, np.bool_)) for value in ds.attrs.values())
+    if not has_boolean_scalars:
+        return ds
+    normalized = {key: _normalize_attr_scalar_for_netcdf(value) for key, value in ds.attrs.items()}
+    return ds.assign_attrs(normalized)
 
 
 def resolve_active_landscape_store_path(atlas) -> Path:
@@ -144,12 +179,23 @@ def write_netcdf_atomic(
     *,
     encoding: dict | None = None,
 ) -> Path:
-    """Write a dataset atomically to NetCDF at ``out_path``."""
+    """Write a dataset atomically to NetCDF at ``out_path``.
+
+    :param ds: Dataset to serialize.
+    :type ds: xarray.Dataset
+    :param out_path: Target NetCDF path.
+    :type out_path: str | pathlib.Path
+    :param encoding: Optional xarray encoding mapping.
+    :type encoding: dict | None
+    :returns: Final output path.
+    :rtype: pathlib.Path
+    """
     out = Path(out_path)
     tmp = out.with_name(out.name + f".__tmp__{uuid4().hex}")
+    ds_to_write = _normalize_dataset_attrs_for_netcdf(ds)
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        ds.to_netcdf(tmp, encoding=encoding)
+        ds_to_write.to_netcdf(tmp, encoding=encoding)
         os.replace(tmp, out)
     except (OSError, ValueError, RuntimeError, TypeError):
         if tmp.exists():

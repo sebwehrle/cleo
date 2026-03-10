@@ -147,7 +147,13 @@ def _require_land_valid_mask(land: xr.Dataset | None, *, metric_name: str) -> xr
     """
     if land is None or "valid_mask" not in land:
         raise ValueError(f"landscape store with valid_mask required for {metric_name}")
-    return land["valid_mask"]
+    valid_mask = land["valid_mask"]
+    if valid_mask.dtype != np.dtype(bool):
+        raise ValueError(
+            f"landscape valid_mask must be boolean for {metric_name}; found {valid_mask.dtype}. "
+            "This usually means the selected area store is stale. Run atlas.build() for the current area."
+        )
+    return valid_mask
 
 
 def _resolve_weibull_stacks(wind: xr.Dataset) -> tuple[xr.DataArray, xr.DataArray]:

@@ -20,6 +20,7 @@ from cleo.unification.store_io import (
     read_area_store_meta,
     read_zarr_group_attrs,
     turbine_ids_from_json,
+    write_netcdf_atomic,
 )
 
 
@@ -176,6 +177,40 @@ def test_open_zarr_dataset_no_warning_when_no_stored_policy(tmp_path: Path) -> N
         assert len(chunk_warnings) == 0
 
     ds.close()
+
+
+def test_open_zarr_dataset_normalizes_boolean_root_attrs_for_netcdf(tmp_path: Path) -> None:
+    """Boolean root attrs are normalized so public datasets export to NetCDF."""
+    store = tmp_path / "test.zarr"
+    _create_zarr_store_with_data(store, chunk_policy={"y": 512, "x": 512})
+
+    root = zarr.open_group(store, mode="a")
+    root.attrs["code_dirty"] = True
+    root.attrs["requires_landscape_valid_mask"] = False
+
+    ds = open_zarr_dataset(store, chunk_policy={"y": 512, "x": 512})
+    try:
+        assert ds.attrs["code_dirty"] == 1
+        assert ds.attrs["requires_landscape_valid_mask"] == 0
+
+        out_path = tmp_path / "normalized.nc"
+        ds.to_netcdf(out_path)
+        assert out_path.exists()
+    finally:
+        ds.close()
+
+
+def test_write_netcdf_atomic_normalizes_boolean_root_attrs(tmp_path: Path) -> None:
+    """Atomic NetCDF export accepts datasets with boolean root attrs."""
+    ds = xr.Dataset({"var": (["y", "x"], np.zeros((2, 2), dtype=np.float64))})
+    ds.attrs["code_dirty"] = True
+
+    out_path = write_netcdf_atomic(ds, tmp_path / "atomic.nc")
+    reopened = xr.open_dataset(out_path)
+    try:
+        assert reopened.attrs["code_dirty"] == np.int64(1)
+    finally:
+        reopened.close()
 
 
 def test_default_chunk_policy_constant() -> None:

@@ -137,3 +137,18 @@ def test_lcoe_min_lcoe_and_optimal_power_success_paths() -> None:
     assert np.isfinite(lcoe.values[np.isfinite(lcoe.values)]).all()
     assert np.isnan(idx.values[0, 1])
     assert np.all(np.isfinite(idx.values[land["valid_mask"].values]))
+
+
+def test_min_lcoe_turbine_raises_clear_error_for_non_boolean_valid_mask() -> None:
+    """Non-boolean ``valid_mask`` fails fast with a stale-store remediation hint."""
+    wind, land = _make_wind_land()
+    land = land.assign(valid_mask=land["valid_mask"].astype(np.float64).where(land["valid_mask"], np.nan))
+
+    with pytest.raises(ValueError, match="valid_mask must be boolean.*Run atlas.build\\(\\)"):
+        _wind_metric_min_lcoe_turbine(
+            wind,
+            land,
+            turbines=("T1", "T2"),
+            method="hub_height_weibull",
+            **_lcoe_params(),
+        )

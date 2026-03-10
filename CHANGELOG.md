@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Hardened atlas dataset interoperability and stale-area diagnostics: datasets opened through the Atlas/store I/O path now normalize boolean root attrs to NetCDF-safe integer scalars for direct `to_netcdf(...)` export, and wind metrics now raise a targeted error instructing users to rebuild the current area when `landscape.valid_mask` is not boolean
+- Landscape vector rasterization now caches canonical vector intermediates as GPKG instead of GeoJSON, avoids internal GeoJSON cache failures on very large dissolved geometries, and refreshes older vector manifest entries onto the new cache path without treating the source as changed
 - Clarified and hardened `atlas.export_analysis_dataset_zarr(..., compute=...)`: `compute=False` is now documented and regression-tested as "skip explicit precompute, still write synchronously", combined exports now reject zero-variable selections, one-sided prefixed selections still work when only one domain is exported, and exports that include both wind and landscape variables fail fast on mismatched `x`/`y` grids instead of silently widening the export grid
 - Fixed CI test execution to stop referencing the removed internal compat test directory.
 - Normalize test-suite formatting so Ruff format checks pass in CI

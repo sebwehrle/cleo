@@ -221,10 +221,13 @@ def _existing_landscape_source_decision(
     existing_path = existing.get("path", "")
     existing_params = existing.get("params_json", "")
     existing_fingerprint = existing.get("fingerprint", "")
+    vector_logical_match = kind == "vector" and existing_params == params_json and existing_fingerprint == fingerprint
 
     if if_exists == "noop":
         if exact_match:
             return False
+        if vector_logical_match:
+            return True
         raise ValueError(
             f"Source {source_id!r} already registered with different configuration.\n"
             f"  Existing: path={existing_path!r}, params={existing_params!r}, "
@@ -235,6 +238,8 @@ def _existing_landscape_source_decision(
         )
 
     if if_exists == "error":
+        if vector_logical_match:
+            return True
         config_matches = existing_path == str(source_path) and existing_params == params_json
         if not config_matches:
             raise ValueError(

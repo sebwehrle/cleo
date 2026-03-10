@@ -28,6 +28,7 @@ from cleo.unification.materializers._landscape_api import (
     prepare_landscape_variable_data,
     register_landscape_vector_source,
 )
+from cleo.unification.manifest import _read_manifest, _write_manifest_atomic
 from cleo.unification.unifier import Unifier
 
 
@@ -195,7 +196,7 @@ def test_vector_register_prepare_materialize_flow(tmp_path: Path) -> None:
 
     source = next(s for s in sources if s["source_id"] == "land:vector:overnight_stays")
     assert source["kind"] == "vector"
-    assert source["path"].endswith(".geojson")
+    assert source["path"].endswith(".gpkg")
     var = next(v for v in vars_ if v["variable_name"] == "overnight_stays")
     assert var["source_id"] == "land:vector:overnight_stays"
 
@@ -253,6 +254,47 @@ def test_vector_noop_requires_exact_match(tmp_path: Path) -> None:
             all_touched=False,
             if_exists="noop",
         )
+
+
+@pytest.mark.parametrize("if_exists", ["noop", "error"])
+def test_vector_registration_refreshes_old_geojson_manifest_path(tmp_path: Path, if_exists: str) -> None:
+    atlas = MockAtlas(tmp_path)
+    _create_all_gwa_rasters(tmp_path)
+    _create_elevation_raster(tmp_path)
+    atlas.build_canonical()
+
+    gdf = _sample_vector()
+    changed = register_landscape_vector_source(
+        atlas,
+        name="overnight_stays",
+        shape=gdf,
+        column="overnight_stays",
+        all_touched=False,
+        if_exists="error",
+    )
+    assert changed is True
+
+    store_path = tmp_path / "landscape.zarr"
+    manifest = _read_manifest(store_path)
+    source = next(s for s in manifest["sources"] if s["source_id"] == "land:vector:overnight_stays")
+    source["path"] = source["path"].removesuffix(".gpkg") + ".geojson"
+    _write_manifest_atomic(store_path, manifest)
+
+    refreshed = register_landscape_vector_source(
+        atlas,
+        name="overnight_stays",
+        shape=gdf,
+        column="overnight_stays",
+        all_touched=False,
+        if_exists=if_exists,
+    )
+    assert refreshed is True
+
+    updated = _read_manifest(store_path)
+    updated_source = next(s for s in updated["sources"] if s["source_id"] == "land:vector:overnight_stays")
+    assert updated_source["path"].endswith(".gpkg")
+    assert updated_source["fingerprint"] == source["fingerprint"]
+    assert updated_source["params_json"] == source["params_json"]
 
 
 def test_landscape_domain_rasterize_stage_and_materialize(tmp_path: Path) -> None:

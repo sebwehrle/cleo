@@ -62,7 +62,7 @@ def test_canonical_vector_source_artifact_path_and_hash(tmp_path: Path) -> None:
 
     assert out_path.exists()
     assert out_path.parent == (tmp_path / "intermediates" / "vector_sources")
-    assert out_path.suffix == ".geojson"
+    assert out_path.suffix == ".gpkg"
     assert out_path.stem == fingerprint
 
 
@@ -87,6 +87,7 @@ def test_canonical_vector_source_artifact_hash_matches_path_and_gdf(tmp_path: Pa
 
     assert h_gdf == h_path
     assert out_from_gdf == out_from_path
+    assert out_from_gdf.suffix == ".gpkg"
 
 
 def test_canonical_vector_source_artifact_requires_numeric_column(tmp_path: Path) -> None:

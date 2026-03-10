@@ -15,6 +15,8 @@ import numpy as np
 
 from cleo.spatial import canonical_crs_str, to_crs_if_needed
 
+_VECTOR_CACHE_LAYER_NAME = "features"
+
 
 def _load_vector_shape(shape):
     """Load a vector shape from path-like input or GeoDataFrame-like object."""
@@ -112,7 +114,20 @@ def _canonical_vector_source_artifact(
     column: str | None,
     all_touched: bool,
 ) -> tuple[Path, str]:
-    """Normalize vector input to canonical artifact path + semantic fingerprint."""
+    """Normalize vector input to canonical artifact path and semantic fingerprint.
+
+    :param atlas: Atlas-like object exposing ``path`` and ``crs``.
+    :type atlas: typing.Any
+    :param shape: Path-like vector source or ``geopandas.GeoDataFrame``.
+    :type shape: object
+    :param column: Optional numeric column to burn during rasterization.
+    :type column: str | None
+    :param all_touched: Rasterization ``all_touched`` flag that participates in
+        semantic identity.
+    :type all_touched: bool
+    :returns: Canonical vector cache path and semantic hash.
+    :rtype: tuple[pathlib.Path, str]
+    """
     gdf = _load_vector_shape(shape)
     if gdf.crs is None:
         raise ValueError("Input shape has no CRS; cannot rasterize safely.")
@@ -128,10 +143,14 @@ def _canonical_vector_source_artifact(
 
     out_dir = Path(atlas.path) / "intermediates" / "vector_sources"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{semantic_hash}.geojson"
+    out_path = out_dir / f"{semantic_hash}.gpkg"
 
     if not out_path.exists():
         cols = ["geometry"] if column is None else [column, "geometry"]
-        gdf.loc[:, cols].to_file(out_path, driver="GeoJSON")
+        gdf.loc[:, cols].to_file(
+            out_path,
+            driver="GPKG",
+            layer=_VECTOR_CACHE_LAYER_NAME,
+        )
 
     return out_path, semantic_hash

@@ -45,6 +45,31 @@ def _cf_store_dataset(*, coord_labels: list[object] | None = None) -> xr.Dataset
     )
 
 
+class _FakeAtlas:
+    """Minimal atlas stub for economics reuse tests."""
+
+    def _effective_hours_per_year(self) -> float:
+        """Return the configured economics timebase."""
+        return 8766.0
+
+
+class _FakeDomain:
+    """Minimal wind-domain stub exposing only store access used by reuse logic.
+
+    Staged overlays are intentionally omitted because stored-CF reuse is the
+    only path in scope for these tests.
+    """
+
+    def __init__(self, store_ds: xr.Dataset):
+        """Store the active wind dataset used by the test."""
+        self._atlas = _FakeAtlas()
+        self._store_ds = store_ds
+
+    def _store_data(self) -> xr.Dataset:
+        """Return the active wind-store dataset."""
+        return self._store_ds
+
+
 class TestCfSpecMatches:
     """Tests for _cf_spec_matches helper function."""
 
@@ -317,24 +342,50 @@ class TestExtractRequestedCfSubset:
         assert subset.attrs["cleo:loss_factor"] == 1.0
         assert json.loads(subset.attrs["cleo:turbines_json"]) == ["T2"]
 
+    def test_reuses_exact_match_for_older_store_without_computed_provenance(self) -> None:
+        """Older stores still reuse when the requested turbine list matches exactly."""
+        store_ds = _cf_store_dataset()
+        del store_ds["capacity_factors"].attrs["cleo:computed_turbines_json"]
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T1", "T2"))
+
+        assert subset is not None
+        assert subset.coords["turbine"].values.tolist() == ["T1", "T2"]
+        np.testing.assert_allclose(subset.values, store_ds["capacity_factors"].values)
+
+    def test_rejects_subset_reuse_for_older_store_without_computed_provenance(self) -> None:
+        """Older normalized full-axis stores do not guess whether subsets were computed."""
+        store_ds = _cf_store_dataset()
+        del store_ds["capacity_factors"].attrs["cleo:computed_turbines_json"]
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T2",))
+
+        assert subset is None
+
+    def test_rejects_reuse_when_computed_provenance_is_malformed(self) -> None:
+        """Malformed computed-slice provenance disables reuse instead of guessing."""
+        store_ds = _cf_store_dataset()
+        store_ds["capacity_factors"].attrs["cleo:computed_turbines_json"] = "{not-json"
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T1",))
+
+        assert subset is None
+
+    def test_rejects_reuse_when_store_axis_metadata_cannot_be_interpreted(self) -> None:
+        """Subset extraction stays conservative when store-axis metadata is missing."""
+        store_ds = _cf_store_dataset(coord_labels=["store-T1", "store-T2"])
+        del store_ds.attrs["cleo_turbines_json"]
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T2",))
+
+        assert subset is None
+
 
 class TestInjectEconomicsParamsAndCfReuse:
     """Tests for economics reuse injection against stored full-axis CF data."""
 
     def test_injects_subset_scoped_precomputed_cf(self) -> None:
         """Compatible full-axis stored CF is reused as a requested subset."""
-
-        class _FakeAtlas:
-            def _effective_hours_per_year(self) -> float:
-                return 8766.0
-
-        class _FakeDomain:
-            def __init__(self, store_ds: xr.Dataset):
-                self._atlas = _FakeAtlas()
-                self._store_ds = store_ds
-
-            def _store_data(self) -> xr.Dataset:
-                return self._store_ds
 
         store_ds = _cf_store_dataset()
         kwargs = {"turbines": ("T2",)}
@@ -356,21 +407,44 @@ class TestInjectEconomicsParamsAndCfReuse:
     def test_does_not_inject_precomputed_cf_for_uncomputed_turbine_slice(self) -> None:
         """NaN-padded full-axis slices do not count as reusable computed turbines."""
 
-        class _FakeAtlas:
-            def _effective_hours_per_year(self) -> float:
-                return 8766.0
-
-        class _FakeDomain:
-            def __init__(self, store_ds: xr.Dataset):
-                self._atlas = _FakeAtlas()
-                self._store_ds = store_ds
-
-            def _store_data(self) -> xr.Dataset:
-                return self._store_ds
-
         store_ds = _cf_store_dataset()
         store_ds["capacity_factors"].attrs["cleo:computed_turbines_json"] = json.dumps(["T2"])
         kwargs = {"turbines": ("T1",)}
+
+        _inject_economics_params_and_cf_reuse(
+            kwargs,
+            metric="lcoe",
+            spec={"composed": True},
+            resolved_cf=resolve_cf_spec(None),
+            domain=_FakeDomain(store_ds),
+        )
+
+        assert kwargs["hours_per_year"] == pytest.approx(8766.0)
+        assert "_precomputed_cf" not in kwargs
+
+    def test_injects_precomputed_cf_for_older_exact_match_store(self) -> None:
+        """Older stores still reuse exactly matching turbine requests."""
+        store_ds = _cf_store_dataset()
+        del store_ds["capacity_factors"].attrs["cleo:computed_turbines_json"]
+        kwargs = {"turbines": ("T1", "T2")}
+
+        _inject_economics_params_and_cf_reuse(
+            kwargs,
+            metric="lcoe",
+            spec={"composed": True},
+            resolved_cf=resolve_cf_spec(None),
+            domain=_FakeDomain(store_ds),
+        )
+
+        assert "_precomputed_cf" in kwargs
+        subset = kwargs["_precomputed_cf"]
+        assert subset.coords["turbine"].values.tolist() == ["T1", "T2"]
+
+    def test_does_not_inject_precomputed_cf_when_store_axis_metadata_is_missing(self) -> None:
+        """Malformed store metadata falls back to recomputation instead of guessing."""
+        store_ds = _cf_store_dataset(coord_labels=["store-T1", "store-T2"])
+        del store_ds.attrs["cleo_turbines_json"]
+        kwargs = {"turbines": ("T2",)}
 
         _inject_economics_params_and_cf_reuse(
             kwargs,

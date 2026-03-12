@@ -605,6 +605,90 @@ class TestLcoeFamilyMetricsIntegration:
             equal_nan=True,
         )
 
+    def test_lcoe_reuses_materialized_full_axis_capacity_factors_for_subset(
+        self,
+        multi_turbine_materialized_atlas: Atlas,
+        full_economics: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Subset LCOE reuses compatible materialized full-axis capacity factors."""
+        atlas = multi_turbine_materialized_atlas
+        all_turbines = list(atlas.wind.turbines)
+        selected_turbine = all_turbines[0]
+
+        atlas.wind.select(turbines=all_turbines)
+        atlas.wind.compute("capacity_factors").materialize(overwrite=True)
+        atlas.wind.clear_computed()
+        atlas.wind.select(turbines=[selected_turbine])
+
+        def _fail_cf_recompute(*args, **kwargs):
+            raise AssertionError("capacity_factors should be reused from the active store")
+
+        monkeypatch.setattr("cleo.wind_metrics._wind_metric_capacity_factors", _fail_cf_recompute)
+
+        lcoe = atlas.wind.compute("lcoe", economics=full_economics).data.compute()
+
+        assert lcoe.coords["turbine"].values.tolist() == [selected_turbine]
+        assert json.loads(lcoe.attrs["cleo:turbine_ids_json"]) == [selected_turbine]
+        assert np.isfinite(lcoe.values).any()
+
+    def test_lcoe_reuses_subset_materialized_capacity_factors_for_same_subset(
+        self,
+        multi_turbine_materialized_atlas: Atlas,
+        full_economics: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Subset materialization keeps reuse available for the same turbine subset."""
+        atlas = multi_turbine_materialized_atlas
+        selected_turbine = atlas.wind.turbines[0]
+
+        atlas.wind.select(turbines=[selected_turbine])
+        atlas.wind.compute("capacity_factors").materialize(overwrite=True)
+        atlas.wind.clear_computed()
+
+        def _fail_cf_recompute(*args, **kwargs):
+            raise AssertionError("capacity_factors should be reused for the stored subset")
+
+        monkeypatch.setattr("cleo.wind_metrics._wind_metric_capacity_factors", _fail_cf_recompute)
+
+        lcoe = atlas.wind.compute("lcoe", economics=full_economics).data.compute()
+
+        assert lcoe.coords["turbine"].values.tolist() == [selected_turbine]
+        assert np.isfinite(lcoe.values).any()
+
+    def test_lcoe_recomputes_when_requested_subset_was_not_materialized(
+        self,
+        multi_turbine_materialized_atlas: Atlas,
+        full_economics: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Different turbine requests recompute instead of reusing NaN-padded slices."""
+        import cleo.wind_metrics as wind_metrics
+
+        atlas = multi_turbine_materialized_atlas
+        stored_turbine = atlas.wind.turbines[0]
+        requested_turbine = atlas.wind.turbines[1]
+
+        atlas.wind.select(turbines=[stored_turbine])
+        atlas.wind.compute("capacity_factors").materialize(overwrite=True)
+        atlas.wind.clear_computed()
+        atlas.wind.select(turbines=[requested_turbine])
+
+        original = wind_metrics._wind_metric_capacity_factors
+        calls = {"count": 0}
+
+        def _count_cf_recompute(*args, **kwargs):
+            calls["count"] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(wind_metrics, "_wind_metric_capacity_factors", _count_cf_recompute)
+
+        lcoe = atlas.wind.compute("lcoe", economics=full_economics).data.compute()
+
+        assert calls["count"] == 1
+        assert lcoe.coords["turbine"].values.tolist() == [requested_turbine]
+        assert np.isfinite(lcoe.values).any()
+
     def test_lcoe_and_min_lcoe_turbine_grouped_spec_api(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """lcoe and min_lcoe_turbine use the grouped spec API."""
         atlas = materialized_atlas

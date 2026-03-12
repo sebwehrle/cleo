@@ -127,6 +127,7 @@ def test_normalize_metric_rewrites_turbine_axis_attrs_to_store_order() -> None:
         existing_ds=existing_ds,
     )
 
+    assert json.loads(normalized.attrs["cleo:computed_turbines_json"]) == ["T2"]
     assert json.loads(normalized.attrs["cleo:turbines_json"]) == ["T1", "T2"]
     assert json.loads(normalized.attrs["cleo:turbine_ids_json"]) == ["T1", "T2"]
 

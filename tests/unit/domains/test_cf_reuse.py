@@ -2,10 +2,47 @@
 
 import json
 import numpy as np
+import pytest
 import xarray as xr
 
-from cleo.domains import _cf_spec_matches
+from cleo.domains import (
+    _cf_spec_is_compatible,
+    _cf_spec_matches,
+    _extract_requested_cf_subset,
+    _inject_economics_params_and_cf_reuse,
+)
 from cleo.wind_metrics import resolve_cf_spec
+
+
+def _cf_store_dataset(*, coord_labels: list[object] | None = None) -> xr.Dataset:
+    """Build a minimal wind store with full-axis capacity factors."""
+    if coord_labels is None:
+        coord_labels = ["T1", "T2"]
+
+    cf = xr.DataArray(
+        np.arange(8, dtype=np.float64).reshape(2, 2, 2),
+        dims=("turbine", "y", "x"),
+        coords={
+            "turbine": np.asarray(coord_labels, dtype=object),
+            "y": np.array([0.0, 1.0], dtype=np.float64),
+            "x": np.array([0.0, 1.0], dtype=np.float64),
+        },
+        name="capacity_factors",
+        attrs={
+            "cleo:cf_method": "rotor_node_average",
+            "cleo:interpolation": "mu_cv_loglog",
+            "cleo:air_density": 0,
+            "cleo:rews_n": 12,
+            "cleo:loss_factor": 1.0,
+            "cleo:turbines_json": json.dumps(["T1", "T2"]),
+            "cleo:computed_turbines_json": json.dumps(["T1", "T2"]),
+        },
+    )
+    return xr.Dataset(
+        {"capacity_factors": cf},
+        coords=cf.coords,
+        attrs={"cleo_turbines_json": '[{"id":"T1"},{"id":"T2"}]'},
+    )
 
 
 class TestCfSpecMatches:
@@ -173,3 +210,175 @@ class TestResolveCfSpecForReuse:
         assert spec["air_density"] is False  # Default preserved
         assert spec["rews_n"] == 12  # Default preserved
         assert spec["loss_factor"] == 1.0  # Default preserved
+
+
+class TestCfSpecCompatibility:
+    """Tests for CF-settings compatibility independent of turbine breadth."""
+
+    def test_returns_true_for_matching_full_axis_cf(self) -> None:
+        """Matching physics settings stay reusable independent of turbine breadth."""
+        cf = _cf_store_dataset()["capacity_factors"]
+
+        assert _cf_spec_is_compatible(cf, resolve_cf_spec(None)) is True
+
+    def test_returns_false_for_interpolation_mismatch(self) -> None:
+        """Interpolation mismatch disables reuse."""
+        cf = _cf_store_dataset()["capacity_factors"]
+
+        assert _cf_spec_is_compatible(cf, resolve_cf_spec({"interpolation": "ak_logz"})) is False
+
+    def test_returns_false_for_method_mismatch(self) -> None:
+        """Method mismatch disables reuse."""
+        cf = _cf_store_dataset()["capacity_factors"]
+
+        assert _cf_spec_is_compatible(cf, resolve_cf_spec({"method": "hub_height_weibull"})) is False
+
+    def test_returns_false_for_air_density_mismatch(self) -> None:
+        """Air-density mismatch disables reuse."""
+        cf = _cf_store_dataset()["capacity_factors"]
+
+        assert _cf_spec_is_compatible(cf, resolve_cf_spec({"air_density": True})) is False
+
+    def test_returns_false_for_rews_n_mismatch(self) -> None:
+        """REWS quadrature mismatch disables reuse when method uses it."""
+        cf = _cf_store_dataset()["capacity_factors"]
+
+        assert _cf_spec_is_compatible(cf, resolve_cf_spec({"rews_n": 24})) is False
+
+    def test_returns_false_for_loss_factor_mismatch(self) -> None:
+        """Loss-factor mismatch disables reuse."""
+        cf = _cf_store_dataset()["capacity_factors"]
+
+        assert _cf_spec_is_compatible(cf, resolve_cf_spec({"loss_factor": 0.95})) is False
+
+
+class TestExtractRequestedCfSubset:
+    """Tests for extracting subset-scoped CF arrays from full-axis store data."""
+
+    def test_extracts_subset_with_public_turbine_labels(self) -> None:
+        """Public turbine labels support direct ordered subset selection."""
+        store_ds = _cf_store_dataset()
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T2",))
+
+        assert subset is not None
+        assert subset.coords["turbine"].values.tolist() == ["T2"]
+        np.testing.assert_allclose(subset.values, store_ds["capacity_factors"].sel(turbine="T2").values[None, ...])
+        assert json.loads(subset.attrs["cleo:turbines_json"]) == ["T2"]
+
+    def test_extracts_subset_with_numeric_store_labels(self) -> None:
+        """Fallback mapping supports stores whose turbine coord labels are not IDs."""
+        store_ds = _cf_store_dataset(coord_labels=[10, 20])
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T2",))
+
+        assert subset is not None
+        assert subset.coords["turbine"].values.tolist() == ["T2"]
+        np.testing.assert_allclose(subset.values, store_ds["capacity_factors"].sel(turbine=20).values[None, ...])
+        assert json.loads(subset.attrs["cleo:turbines_json"]) == ["T2"]
+
+    def test_preserves_requested_turbine_order(self) -> None:
+        """Requested turbine order remains authoritative in the extracted subset."""
+        store_ds = _cf_store_dataset()
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T2", "T1"))
+
+        assert subset is not None
+        assert subset.coords["turbine"].values.tolist() == ["T2", "T1"]
+        np.testing.assert_allclose(subset.sel(turbine="T2").values, store_ds["capacity_factors"].sel(turbine="T2"))
+        np.testing.assert_allclose(subset.sel(turbine="T1").values, store_ds["capacity_factors"].sel(turbine="T1"))
+
+    def test_returns_none_when_requested_turbine_is_missing(self) -> None:
+        """Missing turbines disable reuse conservatively."""
+        store_ds = _cf_store_dataset()
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T9",))
+
+        assert subset is None
+
+    def test_returns_none_when_turbine_dim_is_absent(self) -> None:
+        """Unsupported CF shapes do not participate in reuse."""
+        cf = xr.DataArray(np.ones((2, 2), dtype=np.float64), dims=("y", "x"))
+
+        subset = _extract_requested_cf_subset(cf, _cf_store_dataset(), ("T1",))
+
+        assert subset is None
+
+    def test_preserves_non_turbine_cf_attrs(self) -> None:
+        """Subset extraction preserves CF settings attrs while rewriting turbines."""
+        store_ds = _cf_store_dataset()
+
+        subset = _extract_requested_cf_subset(store_ds["capacity_factors"], store_ds, ("T2",))
+
+        assert subset is not None
+        assert subset.attrs["cleo:cf_method"] == "rotor_node_average"
+        assert subset.attrs["cleo:air_density"] == 0
+        assert subset.attrs["cleo:rews_n"] == 12
+        assert subset.attrs["cleo:loss_factor"] == 1.0
+        assert json.loads(subset.attrs["cleo:turbines_json"]) == ["T2"]
+
+
+class TestInjectEconomicsParamsAndCfReuse:
+    """Tests for economics reuse injection against stored full-axis CF data."""
+
+    def test_injects_subset_scoped_precomputed_cf(self) -> None:
+        """Compatible full-axis stored CF is reused as a requested subset."""
+
+        class _FakeAtlas:
+            def _effective_hours_per_year(self) -> float:
+                return 8766.0
+
+        class _FakeDomain:
+            def __init__(self, store_ds: xr.Dataset):
+                self._atlas = _FakeAtlas()
+                self._store_ds = store_ds
+
+            def _store_data(self) -> xr.Dataset:
+                return self._store_ds
+
+        store_ds = _cf_store_dataset()
+        kwargs = {"turbines": ("T2",)}
+
+        _inject_economics_params_and_cf_reuse(
+            kwargs,
+            metric="lcoe",
+            spec={"composed": True},
+            resolved_cf=resolve_cf_spec(None),
+            domain=_FakeDomain(store_ds),
+        )
+
+        assert kwargs["hours_per_year"] == pytest.approx(8766.0)
+        assert "_precomputed_cf" in kwargs
+        subset = kwargs["_precomputed_cf"]
+        assert subset.coords["turbine"].values.tolist() == ["T2"]
+        assert json.loads(subset.attrs["cleo:turbines_json"]) == ["T2"]
+
+    def test_does_not_inject_precomputed_cf_for_uncomputed_turbine_slice(self) -> None:
+        """NaN-padded full-axis slices do not count as reusable computed turbines."""
+
+        class _FakeAtlas:
+            def _effective_hours_per_year(self) -> float:
+                return 8766.0
+
+        class _FakeDomain:
+            def __init__(self, store_ds: xr.Dataset):
+                self._atlas = _FakeAtlas()
+                self._store_ds = store_ds
+
+            def _store_data(self) -> xr.Dataset:
+                return self._store_ds
+
+        store_ds = _cf_store_dataset()
+        store_ds["capacity_factors"].attrs["cleo:computed_turbines_json"] = json.dumps(["T2"])
+        kwargs = {"turbines": ("T1",)}
+
+        _inject_economics_params_and_cf_reuse(
+            kwargs,
+            metric="lcoe",
+            spec={"composed": True},
+            resolved_cf=resolve_cf_spec(None),
+            domain=_FakeDomain(store_ds),
+        )
+
+        assert kwargs["hours_per_year"] == pytest.approx(8766.0)
+        assert "_precomputed_cf" not in kwargs

@@ -12,8 +12,10 @@ import xarray as xr
 import zarr
 
 from cleo.unification.store_io import (
+    ActiveStoreTurbineAxis,
     DEFAULT_CHUNK_POLICY,
     _read_stored_chunk_policy,
+    active_store_turbine_axis,
     delete_area_dir,
     list_area_dirs,
     open_zarr_dataset,
@@ -77,6 +79,32 @@ def test_turbine_ids_from_json_cache_is_payload_keyed() -> None:
     second = '[{"id":"B"}]'
     assert turbine_ids_from_json(first) == ("A",)
     assert turbine_ids_from_json(second) == ("B",)
+
+
+def test_active_store_turbine_axis_uses_explicit_coord_labels() -> None:
+    """Active-store turbine-axis helper preserves current coordinate labels."""
+    ds = xr.Dataset(
+        coords={"turbine": np.array([10, 20], dtype=np.int64)},
+        attrs={"cleo_turbines_json": '[{"id":"T1"},{"id":"T2"}]'},
+    )
+
+    axis = active_store_turbine_axis(ds)
+
+    assert isinstance(axis, ActiveStoreTurbineAxis)
+    assert axis.turbine_ids == ("T1", "T2")
+    assert axis.store_labels == (10, 20)
+    assert axis.label_by_id == {"T1": 10, "T2": 20}
+
+
+def test_active_store_turbine_axis_falls_back_to_positional_labels() -> None:
+    """Active-store turbine-axis helper falls back to positional labels."""
+    ds = xr.Dataset(attrs={"cleo_turbines_json": '[{"id":"T1"},{"id":"T2"}]'})
+
+    axis = active_store_turbine_axis(ds)
+
+    assert axis.turbine_ids == ("T1", "T2")
+    assert axis.store_labels == (0, 1)
+    assert axis.index_by_id == {"T1": 0, "T2": 1}
 
 
 # --- Chunk policy detection tests ---

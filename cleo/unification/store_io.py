@@ -10,6 +10,7 @@ import shutil
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import warnings
@@ -32,6 +33,28 @@ class AreaMeta:
     is_complete: bool
     wind_exists: bool
     landscape_exists: bool
+
+
+@dataclass(frozen=True)
+class ActiveStoreTurbineAxis:
+    """Canonical turbine-axis interpretation for an active wind store.
+
+    :param turbine_ids: Ordered turbine identifiers from ``cleo_turbines_json``.
+    :type turbine_ids: tuple[str, ...]
+    :param store_labels: Coordinate labels currently used on the store's
+        ``turbine`` axis.
+    :type store_labels: tuple[typing.Any, ...]
+    :param index_by_id: Mapping from turbine ID to its store-axis index.
+    :type index_by_id: dict[str, int]
+    :param label_by_id: Mapping from turbine ID to its current store coordinate
+        label.
+    :type label_by_id: dict[str, typing.Any]
+    """
+
+    turbine_ids: tuple[str, ...]
+    store_labels: tuple[Any, ...]
+    index_by_id: dict[str, int]
+    label_by_id: dict[str, Any]
 
 
 def _read_stored_chunk_policy(store_path: Path) -> dict[str, int] | None:
@@ -171,6 +194,35 @@ def turbine_ids_from_json(payload: str) -> tuple[str, ...]:
     """
     meta = json.loads(payload)
     return tuple(t["id"] for t in meta)
+
+
+def active_store_turbine_axis(ds: xr.Dataset) -> ActiveStoreTurbineAxis:
+    """Return the canonical turbine-axis interpretation for an active wind store.
+
+    :param ds: Wind-store dataset exposing ``cleo_turbines_json`` and an optional
+        ``turbine`` coordinate.
+    :type ds: xarray.Dataset
+    :returns: Active-store turbine-axis metadata.
+    :rtype: ActiveStoreTurbineAxis
+    :raises RuntimeError: If the store lacks ``cleo_turbines_json``.
+    """
+    meta_json = ds.attrs.get("cleo_turbines_json")
+    if not meta_json:
+        raise RuntimeError("Wind store missing cleo_turbines_json attr; cannot interpret turbine axis.")
+
+    turbine_ids = turbine_ids_from_json(meta_json)
+    if "turbine" in ds.coords and ds.coords["turbine"].dims == ("turbine",):
+        store_labels = tuple(ds.coords["turbine"].values.tolist())
+    else:
+        store_labels = tuple(range(len(turbine_ids)))
+
+    index_by_id = {tid: i for i, tid in enumerate(turbine_ids)}
+    return ActiveStoreTurbineAxis(
+        turbine_ids=turbine_ids,
+        store_labels=store_labels,
+        index_by_id=index_by_id,
+        label_by_id={tid: store_labels[i] for tid, i in index_by_id.items()},
+    )
 
 
 def write_netcdf_atomic(

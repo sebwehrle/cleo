@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 from cleo.dask_utils import compute as dask_compute
 from cleo.store import single_writer_lock, zarr_store_lock_dir
-from cleo.unification.store_io import turbine_ids_from_json
+from cleo.unification.store_io import active_store_turbine_axis, turbine_ids_from_json
 
 logger = logging.getLogger(__name__)
 
@@ -201,20 +201,11 @@ class _ActiveWindTurbineAlignment:
         :rtype: _ActiveWindTurbineAlignment
         :raises RuntimeError: If the store lacks ``cleo_turbines_json``.
         """
-        meta_json = existing_ds.attrs.get("cleo_turbines_json")
-        if not meta_json:
-            raise RuntimeError("Wind store missing cleo_turbines_json attr; cannot align turbine coordinates.")
-
-        turbine_ids = turbine_ids_from_json(meta_json)
-        if "turbine" in existing_ds.coords and existing_ds.coords["turbine"].dims == ("turbine",):
-            store_labels = tuple(existing_ds.coords["turbine"].values.tolist())
-        else:
-            store_labels = tuple(range(len(turbine_ids)))
-
+        axis = active_store_turbine_axis(existing_ds)
         return cls(
-            turbine_ids=turbine_ids,
-            store_labels=store_labels,
-            index_by_id={tid: i for i, tid in enumerate(turbine_ids)},
+            turbine_ids=axis.turbine_ids,
+            store_labels=axis.store_labels,
+            index_by_id=axis.index_by_id,
         )
 
     def labels_for_coord(self, coord: xr.DataArray) -> tuple[Any, ...]:
@@ -303,6 +294,7 @@ def _align_turbine_axis(
     attrs = out.attrs.copy()
     turbine_ids_json = json.dumps(list(alignment.turbine_ids), ensure_ascii=True)
     if "cleo:turbines_json" in attrs:
+        attrs.setdefault("cleo:computed_turbines_json", attrs["cleo:turbines_json"])
         attrs["cleo:turbines_json"] = turbine_ids_json
     if "cleo:turbine_ids_json" in attrs:
         attrs["cleo:turbine_ids_json"] = turbine_ids_json

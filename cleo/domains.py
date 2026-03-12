@@ -62,6 +62,8 @@ from cleo.unification.materializers._landscape_api import (
     register_landscape_vector_source,
 )
 from cleo.unification.store_io import (
+    ActiveStoreTurbineAxis,
+    active_store_turbine_axis,
     open_zarr_dataset,
     resolve_active_landscape_store_path,
     turbine_ids_from_json,
@@ -129,12 +131,37 @@ def _cf_spec_matches(
     Returns:
         True if existing CF can be reused, False otherwise.
     """
+    if not _cf_spec_is_compatible(existing_cf, requested_spec):
+        return False
+
+    stored_turbines = tuple(json.loads(existing_cf.attrs["cleo:turbines_json"]))
+    return stored_turbines == turbines
+
+
+def _cf_spec_is_compatible(existing_cf: xr.DataArray, requested_spec: dict) -> bool:
+    """Check whether an existing CF array matches requested physics settings.
+
+    This helper intentionally ignores turbine breadth and ordering so callers
+    can decide separately whether a requested turbine subset is extractable from
+    the existing CF array. It still requires turbine provenance metadata to be
+    present so reuse never proceeds on an untracked CF artifact.
+
+    :param existing_cf: Existing capacity-factors array from the active store.
+    :type existing_cf: xarray.DataArray
+    :param requested_spec: Resolved CF spec dict.
+    :type requested_spec: dict
+    :returns: ``True`` when the stored CF metadata is compatible with the
+        requested CF settings.
+    :rtype: bool
+    """
     # Required metadata keys
     required_keys = [
         "cleo:cf_method",
         "cleo:air_density",
         "cleo:rews_n",
         "cleo:loss_factor",
+        # Required as a provenance guard; the turbine list value is not compared
+        # here because subset eligibility is evaluated separately.
         "cleo:turbines_json",
     ]
 
@@ -171,12 +198,173 @@ def _cf_spec_matches(
     if existing_cf.attrs["cleo:loss_factor"] != requested_spec["loss_factor"]:
         return False
 
-    # Check turbines match exactly (order matters)
-    stored_turbines = tuple(json.loads(existing_cf.attrs["cleo:turbines_json"]))
-    if stored_turbines != turbines:
-        return False
-
     return True
+
+
+def _extract_requested_cf_subset(
+    existing_cf: xr.DataArray,
+    store_ds: xr.Dataset,
+    requested_turbines: tuple[str, ...],
+) -> xr.DataArray | None:
+    """Extract a requested turbine subset from stored full-axis CF data.
+
+    The returned array is a transient compute input for economics metrics. It
+    therefore advertises only the requested turbine subset even when the stored
+    CF variable itself is normalized to the full active-store axis.
+
+    :param existing_cf: Stored capacity-factors array from the active wind
+        store.
+    :type existing_cf: xarray.DataArray
+    :param store_ds: Active wind-store dataset used to interpret the store axis.
+    :type store_ds: xarray.Dataset
+    :param requested_turbines: Requested turbine IDs in caller-defined order.
+    :type requested_turbines: tuple[str, ...]
+    :returns: Subset-scoped transient CF array, or ``None`` when subset reuse is
+        not possible.
+    :rtype: xarray.DataArray | None
+    """
+    if "turbine" not in existing_cf.dims:
+        return None
+    if not _requested_turbines_were_computed(existing_cf, requested_turbines):
+        return None
+
+    subset = _select_requested_cf_subset(existing_cf, store_ds, requested_turbines)
+    if subset is None:
+        return None
+    return _finalize_requested_cf_subset(subset, requested_turbines)
+
+
+def _requested_turbines_were_computed(existing_cf: xr.DataArray, requested_turbines: tuple[str, ...]) -> bool:
+    """Return whether the requested turbines are backed by computed CF slices.
+
+    New stores record computed-slice provenance in
+    ``cleo:computed_turbines_json`` before full-axis alignment rewrites the
+    advertised turbine list. Older stores lack that attr, so reuse falls back to
+    exact turbine-list matching only.
+
+    :param existing_cf: Stored capacity-factors array candidate for reuse.
+    :type existing_cf: xarray.DataArray
+    :param requested_turbines: Requested turbine IDs.
+    :type requested_turbines: tuple[str, ...]
+    :returns: ``True`` when the requested turbines are safe to reuse.
+    :rtype: bool
+    """
+    computed_turbines_json = existing_cf.attrs.get("cleo:computed_turbines_json")
+    if isinstance(computed_turbines_json, str) and computed_turbines_json:
+        try:
+            computed_turbines = tuple(str(tid) for tid in json.loads(computed_turbines_json))
+        except (TypeError, ValueError):
+            return False
+        return all(tid in computed_turbines for tid in requested_turbines)
+
+    try:
+        stored_turbines = tuple(str(tid) for tid in json.loads(existing_cf.attrs["cleo:turbines_json"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return stored_turbines == requested_turbines
+
+
+def _select_requested_cf_subset(
+    existing_cf: xr.DataArray,
+    store_ds: xr.Dataset,
+    requested_turbines: tuple[str, ...],
+) -> xr.DataArray | None:
+    """Select requested turbine slices from a stored CF array.
+
+    :param existing_cf: Stored capacity-factors array from the active wind
+        store.
+    :type existing_cf: xarray.DataArray
+    :param store_ds: Active wind-store dataset used to interpret the store axis.
+    :type store_ds: xarray.Dataset
+    :param requested_turbines: Requested turbine IDs in caller-defined order.
+    :type requested_turbines: tuple[str, ...]
+    :returns: Selected subset before transient coord/attr finalization, or
+        ``None`` when selection fails.
+    :rtype: xarray.DataArray | None
+    """
+    coord = existing_cf.coords.get("turbine")
+    if coord is not None and coord.dims == ("turbine",):
+        try:
+            return existing_cf.sel(turbine=list(requested_turbines))
+        except (KeyError, ValueError):
+            pass
+
+    try:
+        axis = active_store_turbine_axis(store_ds)
+    except RuntimeError:
+        return None
+
+    if any(tid not in axis.label_by_id for tid in requested_turbines):
+        return None
+    if coord is not None and coord.dims == ("turbine",):
+        return _select_requested_cf_subset_by_label(existing_cf, axis, requested_turbines)
+    return _select_requested_cf_subset_by_index(existing_cf, axis, requested_turbines)
+
+
+def _select_requested_cf_subset_by_label(
+    existing_cf: xr.DataArray,
+    axis: ActiveStoreTurbineAxis,
+    requested_turbines: tuple[str, ...],
+) -> xr.DataArray | None:
+    """Select requested turbines from a labeled store axis.
+
+    :param existing_cf: Stored capacity-factors array from the active wind
+        store.
+    :type existing_cf: xarray.DataArray
+    :param axis: Active-store turbine-axis metadata.
+    :type axis: cleo.unification.store_io.ActiveStoreTurbineAxis
+    :param requested_turbines: Requested turbine IDs in caller-defined order.
+    :type requested_turbines: tuple[str, ...]
+    :returns: Selected subset, or ``None`` when the selection fails.
+    :rtype: xarray.DataArray | None
+    """
+    labels = [axis.label_by_id[tid] for tid in requested_turbines]
+    try:
+        return existing_cf.sel(turbine=labels)
+    except (KeyError, ValueError):
+        return None
+
+
+def _select_requested_cf_subset_by_index(
+    existing_cf: xr.DataArray,
+    axis: ActiveStoreTurbineAxis,
+    requested_turbines: tuple[str, ...],
+) -> xr.DataArray | None:
+    """Select requested turbines from a positional store axis.
+
+    :param existing_cf: Stored capacity-factors array from the active wind
+        store.
+    :type existing_cf: xarray.DataArray
+    :param axis: Active-store turbine-axis metadata.
+    :type axis: cleo.unification.store_io.ActiveStoreTurbineAxis
+    :param requested_turbines: Requested turbine IDs in caller-defined order.
+    :type requested_turbines: tuple[str, ...]
+    :returns: Selected subset, or ``None`` when the selection fails.
+    :rtype: xarray.DataArray | None
+    """
+    indices = [axis.index_by_id[tid] for tid in requested_turbines]
+    try:
+        return existing_cf.isel(turbine=indices)
+    except (IndexError, ValueError):
+        return None
+
+
+def _finalize_requested_cf_subset(subset: xr.DataArray, requested_turbines: tuple[str, ...]) -> xr.DataArray:
+    """Finalize a transient subset-scoped CF array for economics reuse.
+
+    :param subset: Selected subset of the stored capacity-factors array.
+    :type subset: xarray.DataArray
+    :param requested_turbines: Requested turbine IDs in caller-defined order.
+    :type requested_turbines: tuple[str, ...]
+    :returns: Subset with requested turbine coordinates and truthful transient
+        turbine attrs.
+    :rtype: xarray.DataArray
+    """
+    subset = subset.assign_coords(turbine=np.asarray(requested_turbines, dtype=object))
+    attrs = subset.attrs.copy()
+    attrs["cleo:turbines_json"] = json.dumps(list(requested_turbines), ensure_ascii=True)
+    subset.attrs = attrs
+    return subset
 
 
 def _distance_spec_matches(da: xr.DataArray, expected_spec_json: str) -> bool:
@@ -348,8 +536,10 @@ def _inject_economics_params_and_cf_reuse(
         store_ds = domain._store_data()
         if "capacity_factors" in store_ds.data_vars:
             candidate_cf = store_ds["capacity_factors"]
-            if _cf_spec_matches(candidate_cf, resolved_cf, turbines):
-                kwargs["_precomputed_cf"] = candidate_cf
+            if _cf_spec_is_compatible(candidate_cf, resolved_cf):
+                reusable_cf = _extract_requested_cf_subset(candidate_cf, store_ds, turbines)
+                if reusable_cf is not None:
+                    kwargs["_precomputed_cf"] = reusable_cf
 
 
 # =============================================================================

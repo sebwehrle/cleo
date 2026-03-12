@@ -298,7 +298,80 @@ def _align_turbine_axis(
     """
     aligned_labels = alignment.labels_for_coord(da.coords["turbine"])
     out = da.assign_coords(turbine=list(aligned_labels))
-    return out.reindex(turbine=list(alignment.store_labels), fill_value=np.nan)
+    out = out.reindex(turbine=list(alignment.store_labels), fill_value=np.nan)
+
+    attrs = out.attrs.copy()
+    turbine_ids_json = json.dumps(list(alignment.turbine_ids), ensure_ascii=True)
+    if "cleo:turbines_json" in attrs:
+        attrs["cleo:turbines_json"] = turbine_ids_json
+    if "cleo:turbine_ids_json" in attrs:
+        attrs["cleo:turbine_ids_json"] = turbine_ids_json
+    out.attrs = attrs
+    return out
+
+
+def _remap_min_lcoe_turbine_to_store_axis(
+    da: xr.DataArray,
+    *,
+    existing_ds: xr.Dataset,
+) -> xr.DataArray:
+    """Remap subset-relative ``min_lcoe_turbine`` indices onto the store axis.
+
+    :param da: Computed ``min_lcoe_turbine`` array with subset-relative indices.
+    :type da: xarray.DataArray
+    :param existing_ds: Active wind-store dataset providing the canonical turbine
+        ordering.
+    :type existing_ds: xarray.Dataset
+    :returns: Index field aligned to the active-store turbine axis.
+    :rtype: xarray.DataArray
+    :raises RuntimeError: If the store lacks turbine metadata.
+    :raises ValueError: If the computed turbine metadata is missing or invalid.
+    """
+    meta_json = da.attrs.get("cleo:turbine_ids_json")
+    if not meta_json:
+        raise ValueError("Computed min_lcoe_turbine is missing cleo:turbine_ids_json.")
+
+    try:
+        subset_ids = tuple(str(tid) for tid in json.loads(meta_json))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Computed min_lcoe_turbine has invalid cleo:turbine_ids_json.") from exc
+    full_meta_json = existing_ds.attrs.get("cleo_turbines_json")
+    if not full_meta_json:
+        raise RuntimeError("Wind store missing cleo_turbines_json attr; cannot remap min_lcoe_turbine.")
+
+    full_ids = turbine_ids_from_json(full_meta_json)
+    full_index_by_id = {tid: i for i, tid in enumerate(full_ids)}
+    try:
+        index_map = np.asarray([full_index_by_id[tid] for tid in subset_ids], dtype=np.float64)
+    except KeyError as exc:
+        raise ValueError(f"Computed min_lcoe_turbine includes unknown turbine id {exc.args[0]!r}.") from exc
+
+    def _remap(values: np.ndarray) -> np.ndarray:
+        arr = np.asarray(values)
+        out = np.full(arr.shape, np.nan, dtype=np.float64)
+        finite = np.isfinite(arr)
+        if not np.any(finite):
+            return out
+
+        finite_values = arr[finite]
+        idx = finite_values.astype(np.int64)
+        if not np.allclose(finite_values, idx.astype(np.float64), rtol=0.0, atol=0.0):
+            raise ValueError("Computed min_lcoe_turbine contains non-integer turbine indices.")
+        if np.any(idx < 0) or np.any(idx >= len(index_map)):
+            raise ValueError("Computed min_lcoe_turbine contains out-of-range turbine indices.")
+
+        out[finite] = index_map[idx]
+        return out
+
+    out = xr.apply_ufunc(
+        _remap,
+        da,
+        dask="parallelized",
+        output_dtypes=[np.float64],
+    ).rename(da.name)
+    out.attrs = da.attrs.copy()
+    out.attrs["cleo:turbine_ids_json"] = json.dumps(list(full_ids), ensure_ascii=True)
+    return out
 
 
 def result_run_dir_path(*, results_root: Path, run_id: str) -> Path:
@@ -474,6 +547,8 @@ def normalize_metric_for_active_wind_store(
 
     if "turbine" in out.dims:
         out = _align_turbine_axis(out, alignment=_ActiveWindTurbineAlignment.from_store(existing_ds))
+    elif target_name == "min_lcoe_turbine":
+        out = _remap_min_lcoe_turbine_to_store_axis(out, existing_ds=existing_ds)
 
     if target_name == "mean_wind_speed" and "height" in out.dims:
         if "height" not in out.dims:

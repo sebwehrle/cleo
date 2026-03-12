@@ -561,6 +561,50 @@ class TestLcoeFamilyMetricsIntegration:
         assert np.isfinite(power_eval.values).any()
         assert np.isfinite(energy_eval.values).any()
 
+    def test_materialized_subset_metrics_align_with_active_store_turbine_axis(
+        self,
+        multi_turbine_materialized_atlas: Atlas,
+        full_economics: dict,
+    ) -> None:
+        """Materialized subset metrics remain consistent with the full store axis."""
+        atlas = multi_turbine_materialized_atlas
+        selected_turbine = "Vestas.V100.2000"
+        atlas.wind.select(turbines=[selected_turbine])
+
+        atlas.wind.compute("capacity_factors").materialize(overwrite=True)
+        atlas.wind.compute("lcoe", economics=full_economics).materialize(overwrite=True)
+        atlas.wind.compute("min_lcoe_turbine", economics=full_economics).materialize(overwrite=True)
+        atlas.wind.compute("optimal_power", economics=full_economics).materialize(overwrite=True)
+        atlas.wind.compute("optimal_energy", economics=full_economics).materialize(overwrite=True)
+
+        data = atlas.wind.data.compute()
+        valid_mask = atlas.landscape.data["valid_mask"].compute().values
+        hours_per_year = float(data["optimal_energy"].attrs["cleo:hours_per_year"])
+        full_turbines = list(atlas.wind.turbines)
+
+        assert json.loads(data["capacity_factors"].attrs["cleo:turbines_json"]) == full_turbines
+        assert json.loads(data["lcoe"].attrs["cleo:turbine_ids_json"]) == full_turbines
+
+        expected_min = float(full_turbines.index(selected_turbine))
+        np.testing.assert_allclose(
+            data["min_lcoe_turbine"].values[valid_mask],
+            expected_min,
+            rtol=0.0,
+            atol=0.0,
+            equal_nan=True,
+        )
+
+        expected_energy = (
+            data["capacity_factors"].sel(turbine=selected_turbine) * data["optimal_power"] * hours_per_year / 1e6
+        )
+        np.testing.assert_allclose(
+            data["optimal_energy"].values,
+            expected_energy.values,
+            rtol=0.0,
+            atol=1e-12,
+            equal_nan=True,
+        )
+
     def test_lcoe_and_min_lcoe_turbine_grouped_spec_api(self, materialized_atlas: Atlas, full_economics: dict) -> None:
         """lcoe and min_lcoe_turbine use the grouped spec API."""
         atlas = materialized_atlas

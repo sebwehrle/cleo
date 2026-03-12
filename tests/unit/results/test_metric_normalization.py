@@ -101,3 +101,56 @@ def test_normalize_metric_rejects_unknown_turbine_id() -> None:
             da=computed,
             existing_ds=existing_ds,
         )
+
+
+def test_normalize_metric_rewrites_turbine_axis_attrs_to_store_order() -> None:
+    """Turbine-axis attrs reflect the active-store order after alignment."""
+    existing_ds = _active_wind_store()
+    computed = xr.DataArray(
+        np.full((1, 2, 2), 7.0, dtype=np.float32),
+        dims=("turbine", "y", "x"),
+        coords={
+            "turbine": np.array(["T2"], dtype=object),
+            "y": np.array([1.0, 0.0], dtype=np.float64),
+            "x": np.array([0.0, 1.0], dtype=np.float64),
+        },
+        attrs={
+            "cleo:turbines_json": json.dumps(["T2"], ensure_ascii=True),
+            "cleo:turbine_ids_json": json.dumps(["T2"], ensure_ascii=True),
+        },
+        name="lcoe",
+    )
+
+    normalized = normalize_metric_for_active_wind_store(
+        metric="lcoe",
+        da=computed,
+        existing_ds=existing_ds,
+    )
+
+    assert json.loads(normalized.attrs["cleo:turbines_json"]) == ["T1", "T2"]
+    assert json.loads(normalized.attrs["cleo:turbine_ids_json"]) == ["T1", "T2"]
+
+
+def test_normalize_metric_remaps_min_lcoe_turbine_to_store_indices() -> None:
+    """Subset-relative min-lcoe indices are remapped to the active-store axis."""
+    existing_ds = _active_wind_store()
+    computed = xr.DataArray(
+        np.array([[0.0, np.nan], [0.0, np.nan]], dtype=np.float64),
+        dims=("y", "x"),
+        coords={
+            "y": np.array([1.0, 0.0], dtype=np.float64),
+            "x": np.array([0.0, 1.0], dtype=np.float64),
+        },
+        attrs={"cleo:turbine_ids_json": json.dumps(["T2"], ensure_ascii=True)},
+        name="min_lcoe_turbine",
+    )
+
+    normalized = normalize_metric_for_active_wind_store(
+        metric="min_lcoe_turbine",
+        da=computed,
+        existing_ds=existing_ds,
+    )
+
+    expected = np.array([[1.0, np.nan], [1.0, np.nan]], dtype=np.float64)
+    np.testing.assert_allclose(normalized.values, expected, rtol=0.0, atol=0.0, equal_nan=True)
+    assert json.loads(normalized.attrs["cleo:turbine_ids_json"]) == ["T1", "T2"]

@@ -340,11 +340,18 @@ def optimal_energy_gwh_a(
     :type hours_per_year: float
     :returns: Optimal annual energy in ``GWh/a`` over ``("y","x")``.
     :rtype: xarray.DataArray
+    :raises ValueError: If ``cf`` cannot be aligned to ``lcoe`` on the
+        ``turbine`` axis.
     """
     idx = lcoe.fillna(np.inf).argmin(dim="turbine")
     all_invalid = lcoe.isnull().all(dim="turbine")
 
-    cf_sel = _select_turbine_by_index(values=cf, idx=idx, name="selected_cf")
+    try:
+        cf_aligned = cf.sel(turbine=lcoe.coords["turbine"])
+    except (KeyError, IndexError, ValueError) as exc:
+        raise ValueError("cf must be alignable to lcoe on the 'turbine' axis.") from exc
+
+    cf_sel = _select_turbine_by_index(values=cf_aligned, idx=idx, name="selected_cf")
     p_da = xr.DataArray(
         power_kw.astype(np.float64),
         dims=("turbine",),

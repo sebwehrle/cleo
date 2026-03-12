@@ -92,6 +92,32 @@ def test_optimal_energy_gwh_a_uses_selected_turbine_cf_and_power() -> None:
     assert "cleo:economics_json" in got.attrs
 
 
+def test_optimal_energy_gwh_a_aligns_full_axis_cf_to_lcoe_turbines() -> None:
+    """Full-axis CF inputs are sliced back to the LCOE turbine order by label."""
+    lcoe = xr.DataArray(
+        np.array([[[5.0]], [[1.0]]], dtype=np.float64),
+        dims=("turbine", "y", "x"),
+        coords={"turbine": ["t1", "t3"], "y": [0], "x": [0]},
+        name="lcoe",
+    )
+    lcoe.attrs["cleo:turbine_ids_json"] = json.dumps(["t1", "t3"], ensure_ascii=True)
+    cf = xr.DataArray(
+        np.array([[[np.nan]], [[0.2]], [[np.nan]], [[0.4]]], dtype=np.float64),
+        dims=("turbine", "y", "x"),
+        coords={"turbine": ["t0", "t1", "t2", "t3"], "y": [0], "x": [0]},
+        name="capacity_factors",
+    )
+
+    got = optimal_energy_gwh_a(
+        lcoe=lcoe,
+        cf=cf,
+        power_kw=np.array([1000.0, 2000.0], dtype=np.float64),
+        hours_per_year=1.0,
+    )
+
+    np.testing.assert_allclose(got.values, np.array([[0.0008]], dtype=np.float64), rtol=0.0, atol=1e-12)
+
+
 def test_optimal_selection_is_dask_safe_with_chunked_argmin_indexer() -> None:
     dask_array = pytest.importorskip("dask.array")
 

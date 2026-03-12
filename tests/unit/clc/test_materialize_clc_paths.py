@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import io
 import json
 import warnings
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +12,13 @@ import pytest
 import requests
 import xarray as xr
 
+from tests.helpers.clc_fixtures import (
+    JsonResponseStub,
+    legacy_service_key,
+    oauth_service_key,
+    write_nested_zip_with_member,
+    write_zip_with_member,
+)
 from tests.helpers.optional import requires_rasterio, requires_rioxarray
 from cleo.clc import (
     CLC_SOURCES,
@@ -24,25 +29,6 @@ from cleo.clc import (
 
 rasterio = requires_rasterio()
 rxr = requires_rioxarray()
-
-
-class _JsonResponse:
-    """Minimal response stub for CLMS JSON API tests."""
-
-    def __init__(self, payload: dict, status_code: int = 200) -> None:
-        self._payload = payload
-        self.status_code = status_code
-        self.closed = False
-
-    def json(self) -> dict:
-        return self._payload
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
-
-    def close(self) -> None:
-        self.closed = True
 
 
 def _write_raster_integer(path: Path, data: np.ndarray) -> None:
@@ -95,23 +81,6 @@ def _write_raster_multiband(path: Path, data: np.ndarray) -> None:
     }
     with rasterio.open(path, "w", **profile) as dst:
         dst.write(data)
-
-
-def _write_zip_with_member(zip_path: Path, member_name: str, content: bytes) -> None:
-    """Write a ZIP archive with one file member."""
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "w") as archive:
-        archive.writestr(member_name, content)
-
-
-def _write_nested_zip_with_member(zip_path: Path, nested_zip_name: str, member_name: str, content: bytes) -> None:
-    """Write a ZIP archive containing a nested ZIP with one file member."""
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
-    nested_buffer = io.BytesIO()
-    with zipfile.ZipFile(nested_buffer, "w") as nested:
-        nested.writestr(member_name, content)
-    with zipfile.ZipFile(zip_path, "w") as archive:
-        archive.writestr(nested_zip_name, nested_buffer.getvalue())
 
 
 def _write_canonical_landscape_store(tmp_path: Path, ref: xr.DataArray) -> None:
@@ -299,28 +268,28 @@ def test_resolve_default_clc_download_uses_clms_api_flow(monkeypatch: pytest.Mon
     monkeypatch.setenv(
         "CLEO_CLMS_SERVICE_KEY_JSON",
         json.dumps(
-            {
-                "service_name": "example-service",
-                "secret": "not-a-real-secret",  # pragma: allowlist secret
-                "username": "example-user",
-            }
-        ),
+            legacy_service_key(
+                service_name="example-service",
+                secret="not-a-real-secret",  # pragma: allowlist secret
+                username="example-user",
+            )
+        ),  # pragma: allowlist secret
     )
 
     def _fake_post(url: str, **kwargs):
         if url.endswith("/@login"):
             assert kwargs["json_body"]["service_name"] == "example-service"
-            return _JsonResponse({"access_token": "token-123"})
+            return JsonResponseStub(payload={"access_token": "token-123"})
         if url.endswith("/@datarequest_post"):
             assert kwargs["headers"]["Authorization"] == "Bearer token-123"
             assert kwargs["json_body"]["Datasets"] == [{"DatasetID": "dataset-4368", "FileID": "file-31902"}]
-            return _JsonResponse({"TaskIds": [{"TaskID": "request-token"}]})
+            return JsonResponseStub(payload={"TaskIds": [{"TaskID": "request-token"}]})
         raise AssertionError(f"unexpected POST url: {url}")
 
     def _fake_get(url: str, **kwargs):
         if "/@search?" in url:
-            return _JsonResponse(
-                {
+            return JsonResponseStub(
+                payload={
                     "items": [
                         {
                             "UID": "dataset-4368",
@@ -340,8 +309,8 @@ def test_resolve_default_clc_download_uses_clms_api_flow(monkeypatch: pytest.Mon
                 }
             )
         if url.endswith("/@datarequest_status_get?TaskID=request-token"):
-            return _JsonResponse(
-                {
+            return JsonResponseStub(
+                payload={
                     "Status": "finished_ok",
                     "DownloadURL": ["https://copernicus-fme.eea.europa.eu/fmedatadownload/results/123.zip"],
                 }
@@ -364,16 +333,16 @@ def test_resolve_default_clc_download_accepts_current_copernicus_service_key(
     monkeypatch.setenv(
         "CLEO_CLMS_SERVICE_KEY_JSON",
         json.dumps(
-            {
-                "client_id": "example-client-id",
-                "ip_range": "*",
-                "issued": "2026-03-08T00:00:00Z",
-                "key_id": "example-key-id",
-                "private_key": "-----BEGIN PRIVATE KEY-----\nexample\n-----END PRIVATE KEY-----",  # pragma: allowlist secret
-                "title": "example",
-                "token_uri": token_uri,
-                "user_id": "example-user-id",
-            }
+            oauth_service_key(
+                client_id="example-client-id",
+                key_id="example-key-id",
+                private_key="-----BEGIN PRIVATE KEY-----\nexample\n-----END PRIVATE KEY-----",  # pragma: allowlist secret
+                token_uri=token_uri,
+                user_id="example-user-id",
+                ip_range="*",
+                issued="2026-03-08T00:00:00Z",
+                title="example",
+            )
         ),
     )
 
@@ -383,17 +352,17 @@ def test_resolve_default_clc_download_accepts_current_copernicus_service_key(
             assert kwargs["data_body"]["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer"
             assert kwargs["data_body"]["assertion"] == "signed-jwt"
             assert kwargs.get("json_body") is None
-            return _JsonResponse({"access_token": "oauth-token-123"})
+            return JsonResponseStub(payload={"access_token": "oauth-token-123"})
         if url.endswith("/@datarequest_post"):
             assert kwargs["headers"]["Authorization"] == "Bearer oauth-token-123"
             assert kwargs["json_body"]["Datasets"] == [{"DatasetID": "dataset-4368", "FileID": "file-31902"}]
-            return _JsonResponse({"TaskIds": [{"TaskID": "request-token"}]})
+            return JsonResponseStub(payload={"TaskIds": [{"TaskID": "request-token"}]})
         raise AssertionError(f"unexpected POST url: {url}")
 
     def _fake_get(url: str, **kwargs):
         if "/@search?" in url:
-            return _JsonResponse(
-                {
+            return JsonResponseStub(
+                payload={
                     "items": [
                         {
                             "UID": "dataset-4368",
@@ -413,8 +382,8 @@ def test_resolve_default_clc_download_accepts_current_copernicus_service_key(
                 }
             )
         if url.endswith("/@datarequest_status_get?TaskID=request-token"):
-            return _JsonResponse(
-                {
+            return JsonResponseStub(
+                payload={
                     "Status": "finished_ok",
                     "DownloadURL": ["https://copernicus-fme.eea.europa.eu/fmedatadownload/results/456.zip"],
                 }
@@ -436,25 +405,25 @@ def test_resolve_default_clc_download_falls_back_to_finished_request_search(
     monkeypatch.setenv(
         "CLEO_CLMS_SERVICE_KEY_JSON",
         json.dumps(
-            {
-                "service_name": "example-service",
-                "secret": "not-a-real-secret",  # pragma: allowlist secret
-                "username": "example-user",
-            }
-        ),
+            legacy_service_key(
+                service_name="example-service",
+                secret="not-a-real-secret",  # pragma: allowlist secret
+                username="example-user",
+            )
+        ),  # pragma: allowlist secret
     )
 
     def _fake_post(url: str, **kwargs):
         if url.endswith("/@login"):
-            return _JsonResponse({"access_token": "token-123"})
+            return JsonResponseStub(payload={"access_token": "token-123"})
         if url.endswith("/@datarequest_post"):
-            return _JsonResponse({"TaskIds": [{"TaskID": "request-token"}]})
+            return JsonResponseStub(payload={"TaskIds": [{"TaskID": "request-token"}]})
         raise AssertionError(f"unexpected POST url: {url}")
 
     def _fake_get(url: str, **kwargs):
         if "/@search?" in url:
-            return _JsonResponse(
-                {
+            return JsonResponseStub(
+                payload={
                     "items": [
                         {
                             "UID": "dataset-4368",
@@ -474,10 +443,10 @@ def test_resolve_default_clc_download_falls_back_to_finished_request_search(
                 }
             )
         if url.endswith("/@datarequest_status_get?TaskID=request-token"):
-            return _JsonResponse({"Status": "finished_ok"})
+            return JsonResponseStub(payload={"Status": "finished_ok"})
         if "/@datarequest_search?" in url:
-            return _JsonResponse(
-                {
+            return JsonResponseStub(
+                payload={
                     "items": [
                         {
                             "TaskID": "request-token",
@@ -610,7 +579,7 @@ def test_materialize_clc_extracts_tif_from_zip_artifact(tmp_path: Path, monkeypa
     def _fake_download(url: str, out_path: Path, **kwargs) -> None:
         del url, kwargs
         captured["artifact_path"] = out_path
-        _write_zip_with_member(out_path, CLC_SOURCES["clc2018"]["filename"], b"fake-tif-bytes")
+        write_zip_with_member(out_path, CLC_SOURCES["clc2018"]["filename"], b"fake-tif-bytes")
 
     def _fake_prepare(**kwargs):
         source_path = kwargs["source_path"]
@@ -646,7 +615,7 @@ def test_materialize_clc_extracts_tif_from_nested_zip_artifact(tmp_path: Path, m
 
     def _fake_download(url: str, out_path: Path, **kwargs) -> None:
         del url, kwargs
-        _write_nested_zip_with_member(
+        write_nested_zip_with_member(
             out_path,
             "Results/u2018_clc2018_v2020_20u1_raster100m.zip",
             "u2018_clc2018_v2020_20u1_raster100m/DATA/U2018_CLC2018_V2020_20u1.tif",
@@ -694,7 +663,7 @@ def test_materialize_clc_retries_zip_artifact_until_ready(tmp_path: Path, monkey
             err = requests.exceptions.HTTPError("403 Client Error")
             err.response = SimpleNamespace(status_code=403)
             raise err
-        _write_zip_with_member(out_path, CLC_SOURCES["clc2018"]["filename"], b"fake-tif-bytes")
+        write_zip_with_member(out_path, CLC_SOURCES["clc2018"]["filename"], b"fake-tif-bytes")
 
     monkeypatch.setattr("cleo.clc.download_to_path", _fake_download)
     monkeypatch.setattr("cleo.clc.prepare_clc_to_wind_grid", lambda **kwargs: kwargs["prepared_path"])
@@ -733,7 +702,7 @@ def test_materialize_clc_uses_browser_headers_for_fme_zip_artifact(
     def _fake_download(url: str, out_path: Path, **kwargs) -> None:
         captured["url"] = url
         captured["headers"] = kwargs.get("headers")
-        _write_zip_with_member(out_path, CLC_SOURCES["clc2018"]["filename"], b"fake-tif-bytes")
+        write_zip_with_member(out_path, CLC_SOURCES["clc2018"]["filename"], b"fake-tif-bytes")
 
     monkeypatch.setattr("cleo.clc.download_to_path", _fake_download)
     monkeypatch.setattr("cleo.clc.prepare_clc_to_wind_grid", lambda **kwargs: kwargs["prepared_path"])

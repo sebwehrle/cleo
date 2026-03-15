@@ -56,6 +56,7 @@ from cleo.wind_metrics import (
 )
 from cleo.unification.materializers._landscape_api import (
     materialize_landscape_computed_variables,
+    register_landscape_dataarray_source,
     materialize_landscape_variable,
     prepare_landscape_variable_data,
     register_landscape_source,
@@ -1084,6 +1085,7 @@ class LandscapeDomain:
         self._atlas = atlas
         self._data = None
         self._staged_overlays: dict[str, xr.DataArray] = {}
+        self._staged_prepared_overlays: dict[str, xr.DataArray] = {}
 
     @staticmethod
     def _validate_if_exists(if_exists: str) -> None:
@@ -1126,12 +1128,49 @@ class LandscapeDomain:
         """
         Lazy access to the active landscape zarr store as xr.Dataset.
 
-        Includes staged overlays from :meth:`add` and :meth:`add_clc_category`.
+        Includes staged overlays from landscape add/rasterize paths, staged
+        distance outputs, and in-place unit conversions.
         """
         ds = self._store_data()
         if not self._staged_overlays:
             return ds
         return ds.assign(self._staged_overlays)
+
+    def _clear_staged_variable(self, name: str) -> None:
+        """Clear all staged state for one landscape variable.
+
+        :param name: Variable name to clear from staged state.
+        :returns: ``None``.
+        """
+        self._staged_overlays.pop(name, None)
+        self._staged_prepared_overlays.pop(name, None)
+
+    def _stage_visible_overlay(
+        self,
+        name: str,
+        visible: xr.DataArray,
+        *,
+        prepared: xr.DataArray | None = None,
+    ) -> xr.DataArray:
+        """Stage visible and optional prepared overlay state together.
+
+        ``atlas.landscape.data`` must stay merge-safe, so the visible staged
+        overlay drops scalar coordinates such as ``spatial_ref`` while the
+        optional prepared overlay keeps the richer raster metadata needed for
+        exact materialization reuse.
+
+        :param name: Variable name being staged.
+        :param visible: DataArray surfaced in ``atlas.landscape.data``.
+        :param prepared: Optional richer raster used for materialization reuse.
+        :returns: The visible staged overlay stored under ``name``.
+        :rtype: xarray.DataArray
+        """
+        self._staged_overlays[name] = visible
+        if prepared is None:
+            self._staged_prepared_overlays.pop(name, None)
+        else:
+            self._staged_prepared_overlays[name] = prepared
+        return self._staged_overlays[name]
 
     def clear_staged(self) -> None:
         """
@@ -1140,6 +1179,7 @@ class LandscapeDomain:
         :returns: ``None``.
         """
         self._staged_overlays.clear()
+        self._staged_prepared_overlays.clear()
         return None
 
     def convert_units(
@@ -1189,7 +1229,7 @@ class LandscapeDomain:
         converted = convert_dataarray(da, to_unit, from_unit=from_unit)
 
         if inplace:
-            self._staged_overlays[variable] = converted
+            self._stage_visible_overlay(variable, converted)
             return None
         return converted
 
@@ -1293,7 +1333,7 @@ class LandscapeDomain:
         """
         self._validate_if_exists(if_exists)
         if noop_existing and if_exists == "noop":
-            self._staged_overlays.pop(name, None)
+            self._clear_staged_variable(name)
             self._data = None
             return self.data[name]
 
@@ -1307,9 +1347,10 @@ class LandscapeDomain:
             chunk_policy=atlas.chunk_policy,
             fingerprint_method=getattr(atlas, "fingerprint_method", "path_mtime_size"),
             if_exists=if_exists,
+            prepared_da=self._staged_prepared_overlays.get(name),
         )
 
-        self._staged_overlays.pop(name, None)
+        self._clear_staged_variable(name)
         self._data = None
         return self.data[name]
 
@@ -1346,14 +1387,14 @@ class LandscapeDomain:
                 )
             except RuntimeError as exc:
                 for name in tuple(getattr(exc, "written", ())):
-                    self._staged_overlays.pop(name, None)
+                    self._clear_staged_variable(name)
                 self._data = None
                 raise
 
             for name in summary.get("written", []):
-                self._staged_overlays.pop(name, None)
+                self._clear_staged_variable(name)
             for name in summary.get("skipped", []):
-                self._staged_overlays.pop(name, None)
+                self._clear_staged_variable(name)
 
         self._data = None
         return self.data[list(names)]
@@ -1396,7 +1437,7 @@ class LandscapeDomain:
                 valid_mask,
             )
             if should_stage:
-                self._staged_overlays[nm] = dist
+                self._stage_visible_overlay(nm, dist)
             result_vars[nm] = dist
 
         out_ds = xr.Dataset({nm: result_vars[nm] for nm in names})
@@ -1416,8 +1457,19 @@ class LandscapeDomain:
         store_ds: xr.Dataset,
         staged_exists: bool,
         store_exists: bool,
+        prepared_da: xr.DataArray | None = None,
     ) -> LandscapeAddResult:
-        """Stage a prepared variable after source registration."""
+        """Stage a prepared variable after source registration.
+
+        :param name: Target variable name.
+        :param if_exists: Conflict policy used for this operation.
+        :param store_ds: Active landscape store dataset.
+        :param staged_exists: Whether a staged overlay with the same name exists.
+        :param store_exists: Whether the variable already exists in the active store.
+        :param prepared_da: Optional prepared raster to stage directly.
+        :returns: Operation wrapper for staged addition.
+        :rtype: LandscapeAddResult
+        """
         if if_exists == "noop":
             if staged_exists:
                 return LandscapeAddResult(
@@ -1435,19 +1487,57 @@ class LandscapeDomain:
                     noop_existing=True,
                 )
 
-        staged = prepare_landscape_variable_data(
-            self._atlas,
-            name,
-            chunk_policy=self._atlas.chunk_policy,
-        )
-        staged = staged.reset_coords(drop=True)
-        self._staged_overlays[name] = staged
+        prepared = prepared_da
+        if prepared is None:
+            prepared = prepare_landscape_variable_data(
+                self._atlas,
+                name,
+                chunk_policy=self._atlas.chunk_policy,
+            )
+        visible = prepared.reset_coords(drop=True)
         return LandscapeAddResult(
             self,
             name,
-            staged,
+            self._stage_visible_overlay(name, visible, prepared=prepared),
             if_exists,
         )
+
+    def _prepare_registration_context(
+        self,
+        *,
+        name: str,
+        if_exists: str,
+    ) -> tuple[xr.Dataset, bool, bool]:
+        """Prepare store and conflict context for staged landscape registration.
+
+        :param name: Target variable name.
+        :param if_exists: Conflict policy.
+        :returns: Tuple ``(store_ds, staged_exists, store_exists)``.
+        :rtype: tuple[xarray.Dataset, bool, bool]
+        :raises ValueError: If ``if_exists="error"`` and the variable already
+            exists in staged overlays or the active store.
+        """
+        atlas = self._atlas
+        if not getattr(atlas, "_canonical_ready", False):
+            atlas.build_canonical()
+
+        store_ds = self._store_data()
+        staged_exists = name in self._staged_overlays
+        store_exists = name in store_ds.data_vars
+
+        if if_exists == "error":
+            if staged_exists:
+                raise ValueError(
+                    f"Variable {name!r} is already staged. "
+                    "Use if_exists='replace' to overwrite or if_exists='noop' to keep current staged state."
+                )
+            if store_exists:
+                raise ValueError(
+                    f"Variable {name!r} already exists in landscape.zarr.\n"
+                    "  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
+                )
+
+        return store_ds, staged_exists, store_exists
 
     def add(
         self,
@@ -1478,24 +1568,10 @@ class LandscapeDomain:
             )
 
         atlas = self._atlas
-        if not getattr(atlas, "_canonical_ready", False):
-            atlas.build_canonical()
-
-        store_ds = self._store_data()
-        staged_exists = name in self._staged_overlays
-        store_exists = name in store_ds.data_vars
-
-        if if_exists == "error":
-            if staged_exists:
-                raise ValueError(
-                    f"Variable {name!r} is already staged. "
-                    "Use if_exists='replace' to overwrite or if_exists='noop' to keep current staged state."
-                )
-            if store_exists:
-                raise ValueError(
-                    f"Variable {name!r} already exists in landscape.zarr.\n"
-                    f"  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
-                )
+        store_ds, staged_exists, store_exists = self._prepare_registration_context(
+            name=name,
+            if_exists=if_exists,
+        )
 
         register_landscape_source(
             atlas,
@@ -1539,24 +1615,10 @@ class LandscapeDomain:
         self._validate_if_exists(if_exists)
 
         atlas = self._atlas
-        if not getattr(atlas, "_canonical_ready", False):
-            atlas.build_canonical()
-
-        store_ds = self._store_data()
-        staged_exists = name in self._staged_overlays
-        store_exists = name in store_ds.data_vars
-
-        if if_exists == "error":
-            if staged_exists:
-                raise ValueError(
-                    f"Variable {name!r} is already staged. "
-                    "Use if_exists='replace' to overwrite or if_exists='noop' to keep current staged state."
-                )
-            if store_exists:
-                raise ValueError(
-                    f"Variable {name!r} already exists in landscape.zarr.\n"
-                    "  Use if_exists='replace' to overwrite or if_exists='noop' to skip."
-                )
+        store_ds, staged_exists, store_exists = self._prepare_registration_context(
+            name=name,
+            if_exists=if_exists,
+        )
 
         register_landscape_vector_source(
             atlas,
@@ -1572,6 +1634,59 @@ class LandscapeDomain:
             store_ds=store_ds,
             staged_exists=staged_exists,
             store_exists=store_exists,
+        )
+
+    def add_dataarray(
+        self,
+        name: str,
+        data: xr.DataArray,
+        *,
+        categorical: bool = False,
+        if_exists: str = "error",
+    ) -> LandscapeAddResult:
+        """
+        Stage an in-memory raster candidate for the active landscape store.
+
+        The input must be a single raster represented as an ``xarray.DataArray``.
+        CLEO writes a canonical cached raster artifact under
+        ``<atlas.path>/intermediates/raster_sources/`` during staging so later
+        materialization can reuse the normal manifest-backed raster source path.
+
+        :param name: Target variable name.
+        :param data: In-memory raster candidate.
+        :param categorical: Whether categorical resampling semantics should be
+            used when alignment is required.
+        :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+        :returns: Operation wrapper for staged addition.
+        :rtype: LandscapeAddResult
+        :raises TypeError: If ``data`` is not an ``xarray.DataArray``.
+        :raises ValueError: If ``if_exists`` is invalid or conflicts are disallowed.
+        :raises ValueError: If the raster cannot be aligned safely to the active grid.
+        :raises RuntimeError: If required spatial metadata are missing.
+        """
+        self._validate_if_exists(if_exists)
+        if not isinstance(data, xr.DataArray):
+            raise TypeError(f"data must be an xarray.DataArray, got {type(data).__name__}.")
+
+        store_ds, staged_exists, store_exists = self._prepare_registration_context(
+            name=name,
+            if_exists=if_exists,
+        )
+        changed, prepared = register_landscape_dataarray_source(
+            self._atlas,
+            name=name,
+            data=data,
+            categorical=categorical,
+            if_exists=if_exists,
+            chunk_policy=self._atlas.chunk_policy,
+        )
+        return self._stage_registered_variable(
+            name=name,
+            if_exists=if_exists,
+            store_ds=store_ds,
+            staged_exists=staged_exists,
+            store_exists=store_exists,
+            prepared_da=prepared if changed or if_exists != "noop" else None,
         )
 
     def add_clc_category(

@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GDAL/PROJ installation instructions in README (Ubuntu, macOS, Conda)
 - Troubleshooting section in README covering common issues (GDAL setup, CLC auth, memory, GWA downloads, chunk warnings)
 - This changelog
+- `atlas.landscape.add_dataarray(name, data, *, categorical=False, if_exists="error")` for in-memory raster ingestion without user-managed temp files; aligned rasters stage directly, metadata-rich rasters align onto the active atlas grid, CLEO records a canonical cached raster source with canonical CRS-based identity so manifest-backed materialization and `noop` matching remain consistent, and prepared staged rasters are realized once and reused cleanly without leaking merge-conflicting raster metadata into `atlas.landscape.data`
 
 ### Changed
 - Tightened packaging and static-type metadata: `pyproject.toml` now uses an SPDX-style `MIT` license string compatible with current setuptools guidance, and the tracked mypy configuration now reflects the current passing maintainer-tool state with the obsolete `misc` suppression removed while retaining the error-code families still needed by the checked toolchain

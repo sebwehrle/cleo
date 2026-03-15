@@ -169,7 +169,7 @@ def test_api_happy_path(offline_atlas: Atlas, tmp_path: Path) -> None:
         assert hasattr(atlas, method), f"Atlas missing public method: {method}"
     for method in ("compute", "select", "clear_selection", "clear_computed"):
         assert hasattr(atlas.wind, method), f"WindDomain missing public method: {method}"
-    for method in ("add", "rasterize", "clear_staged"):
+    for method in ("add", "add_dataarray", "rasterize", "clear_staged"):
         assert hasattr(atlas.landscape, method), f"LandscapeDomain missing public method: {method}"
 
     # === Materialize (canonical API, offline-safe) ===

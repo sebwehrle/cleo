@@ -366,6 +366,13 @@ Skip this section if you only need wind metrics.
   - `add(...)` is raster-only (`kind` must be `"raster"`); use `rasterize(...)` for vector sources.
   - staged variables are visible in `atlas.landscape.data` before store writes.
   - `if_exists`: `"error"|"replace"|"noop"`.
+- `atlas.landscape.add_dataarray(name, data, *, categorical=False, if_exists="error")`
+  - stages an in-memory raster variable and returns `LandscapeAddResult`.
+  - `data` must be one raster `xarray.DataArray` on the active landscape grid, or carry enough spatial metadata for CLEO to align it safely.
+  - exact-grid inputs are preferred; if `x`/`y` coordinates already match the active atlas grid exactly, CLEO can infer the active CRS when the input has no CRS metadata.
+  - `categorical=True` uses nearest-neighbor alignment semantics; `categorical=False` uses continuous-raster resampling semantics.
+  - staging writes a CLEO-managed cached raster artifact under `intermediates/raster_sources/`, stages the prepared overlay into `atlas.landscape.data`, and materialization reuses the normal manifest-backed landscape source path.
+  - `if_exists`: `"error"|"replace"|"noop"`.
 - `atlas.landscape.rasterize(shape, *, name, column=None, all_touched=False, if_exists="error")`
   - converts vector data to a raster on the atlas grid and returns `LandscapeAddResult`.
   - `shape` accepts path-like vector sources or a `geopandas.GeoDataFrame`.
@@ -502,6 +509,14 @@ op = atlas.landscape.rasterize(
     all_touched=False,
     if_exists="replace",
 )
+da = op.materialize()
+```
+
+In-memory raster example:
+
+```python
+slope = atlas.landscape.data["elevation"].differentiate("y").rename("slope")
+op = atlas.landscape.add_dataarray("slope", slope, if_exists="replace")
 da = op.materialize()
 ```
 

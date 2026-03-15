@@ -155,3 +155,44 @@ def fingerprint_file(path: Path, method: str = "path_mtime_size") -> str:
         return fingerprint_path_mtime_size(path)
     else:
         raise ValueError(f"Unknown fingerprint method: {method}")
+
+
+def semantic_raster_fingerprint(
+    *,
+    values: np.ndarray,
+    y: np.ndarray,
+    x: np.ndarray,
+    dtype: str,
+    crs_wkt: str,
+    categorical: bool,
+) -> str:
+    """Compute a deterministic semantic fingerprint for a normalized raster.
+
+    :param values: Raster values on the active atlas grid.
+    :type values: numpy.ndarray
+    :param y: Exact active-grid ``y`` coordinates.
+    :type y: numpy.ndarray
+    :param x: Exact active-grid ``x`` coordinates.
+    :type x: numpy.ndarray
+    :param dtype: Raster dtype string.
+    :type dtype: str
+    :param crs_wkt: CRS identity serialized as WKT.
+    :type crs_wkt: str
+    :param categorical: Whether the raster uses categorical resampling semantics.
+    :type categorical: bool
+    :returns: SHA256 hex digest of the semantic raster payload.
+    :rtype: str
+    """
+    h = hashlib.sha256()
+    payload = {
+        "schema_version": 1,
+        "dtype": dtype,
+        "shape": list(np.asarray(values).shape),
+        "crs_wkt": crs_wkt,
+        "categorical": bool(categorical),
+    }
+    h.update(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8"))
+    h.update(np.asarray(y, dtype=np.float64).tobytes())
+    h.update(np.asarray(x, dtype=np.float64).tobytes())
+    h.update(np.ascontiguousarray(values).tobytes())
+    return h.hexdigest()

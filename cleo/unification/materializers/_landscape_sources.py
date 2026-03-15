@@ -29,6 +29,9 @@ from cleo.unification.materializers._landscape_vector import (
     _vector_values_for_column,
 )
 
+_RASTER_SOURCE_KINDS = frozenset({"raster", "raster_cached"})
+_LANDSCAPE_SOURCE_KINDS = _RASTER_SOURCE_KINDS | {"vector"}
+
 
 def _register_landscape_source_entry(
     *,
@@ -44,7 +47,7 @@ def _register_landscape_source_entry(
 
     :param atlas: Atlas-like object with active store routing context.
     :param name: Target variable name.
-    :param kind: Source kind (``"raster"`` or ``"vector"``).
+    :param kind: Source kind (``"raster"``, ``"raster_cached"``, or ``"vector"``).
     :param source_path: Source artifact path.
     :param params: Source parameters payload.
     :param fingerprint: Deterministic source fingerprint.
@@ -120,7 +123,7 @@ def _validate_landscape_source_registration_inputs(*, kind: str, if_exists: str)
     :param if_exists: Conflict policy.
     :raises ValueError: If either argument is unsupported.
     """
-    if kind not in {"raster", "vector"}:
+    if kind not in _LANDSCAPE_SOURCE_KINDS:
         raise ValueError(f"Unsupported landscape source kind: {kind!r}")
     valid_if_exists = {"error", "replace", "noop"}
     if if_exists not in valid_if_exists:
@@ -146,17 +149,22 @@ def _drop_conflicting_other_kind_source(
     :rtype: list[dict]
     :raises ValueError: If another source kind is registered and replacement is not allowed.
     """
-    other_kind = "vector" if kind == "raster" else "raster"
-    other_source_id = f"land:{other_kind}:{name}"
-    if other_source_id not in source_by_id:
+    conflicting_source_ids = [
+        f"land:{other_kind}:{name}"
+        for other_kind in _LANDSCAPE_SOURCE_KINDS
+        if other_kind != kind and f"land:{other_kind}:{name}" in source_by_id
+    ]
+    if not conflicting_source_ids:
         return existing_sources
     if if_exists != "replace":
+        other_source_id = conflicting_source_ids[0]
+        other_kind = other_source_id.split(":")[1]
         raise ValueError(
             f"Variable {name!r} is already registered as {other_kind!r} source.\n"
             f"  Existing source_id: {other_source_id!r}\n"
             "  Use if_exists='replace' to replace with new source kind."
         )
-    return [src for src in existing_sources if src["source_id"] != other_source_id]
+    return [src for src in existing_sources if src["source_id"] not in conflicting_source_ids]
 
 
 def _same_registered_source(
@@ -258,13 +266,21 @@ def _resolve_landscape_source_for_variable(
     manifest: dict,
     variable_name: str,
 ) -> tuple[str, dict]:
-    """Resolve the registered source for a variable name across source kinds."""
+    """Resolve the registered source entry for one variable across source kinds.
+
+    :param manifest: Active landscape manifest payload.
+    :param variable_name: Target variable name.
+    :returns: Tuple ``(source_id, source_entry)``.
+    :rtype: tuple[str, dict]
+    :raises ValueError: If no source or multiple source kinds are registered.
+    """
     sources = manifest.get("sources", [])
     source_by_id = {s["source_id"]: s for s in sources}
     candidates = [
         sid
         for sid in (
             f"land:raster:{variable_name}",
+            f"land:raster_cached:{variable_name}",
             f"land:vector:{variable_name}",
         )
         if sid in source_by_id
@@ -291,10 +307,24 @@ def _current_landscape_source_fingerprint(
     kind: str,
     source_path: Path,
     params: dict,
+    stored_fingerprint: str = "",
 ) -> str:
-    """Compute current source fingerprint for noop/exact-match checks."""
+    """Compute the current logical fingerprint for one registered source.
+
+    :param atlas: Atlas instance with active store routing context.
+    :param kind: Registered source kind.
+    :param source_path: Registered source artifact path.
+    :param params: Registered source params payload.
+    :param stored_fingerprint: Stored manifest fingerprint for cache-backed sources.
+    :returns: Current logical fingerprint used for noop/exact-match checks.
+    :rtype: str
+    :raises ValueError: If the registered source kind is unsupported.
+    :raises TypeError: If vector params are malformed.
+    """
     if kind == "raster":
         return fingerprint_path_mtime_size(source_path)
+    if kind == "raster_cached":
+        return stored_fingerprint
     if kind != "vector":
         raise ValueError(f"Unsupported source kind {kind!r}")
 

@@ -17,9 +17,13 @@ import xarray as xr
 import zarr
 from rasterio.enums import Resampling
 
-from cleo.spatial import to_crs_if_needed
+from cleo.spatial import canonical_crs_str, to_crs_if_needed
 from cleo.store import single_writer_lock, zarr_store_lock_dir
-from cleo.unification.fingerprint import fingerprint_path_mtime_size, hash_inputs_id
+from cleo.unification.fingerprint import (
+    fingerprint_path_mtime_size,
+    hash_inputs_id,
+    semantic_raster_fingerprint,
+)
 from cleo.unification.manifest import _read_manifest, _write_manifest_atomic
 from cleo.unification.raster_io import _atomic_replace_variable_dir
 from cleo.unification.store_io import (
@@ -50,9 +54,23 @@ def register_landscape_source(
     source_path: Path,
     kind: str = "raster",
     params: dict | None = None,
+    fingerprint: str | None = None,
     if_exists: str = "error",
 ) -> bool:
-    """Register a new landscape source in __manifest__/sources."""
+    """Register a raster landscape source in the active manifest.
+
+    :param atlas: Atlas instance with active store routing context.
+    :param name: Target variable name.
+    :param source_path: Path to the raster source artifact.
+    :param kind: Source kind. Must be ``"raster"``.
+    :param params: Optional source-parameter payload stored in the manifest.
+    :param fingerprint: Optional explicit source fingerprint. When omitted,
+        the path/mtime/size fingerprint of ``source_path`` is used.
+    :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+    :returns: ``True`` when the manifest entry changes, else ``False``.
+    :rtype: bool
+    :raises ValueError: If ``kind`` is unsupported.
+    """
     if kind != "raster":
         raise ValueError(f"Only kind='raster' is currently supported; got {kind!r}")
     params = params or {}
@@ -62,7 +80,7 @@ def register_landscape_source(
         kind="raster",
         source_path=source_path,
         params=params,
-        fingerprint=fingerprint_path_mtime_size(source_path),
+        fingerprint=fingerprint_path_mtime_size(source_path) if fingerprint is None else fingerprint,
         if_exists=if_exists,
     )
 
@@ -76,7 +94,17 @@ def register_landscape_vector_source(
     all_touched: bool = False,
     if_exists: str = "error",
 ) -> bool:
-    """Register a vector source in manifest for later rasterization/materialization."""
+    """Register a vector source in the active manifest.
+
+    :param atlas: Atlas instance with active store routing context.
+    :param name: Target variable name.
+    :param shape: Path-like vector source or GeoDataFrame.
+    :param column: Optional value column for rasterization.
+    :param all_touched: Rasterization inclusion policy.
+    :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+    :returns: ``True`` when the manifest entry changes, else ``False``.
+    :rtype: bool
+    """
     source_path, semantic_hash = _canonical_vector_source_artifact(
         atlas,
         shape=shape,
@@ -93,6 +121,46 @@ def register_landscape_vector_source(
         fingerprint=semantic_hash,
         if_exists=if_exists,
     )
+
+
+def register_landscape_dataarray_source(
+    atlas,
+    *,
+    name: str,
+    data: xr.DataArray,
+    categorical: bool = False,
+    if_exists: str = "error",
+    chunk_policy: dict[str, int] | None = None,
+) -> tuple[bool, xr.DataArray]:
+    """Register a canonical cached raster source derived from an in-memory DataArray.
+
+    :param atlas: Atlas instance with active store routing context.
+    :param name: Target variable name.
+    :param data: In-memory raster candidate.
+    :param categorical: Whether categorical resampling semantics should be used.
+    :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+    :param chunk_policy: Chunking policy used for normalization.
+    :returns: Tuple ``(changed, prepared)`` with manifest change status and
+        prepared exact-grid raster ready for staging.
+    :rtype: tuple[bool, xarray.DataArray]
+    """
+    source_path, semantic_hash, prepared = _canonical_raster_source_artifact(
+        atlas,
+        name=name,
+        data=data,
+        categorical=categorical,
+        chunk_policy=chunk_policy,
+    )
+    changed = _register_landscape_source_entry(
+        atlas=atlas,
+        name=name,
+        kind="raster_cached",
+        source_path=source_path,
+        params={"categorical": bool(categorical)},
+        fingerprint=semantic_hash,
+        if_exists=if_exists,
+    )
+    return changed, prepared
 
 
 def _load_active_landscape_prepare_context(
@@ -210,6 +278,8 @@ def _prepare_registered_raster_data(
     source_path: Path,
     params: dict[str, Any],
     wind_ref: xr.DataArray,
+    valid_mask: xr.DataArray,
+    chunk_policy: dict[str, int],
 ) -> xr.DataArray:
     """Prepare one registered raster-backed landscape variable.
 
@@ -218,31 +288,161 @@ def _prepare_registered_raster_data(
     :param source_path: Source raster path.
     :param params: Raster preparation parameters.
     :param wind_ref: Wind reference raster used for grid alignment.
-    :returns: Reprojected staged variable before active-mask application.
+    :param valid_mask: Boolean active landscape validity mask.
+    :param chunk_policy: Chunking policy used for staged output.
+    :returns: Prepared raster on the active grid.
     :rtype: xarray.DataArray
     """
-    aoi = _aoi_geom_or_none(atlas)
     da_raw = rxr.open_rasterio(source_path, parse_coordinates=True)
     da = da_raw.squeeze(drop=True)
-    if da.rio.crs is None:
-        raise RuntimeError(f"Source raster {source_path} has no CRS; cannot materialize.")
-
-    if aoi is not None:
-        aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
-        da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
-
     categorical = bool(params.get("categorical", False))
-    resampling = Resampling.nearest if categorical else Resampling.bilinear
-    da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan)
-    da = da.rename(variable_name)
-
+    da = _normalize_raster_candidate_to_active_grid(
+        atlas=atlas,
+        variable_name=variable_name,
+        da=da,
+        wind_ref=wind_ref,
+        valid_mask=valid_mask,
+        chunk_policy=chunk_policy,
+        categorical=categorical,
+        allow_missing_crs_exact_match=False,
+    )
     clc_codes_raw = params.get("clc_codes")
     if clc_codes_raw is not None:
         if not isinstance(clc_codes_raw, list) or not clc_codes_raw:
             raise ValueError("params['clc_codes'] must be a non-empty list of integer CLC codes.")
         clc_codes = [int(code) for code in clc_codes_raw]
-        da = xr.where(da.isin(clc_codes), 1.0, 0.0).astype(np.float32)
+        da = xr.where(da.isnull(), np.nan, xr.where(da.isin(clc_codes), 1.0, 0.0)).astype(np.float32)
     return da
+
+
+def _normalize_raster_candidate_to_active_grid(
+    *,
+    atlas,
+    variable_name: str,
+    da: xr.DataArray,
+    wind_ref: xr.DataArray,
+    valid_mask: xr.DataArray,
+    chunk_policy: dict[str, int],
+    categorical: bool,
+    allow_missing_crs_exact_match: bool,
+) -> xr.DataArray:
+    """Normalize a raster candidate onto the active wind/landscape grid.
+
+    :param atlas: Atlas instance with active store routing context.
+    :param variable_name: Target variable name.
+    :param da: Raster candidate.
+    :param wind_ref: Active wind reference raster.
+    :param valid_mask: Active landscape validity mask.
+    :param chunk_policy: Chunking policy for staged output.
+    :param categorical: Whether categorical resampling semantics should be used.
+    :param allow_missing_crs_exact_match: Whether missing CRS may be accepted
+        when the candidate already matches the active grid exactly.
+    :returns: Prepared raster on the exact active grid.
+    :rtype: xarray.DataArray
+    :raises ValueError: If the candidate is ambiguous or cannot be aligned safely.
+    :raises RuntimeError: If CRS metadata are required but missing.
+    """
+    da = da.squeeze(drop=True)
+    if "x" not in da.dims or "y" not in da.dims:
+        raise ValueError("data must include spatial dims 'y' and 'x'.")
+
+    extra_dims = [dim for dim in da.dims if dim not in {"y", "x"}]
+    if extra_dims:
+        raise ValueError(
+            f"data must represent exactly one raster with dims ('y', 'x'); unexpected extra dims: {extra_dims!r}"
+        )
+
+    da = da.transpose("y", "x").rename(variable_name)
+    exact_grid_match = np.array_equal(da.coords["y"].values, wind_ref.coords["y"].values) and np.array_equal(
+        da.coords["x"].values, wind_ref.coords["x"].values
+    )
+
+    if exact_grid_match:
+        if da.rio.crs is None:
+            if not allow_missing_crs_exact_match:
+                raise RuntimeError("data has no CRS; cannot materialize safely.")
+            da = da.rio.write_crs(wind_ref.rio.crs)
+        else:
+            da_crs = canonical_crs_str(da.rio.crs)
+            wind_crs = canonical_crs_str(wind_ref.rio.crs)
+            if da_crs != wind_crs:
+                raise ValueError(
+                    f"data CRS {da_crs!r} does not match active atlas CRS {wind_crs!r} for exact-grid ingestion."
+                )
+        da = da.rio.write_transform(wind_ref.rio.transform(recalc=True))
+    else:
+        if da.rio.crs is None:
+            raise RuntimeError("data has no CRS and does not match the active atlas grid exactly.")
+        aoi = _aoi_geom_or_none(atlas)
+        if aoi is not None:
+            aoi_in_da_crs = to_crs_if_needed(aoi, da.rio.crs)
+            da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
+        resampling = Resampling.nearest if categorical else Resampling.bilinear
+        da = da.rio.reproject_match(wind_ref, resampling=resampling, nodata=np.nan).rename(variable_name)
+
+    da = _mask_and_chunk_raster_variable(
+        da,
+        valid_mask=valid_mask,
+        chunk_policy=chunk_policy,
+    )
+    _validate_materialized_variable_grid(variable_name, da, wind_ref)
+    return da
+
+
+def _canonical_raster_source_artifact(
+    atlas,
+    *,
+    name: str,
+    data: xr.DataArray,
+    categorical: bool,
+    chunk_policy: dict[str, int] | None = None,
+) -> tuple[Path, str, xr.DataArray]:
+    """Normalize an in-memory raster and persist a canonical cache artifact.
+
+    :param atlas: Atlas instance with active store routing context.
+    :param name: Target variable name.
+    :param data: In-memory raster candidate.
+    :param categorical: Whether categorical resampling semantics should be used.
+    :param chunk_policy: Chunking policy used for normalization.
+    The normalized raster is realized once during staging so semantic hashing,
+    cache writes, and later materialization reuse do not recompute the same
+    graph independently.
+    :returns: Tuple ``(path, semantic_hash, prepared)``.
+    :rtype: tuple[pathlib.Path, str, xarray.DataArray]
+    """
+    chunk_policy = chunk_policy or {}
+    if not isinstance(data, xr.DataArray):
+        raise TypeError(f"data must be an xarray.DataArray, got {type(data).__name__}.")
+
+    context = _load_active_landscape_prepare_context(atlas, chunk_policy=chunk_policy)
+    prepared = _normalize_raster_candidate_to_active_grid(
+        atlas=atlas,
+        variable_name=name,
+        da=data,
+        wind_ref=context["wind_ref"],
+        valid_mask=context["valid_mask"],
+        chunk_policy=chunk_policy,
+        categorical=categorical,
+        allow_missing_crs_exact_match=True,
+    )
+    prepared = prepared.load()
+    crs_wkt = canonical_crs_str(prepared.rio.crs) if prepared.rio.crs is not None else ""
+    semantic_hash = semantic_raster_fingerprint(
+        values=np.asarray(prepared.values),
+        y=prepared.coords["y"].values,
+        x=prepared.coords["x"].values,
+        dtype=str(prepared.dtype),
+        crs_wkt=crs_wkt,
+        categorical=categorical,
+    )
+
+    out_dir = Path(atlas.path) / "intermediates" / "raster_sources"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{semantic_hash}.tif"
+    if not out_path.exists():
+        prepared.rio.to_raster(out_path)
+
+    return out_path, semantic_hash, prepared
 
 
 def _validate_materialized_variable_grid(
@@ -292,6 +492,17 @@ def _mask_and_chunk_raster_variable(
     return da.where(valid_mask, np.nan).chunk({"y": chunk_y, "x": chunk_x})
 
 
+def _dataset_for_landscape_write(name: str, da: xr.DataArray) -> xr.Dataset:
+    """Build the canonical single-variable dataset used for landscape writes.
+
+    :param name: Output variable name.
+    :param da: Prepared DataArray to serialize.
+    :returns: Dataset ready for Zarr write.
+    :rtype: xarray.Dataset
+    """
+    return da.rename(name).to_dataset()
+
+
 def prepare_landscape_variable_data(
     atlas,
     variable_name: str,
@@ -332,9 +543,6 @@ def prepare_landscape_variable_data(
             source_path=source["source_path"],
             params=source["params"],
             wind_ref=context["wind_ref"],
-        )
-        da = _mask_and_chunk_raster_variable(
-            da,
             valid_mask=context["valid_mask"],
             chunk_policy=chunk_policy,
         )
@@ -350,7 +558,15 @@ def materialize_landscape_computed_variables(
     chunk_policy: dict[str, int] | None = None,
     if_exists: str = "error",
 ) -> dict[str, list[str]]:
-    """Materialize precomputed landscape variables into active landscape store."""
+    """Materialize precomputed landscape variables into the active store.
+
+    :param atlas: Atlas instance with active store routing context.
+    :param variables: Mapping of variable names to prepared DataArrays.
+    :param chunk_policy: Chunking policy used when opening stores.
+    :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+    :returns: Mapping containing written and skipped variable-name lists.
+    :rtype: dict[str, list[str]]
+    """
     chunk_policy = chunk_policy or {}
     validate_if_exists_param(if_exists)
     if not variables:
@@ -506,7 +722,7 @@ def _write_computed_landscape_variable(
         _atomic_replace_variable_dir(store_path, name)
         existing_vars.discard(name)
 
-    da.rename(name).to_dataset().to_zarr(store_path, mode="a", consolidated=False)
+    _dataset_for_landscape_write(name, da).to_zarr(store_path, mode="a", consolidated=False)
     _restore_store_attrs(store_path, preserve_attrs)
     return True
 
@@ -548,6 +764,7 @@ def materialize_landscape_variable(
     chunk_policy: dict[str, int] | None = None,
     fingerprint_method: str = "path_mtime_size",
     if_exists: str = "error",
+    prepared_da: xr.DataArray | None = None,
 ) -> bool:
     """Materialize a single landscape variable from a registered source.
 
@@ -558,6 +775,8 @@ def materialize_landscape_variable(
     :param chunk_policy: Chunking policy used for store opens and writes.
     :param fingerprint_method: Fingerprint method used for inputs identity updates.
     :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
+    :param prepared_da: Optional already-prepared exact-grid raster to reuse for
+        materialization.
     :returns: ``True`` when written, ``False`` when a validated noop is applied.
     :rtype: bool
     """
@@ -590,7 +809,11 @@ def materialize_landscape_variable(
     # Prepare data
     params = json.loads(source_ctx["params_json"]) if source_ctx["params_json"] else {}
     categorical = bool(params.get("categorical", False))
-    da = prepare_landscape_variable_data(atlas, variable_name, chunk_policy=chunk_policy)
+    if prepared_da is None:
+        da = prepare_landscape_variable_data(atlas, variable_name, chunk_policy=chunk_policy)
+    else:
+        da = prepared_da.rename(variable_name)
+        _validate_materialized_variable_grid(variable_name, da, wind_ref.ref_da)
 
     # Write to store
     _write_landscape_variable(
@@ -611,7 +834,12 @@ def materialize_landscape_variable(
 
 
 def _validate_landscape_store_state(land_root: zarr.Group, wind_grid_id: str) -> None:
-    """Validate landscape store is complete and grid matches wind."""
+    """Validate active landscape store completeness and grid identity.
+
+    :param land_root: Open active landscape store root.
+    :param wind_grid_id: Expected active wind grid identifier.
+    :raises RuntimeError: If the store is incomplete or uses a different grid.
+    """
     if land_root.attrs.get("store_state") != "complete":
         raise RuntimeError("landscape.zarr is not complete; run atlas.build() first.")
 
@@ -621,7 +849,14 @@ def _validate_landscape_store_state(land_root: zarr.Group, wind_grid_id: str) ->
 
 
 def _resolve_source_context(store_path: Path, atlas, variable_name: str) -> dict[str, Any]:
-    """Resolve source from manifest and compute current fingerprint."""
+    """Resolve manifest source context for one landscape variable.
+
+    :param store_path: Active landscape store path.
+    :param atlas: Atlas instance with active store routing context.
+    :param variable_name: Target landscape variable name.
+    :returns: Mapping with source identity, params, manifest, and fingerprints.
+    :rtype: dict[str, typing.Any]
+    """
     manifest = _read_manifest(store_path)
     source_id, source_entry = _resolve_landscape_source_for_variable(
         manifest=manifest,
@@ -639,6 +874,7 @@ def _resolve_source_context(store_path: Path, atlas, variable_name: str) -> dict
         kind=stored_kind,
         source_path=source_path,
         params=params,
+        stored_fingerprint=stored_fingerprint,
     )
 
     return {
@@ -679,7 +915,12 @@ def _check_variable_exists(
 
 
 def _validate_noop_match(variable_name: str, source_ctx: dict[str, Any]) -> None:
-    """Validate that existing variable matches current source for noop."""
+    """Validate that ``if_exists="noop"`` can safely skip a write.
+
+    :param variable_name: Target landscape variable name.
+    :param source_ctx: Resolved manifest/source fingerprint context.
+    :raises ValueError: If manifest/source identity does not match the existing variable.
+    """
     manifest = source_ctx["manifest"]
     variables = manifest.get("variables", [])
     var_by_name = {v["variable_name"]: v for v in variables}
@@ -721,13 +962,26 @@ def _write_landscape_variable(
     categorical: bool,
     preserve_attrs: dict[str, Any],
 ) -> None:
-    """Write landscape variable to store with locking."""
+    """Write one prepared landscape variable and update manifest state.
+
+    :param store_path: Active landscape store path.
+    :param variable_name: Target variable name.
+    :param da: Prepared exact-grid DataArray to write.
+    :param source_ctx: Resolved manifest/source fingerprint context.
+    :param wind_ref: Active wind reference wrapper.
+    :param atlas: Atlas instance with active store routing context.
+    :param chunk_policy: Chunking policy recorded in ``inputs_id``.
+    :param fingerprint_method: Inputs-id fingerprint method label.
+    :param do_replace: Whether the existing variable directory should be replaced.
+    :param categorical: Whether categorical resampling semantics apply.
+    :param preserve_attrs: Root attrs that must survive the write.
+    """
     with single_writer_lock(zarr_store_lock_dir(store_path)):
         if do_replace:
             _atomic_replace_variable_dir(store_path, variable_name)
 
         # Write variable
-        da.to_dataset().to_zarr(store_path, mode="a", consolidated=False)
+        _dataset_for_landscape_write(variable_name, da).to_zarr(store_path, mode="a", consolidated=False)
 
         # Restore preserved attrs
         root = zarr.open_group(store_path, mode="a")
@@ -756,7 +1010,14 @@ def _update_manifest_for_variable(
     categorical: bool,
     dtype,
 ) -> None:
-    """Update manifest with new or updated variable entry."""
+    """Update manifest variable metadata after a successful write.
+
+    :param store_path: Active landscape store path.
+    :param variable_name: Target variable name.
+    :param source_id: Registered source identifier for the variable.
+    :param categorical: Whether categorical resampling semantics apply.
+    :param dtype: Stored raster dtype.
+    """
     manifest = _read_manifest(store_path)
     existing_vars = manifest.get("variables", [])
     existing_var_names = [v["variable_name"] for v in existing_vars]
@@ -791,7 +1052,16 @@ def _update_inputs_id(
     chunk_policy: dict[str, int],
     fingerprint_method: str,
 ) -> None:
-    """Update store inputs_id after variable write."""
+    """Update active-store ``inputs_id`` after one landscape write.
+
+    :param store_path: Active landscape store path.
+    :param variable_name: Target variable name.
+    :param source_ctx: Resolved manifest/source fingerprint context.
+    :param wind_ref: Active wind reference wrapper.
+    :param atlas: Atlas instance with active store routing context.
+    :param chunk_policy: Chunking policy recorded in inputs provenance.
+    :param fingerprint_method: Inputs-id fingerprint method label.
+    """
     items: list[tuple[str, str]] = [
         ("wind:grid_id", wind_ref.grid_id),
         ("wind:inputs_id", wind_ref.inputs_id),

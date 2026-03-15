@@ -389,6 +389,15 @@ da_mat = op.materialize()
 atlas.landscape.clear_staged()
 ```
 
+Adding in-memory rasters (area-scoped derived data):
+
+```python
+slope = atlas.landscape.data["elevation"].differentiate("y").rename("slope")
+op = atlas.landscape.add_dataarray(name="slope", data=slope, if_exists="replace")
+da_stage = op.data
+da_mat = op.materialize()
+```
+
 Rasterizing vector sources (area-scoped derived data):
 
 ```python
@@ -418,6 +427,16 @@ ds_mat = run.materialize()
 Normative:
 - `add(...)` stages a lazy raster candidate and returns an operation object with `.data` and `.materialize(...)`.
 - `add(...)` is raster-only (`kind="raster"`); vector sources must use `rasterize(...)`.
+- `add_dataarray(...)` stages an in-memory raster candidate and returns an operation object with `.data` and `.materialize(...)`.
+- `add_dataarray(...)` accepts `xarray.DataArray` only and does not accept `Dataset`.
+- `add_dataarray(...)` is raster-only.
+- `add_dataarray(...)` accepts either:
+  - an exact active-grid raster (`x`/`y` coordinates match the active atlas grid exactly), or
+  - a raster candidate with sufficient spatial metadata for CLEO to align it onto the active grid.
+- `add_dataarray(...)` may infer the active atlas CRS only when `x`/`y` coordinates already match the active grid exactly; otherwise explicit CRS metadata are required.
+- `add_dataarray(..., categorical=True)` uses categorical resampling semantics when alignment is required.
+- `add_dataarray(..., categorical=False)` uses continuous-raster resampling semantics when alignment is required.
+- `add_dataarray(...)` writes a CLEO-managed canonical raster artifact under `intermediates/raster_sources/` during staging so later materialization can reuse the normal registered-source landscape flow.
 - `rasterize(...)` stages a lazy vector-rasterized candidate and returns an operation object with `.data` and `.materialize(...)`.
 - `rasterize(...)` accepts path-like vector sources or `geopandas.GeoDataFrame`.
 - `rasterize(column=None)` burns coverage (`1.0`); `column="<numeric_column>"` burns numeric column values.
@@ -630,6 +649,7 @@ Landscape materialization must source elevation deterministically using:
 - Clone-style selection via `select(..., inplace=False)` is protected.
 - The raster/vector split is protected:
   - `landscape.add(...)` ingests rasters.
+  - `landscape.add_dataarray(...)` ingests in-memory rasters.
   - `landscape.rasterize(...)` consumes vector/shape inputs.
 
 ---

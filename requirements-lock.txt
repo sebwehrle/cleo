@@ -47,7 +47,7 @@ google-crc32c==1.8.0
     # via zarr
 idna==3.11
     # via requests
-llvmlite==0.46.0
+llvmlite==0.47.0
     # via numba
 locket==1.0.0
     # via partd

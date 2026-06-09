@@ -21,7 +21,7 @@ dependencies = [
   # Core scientific stack
   "numpy>=1.24,<3",        # 1.24 for numpy.typing; <3 for future major protection
   "scipy>=1.10",           # 1.10 for consistent interpolation APIs
-  "pandas>=2.0",           # 2.0 for pyarrow-backed strings, CoW semantics
+  "pandas>=3.0.3",           # 2.0 for pyarrow-backed strings, CoW semantics
 
   # xarray ecosystem (fragile - version sensitive)
   "xarray>=2023.1",        # 2023.1 for attrs/keep_attrs semantics used in compute

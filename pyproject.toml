@@ -29,7 +29,7 @@ dependencies = [
   "zarr>=3.0,<4",          # v3 required per CONTRACT B3; cap at v4 for dtype stability
 
   # Geospatial stack
-  "rasterio>=1.3",         # 1.3 for CRS/transform stability
+  "rasterio>=1.4.4",         # 1.3 for CRS/transform stability
   "rioxarray>=0.14",       # 0.14 for clip/reproject reliability
   "geopandas>=0.14",       # 0.14 for shapely 2.0 integration
   "pyproj>=3.4",           # 3.4 for PROJ 9.x compatibility

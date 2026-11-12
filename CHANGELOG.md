@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `atlas.landscape.add_dataarray(name, data, *, categorical=False, if_exists="error")` for in-memory raster ingestion without user-managed temp files; aligned rasters stage directly, metadata-rich rasters align onto the active atlas grid, CLEO records a canonical cached raster source with canonical CRS-based identity so manifest-backed materialization and `noop` matching remain consistent, and prepared staged rasters are realized once and reused cleanly without leaking merge-conflicting raster metadata into `atlas.landscape.data`
 
 ### Changed
+- Capacity-factor integration over the wind-speed grid is now one vectorized `np.trapezoid` call per block instead of a per-pixel Python loop. Results agree to floating-point rounding (identical for dask-backed inputs in the tests). Measured for Austria with one turbine: 2.9–3.2× faster single-threaded and 5.7× faster with 4 threads; peak memory rises by about 2–3%
+- README: how to read a materialized result, why evaluating `compute(...).data` yourself bypasses `compute_backend`/`compute_workers`, and `consolidated=False` for opening stores directly
 - Tightened packaging and static-type metadata: `pyproject.toml` now uses an SPDX-style `MIT` license string compatible with current setuptools guidance, and the tracked mypy configuration now reflects the current passing maintainer-tool state with the obsolete `misc` suppression removed while retaining the error-code families still needed by the checked toolchain
 - Tightened complexity check threshold from Grade E (CC > 30) to Grade D (CC > 20)
 - Refactored turbine selection/configuration validation onto a neutral internal helper module so `WindDomain.select()` keeps its `list|tuple` contract, `Atlas.configure_turbines()` still accepts general `Sequence[str]`, and both paths share the same turbine-ID normalization rules
@@ -59,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Developer benchmark helpers are no longer shipped in the runtime package as `cleo.bench`; maintainer benchmarking now lives under `tools/bench.py`
 
 ### Fixed
+- Minimum NumPy version raised to 2.0: CLEO uses `np.trapezoid`, which earlier NumPy versions lack
 - Hardened atlas dataset interoperability and stale-area diagnostics: datasets opened through the Atlas/store I/O path now normalize boolean root attrs to NetCDF-safe integer scalars for direct `to_netcdf(...)` export, and wind metrics now raise a targeted error instructing users to rebuild the current area when `landscape.valid_mask` is not boolean
 - Landscape vector rasterization now caches canonical vector intermediates as GPKG instead of GeoJSON, avoids internal GeoJSON cache failures on very large dissolved geometries, and refreshes older vector manifest entries onto the new cache path without treating the source as changed
 - Fixed subset-based wind economics materialization so `min_lcoe_turbine` is remapped onto the active-store turbine axis, turbine-list attrs match the stored axis after alignment, and `optimal_energy` aligns reused capacity-factor tensors to the LCOE turbine labels instead of selecting by stale full-store positions

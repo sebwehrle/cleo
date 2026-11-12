@@ -19,7 +19,7 @@ urls = {Homepage = "https://github.com/sebwehrle/cleo"}
 # - Upper bounds: protective caps for ecosystem components with known breaking changes
 dependencies = [
   # Core scientific stack
-  "numpy>=1.24,<3",        # 1.24 for numpy.typing; <3 for future major protection
+  "numpy>=2.0,<3",         # 2.0 for np.trapezoid (cleo/assess.py); <3 for future major protection
   "scipy>=1.10",           # 1.10 for consistent interpolation APIs
   "pandas>=3.0.3",           # 2.0 for pyarrow-backed strings, CoW semantics
 

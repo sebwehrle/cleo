@@ -94,6 +94,7 @@ atlas.wind.compute(
     interpolation="auto",
     air_density=True,
 ).materialize()
+cf = atlas.wind.data["capacity_factors"]  # materialized result, dims ("turbine","y","x")
 
 # Compute another metric (lazy result)
 mean_ws = atlas.wind.compute(
@@ -576,6 +577,13 @@ Chunking and execution behavior are controlled through `chunk_policy`, dataset c
 - Local backend worker cap is controlled by `compute_workers`.
 - `compute_backend="distributed"` requires an active `dask.distributed.Client`.
 - `compute_backend="processes"` requires an importable Python script entrypoint (`if __name__ == "__main__":` for scripts). Use `threads` or `serial` in Python consoles, notebooks, and `python -`.
+- `compute(...).data` is lazy. If you evaluate it yourself, for example with `.values` or `.rio.to_raster(...)`, Dask's global scheduler runs it rather than `compute_backend`/`compute_workers`. By default that is one thread per CPU core, which can need far more memory than CLEO's own evaluation. Prefer `.materialize()` and then read `atlas.wind.data[...]`, or limit the threads explicitly:
+  ```python
+  import dask
+  with dask.config.set(scheduler="threads", num_workers=4):
+      cf = atlas.wind.compute("capacity_factors").data.compute()
+  ```
+- To open a store directly, pass `consolidated=False`, e.g. `xr.open_zarr("<workdir>/wind.zarr", consolidated=False)`. CLEO does not write consolidated Zarr metadata (Zarr v3), so omitting the argument makes xarray warn and fall back.
 
 ```python
 atlas = Atlas(..., compute_backend="processes", compute_workers=4)

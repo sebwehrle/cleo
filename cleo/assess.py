@@ -193,22 +193,28 @@ def _trapz_over_wind_speed(y: xr.DataArray, x: xr.DataArray) -> xr.DataArray:
     """
     Trapezoidal integration over the wind_speed dimension (dask-friendly).
 
-    Uses np.trapezoid via xr.apply_ufunc with dask="parallelized".
+    Uses a single vectorized ``np.trapezoid`` call per block via
+    ``xr.apply_ufunc`` with ``dask="parallelized"``. ``apply_ufunc`` moves the
+    core dimension last, so integration runs over ``axis=-1``.
 
     :param y: Integrand with dims ("wind_speed", ...spatial...), dask-backed OK
     :param x: 1D wind_speed coordinate DataArray (same for all pixels)
     :return: Integrated values with wind_speed dim removed
     """
     return xr.apply_ufunc(
-        np.trapezoid,
+        _trapezoid_last_axis,
         y,
         x,
         input_core_dims=[["wind_speed"], ["wind_speed"]],
         output_core_dims=[[]],
         dask="parallelized",
-        vectorize=True,
         output_dtypes=[np.float64],
     )
+
+
+def _trapezoid_last_axis(y: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """Integrate ``y`` over its last axis with sample points ``x`` (float64 result)."""
+    return np.trapezoid(y, x, axis=-1).astype(np.float64, copy=False)
 
 
 def _align_pdf_to_wind_speed_exact(

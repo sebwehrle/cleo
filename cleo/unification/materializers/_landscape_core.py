@@ -36,6 +36,7 @@ from cleo.unification.raster_io import (
 from cleo.unification.materializers.shared import _aoi_geom_or_none, _now_iso, _stable_json
 from cleo.unification.materializers._helpers import (
     check_store_idempotent,
+    warn_if_rebuild_drops_variables,
     get_wind_reference,
 )
 
@@ -75,6 +76,7 @@ def materialize_landscape(unifier, atlas) -> None:
     # Idempotency check
     if check_store_idempotent(store_path, inputs_id=inputs_id, grid_id=wind_ref.grid_id):
         return
+    warn_if_rebuild_drops_variables(store_path, ds_land)
 
     # Atomic write
     _write_landscape_store(

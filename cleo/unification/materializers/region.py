@@ -18,7 +18,7 @@ from cleo.store import single_writer_lock, zarr_store_lock_dir
 from cleo.unification.store_io import open_zarr_dataset
 from cleo.unification.fingerprint import hash_inputs_id
 from cleo.unification.materializers.shared import _stable_json
-from cleo.unification.materializers._helpers import read_store_attrs_safe
+from cleo.unification.materializers._helpers import read_store_attrs_safe, warn_if_rebuild_drops_variables
 
 logger = logging.getLogger(__name__)
 
@@ -430,6 +430,7 @@ def materialize_area(unifier, atlas, area_id: str) -> None:
             base_wind_inputs_id,
             unifier.chunk_policy,
         )
+        warn_if_rebuild_drops_variables(paths.wind_area, wind_area_ds)
         _write_area_store(paths.wind_area, wind_area_ds, "wind")
 
         land_area_ds = _prepare_area_dataset(
@@ -442,6 +443,7 @@ def materialize_area(unifier, atlas, area_id: str) -> None:
             base_land_inputs_id,
             unifier.chunk_policy,
         )
+        warn_if_rebuild_drops_variables(paths.land_area, land_area_ds)
         _write_area_store(paths.land_area, land_area_ds, "landscape")
 
     finally:

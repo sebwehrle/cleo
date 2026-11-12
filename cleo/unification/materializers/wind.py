@@ -21,7 +21,7 @@ from cleo.unification.fingerprint import (
 from cleo.unification.gwa_io import ensure_required_gwa_files, _open_gwa_raster
 from cleo.unification.manifest import init_manifest, write_manifest_sources, write_manifest_variables
 from cleo.unification.materializers.shared import _get_clip_geometry, _stable_json
-from cleo.unification.materializers._helpers import check_store_idempotent
+from cleo.unification.materializers._helpers import check_store_idempotent, warn_if_rebuild_drops_variables
 from cleo.unification.turbines import _default_turbines_from_resources, _ingest_turbines_and_costs
 from cleo.policies.vertical_policy import (
     HASH_ALGORITHM,
@@ -65,6 +65,7 @@ def materialize_wind(unifier, atlas) -> None:
     # Idempotency check
     if check_store_idempotent(store_path, inputs_id=inputs_id):
         return
+    warn_if_rebuild_drops_variables(store_path, ds)
 
     # Atomic write
     encoding = _compute_encoding(ds, chunk_policy)

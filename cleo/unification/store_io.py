@@ -115,11 +115,11 @@ def open_zarr_dataset(
         if stored_chunks != configured_policy:
             warnings.warn(
                 f"Stored chunk policy {stored_chunks} differs from configured "
-                f"{configured_policy}. Using stored chunks for optimal read "
-                f"performance. To silence this warning:\n"
-                f"  - Set chunk_policy={stored_chunks} when creating Atlas, or\n"
-                f"  - Rebuild stores: delete wind.zarr/landscape.zarr manually "
-                f"and run atlas.build()",
+                f"{configured_policy}; reading with the stored chunks. "
+                f"chunk_policy sets how stores are written. To store with "
+                f"{configured_policy}, call build() on a new Atlas with that chunk_policy: "
+                f"this rebuilds the store and drops variables materialized into it. "
+                f"To silence this warning, pass chunk_policy={stored_chunks}.",
                 UserWarning,
                 stacklevel=2,
             )

@@ -554,3 +554,80 @@ class TestRegionMaterialization:
         assert "capacity_factors" in atlas.wind.data
         assert cf.size > 0
         assert bool(cf.notnull().any().compute()) is True
+
+
+class TestCrsOnDomainData:
+    """Domain data, computed results and exports carry the atlas CRS and a transform matching their grid."""
+
+    @staticmethod
+    def _assert_georeferenced(da: xr.DataArray, crs: str) -> None:
+        assert da.rio.crs is not None, f"{da.name} has no CRS"
+        assert da.rio.crs == CRS.from_user_input(crs)
+        # A stale GeoTransform (e.g. from the base grid on an area subset) would misplace exports.
+        assert da.rio.transform() == da.rio.transform(recalc=True)
+
+    @pytest.mark.parametrize("area", [None, "Niederösterreich"], ids=["base", "area"])
+    def test_domain_data_and_results_carry_crs(self, region_atlas: Atlas, area: str | None) -> None:
+        atlas = region_atlas
+        if area is not None:
+            atlas.select(area=area, inplace=True)
+            atlas.build()
+        tid = atlas.wind.turbines[0]
+
+        self._assert_georeferenced(atlas.wind.data["weibull_A"], atlas.crs)
+        self._assert_georeferenced(atlas.landscape.data["elevation"], atlas.crs)
+
+        run = atlas.wind.compute("capacity_factors", turbines=[tid])
+        self._assert_georeferenced(run.data, atlas.crs)
+
+        store_path = run.persist(run_id="crs")
+        persisted = atlas.open_result(store_path.parent.name, "capacity_factors")["capacity_factors"]
+        self._assert_georeferenced(persisted, atlas.crs)
+
+        materialized = run.materialize()
+        self._assert_georeferenced(materialized, atlas.crs)
+        self._assert_georeferenced(atlas.wind.data["capacity_factors"], atlas.crs)
+
+    def test_georeferenced_height_slices_materialize_repeatedly(self, region_atlas: Atlas) -> None:
+        """Height-sliced mean_wind_speed region writes work with a georeferenced result (new height and overwrite)."""
+        atlas = region_atlas
+        for height in (100, 50, 100):
+            atlas.wind.compute("wind_speed", method="height_weibull_mean", height=height).materialize()
+        mean_ws = atlas.wind.data["mean_wind_speed"]
+        self._assert_georeferenced(mean_ws, atlas.crs)
+        assert bool(mean_ws.sel(height=50).notnull().any()) and bool(mean_ws.sel(height=100).notnull().any())
+
+    def test_flatten_and_analysis_export_treat_spatial_ref_as_coordinate(
+        self, region_atlas: Atlas, tmp_path: Path
+    ) -> None:
+        """spatial_ref is neither a flatten column (it used to make flatten fail) nor a prefixed export variable."""
+        atlas = region_atlas
+        assert sorted(atlas.flatten(domain="landscape").columns) == ["elevation", "valid_mask"]
+
+        atlas.export_analysis_dataset_zarr(tmp_path / "export.zarr", domain="both")
+        exported = xr.open_zarr(tmp_path / "export.zarr", consolidated=False)
+        assert "spatial_ref" in exported.coords
+        assert not [name for name in exported.data_vars if name.endswith("spatial_ref")]
+        assert exported.attrs["schema_version"] == 2
+        exported.close()
+
+    def test_geotiff_recipe_round_trip(self, region_atlas: Atlas, tmp_path: Path) -> None:
+        """README recipe: materialize, select one turbine, write GeoTIFF with rioxarray, reopen."""
+        atlas = region_atlas
+        tid = atlas.wind.turbines[0]
+        atlas.wind.compute("capacity_factors", turbines=[tid]).materialize()
+        cf = atlas.wind.data["capacity_factors"].sel(turbine=tid)
+
+        out = tmp_path / "cf.tif"
+        cf.rio.to_raster(out)
+
+        with rasterio.open(out) as src:
+            assert src.crs == CRS.from_user_input(atlas.crs)
+            assert src.transform == cf.rio.transform()
+            assert (src.height, src.width) == (cf.sizes["y"], cf.sizes["x"])
+            band = src.read(1, masked=True)
+        values = cf.values
+        invalid = np.isnan(values)
+        assert invalid.any() and (~invalid).any(), "fixture must contain invalid and valid pixels"
+        assert bool(band.mask[invalid].all()), "invalid pixels must read back as nodata"
+        np.testing.assert_allclose(band.data[~invalid], values[~invalid], rtol=1e-6)

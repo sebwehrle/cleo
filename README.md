@@ -713,10 +713,7 @@ atlas.build_clc(url="https://example.org/path/to/clc_raster.tif")
 
 CLEO processes large rasters. For memory-constrained systems:
 
-1. **Use smaller chunk sizes:**
-   ```python
-   atlas = Atlas(..., chunk_policy={"y": 512, "x": 512})
-   ```
+1. **Limit parallelism when evaluating results yourself** (see [Dask and Chunking](#dask-and-chunking)). Wind metrics already compute on 256-pixel blocks, whatever the storage chunk size.
 
 2. **Process by area instead of full country:**
    ```python
@@ -744,14 +741,10 @@ CLEO auto-downloads missing GWA data on first `build()`. If download fails:
 
 **Warning: `Stored chunk policy {...} differs from configured policy`**
 
-This warning appears when opening a store with different chunk settings than it was created with. Options:
+This warning appears when an `Atlas` is configured with a different `chunk_policy` than the store was written with. CLEO reads with the stored chunks. Options:
 
-1. **Ignore** - CLEO uses stored chunks for optimal read performance
-2. **Rebuild stores** - Delete `wind.zarr`/`landscape.zarr` and re-run `atlas.build()` with desired chunk policy
-3. **Set matching policy:**
-   ```python
-   atlas = Atlas(..., chunk_policy={"y": 512, "x": 512})  # Match stored chunks
-   ```
+1. **Ignore it or match it:** pass the stored policy, e.g. `Atlas(..., chunk_policy={"y": 512, "x": 512})`, to silence the warning.
+2. **Store with the new policy:** call `build()` on a new `Atlas` created with the desired `chunk_policy`. `chunk_policy` is part of the store identity, so this rebuilds `wind.zarr`/`landscape.zarr` automatically, without manual deletion. Variables materialized into the old store, such as `capacity_factors`, are dropped and must be materialized again; CLEO logs a warning naming them.
 
 ## Citation
 

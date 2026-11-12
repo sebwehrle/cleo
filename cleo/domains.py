@@ -71,6 +71,28 @@ from cleo.unification.store_io import (
 )
 from cleo.validation import validate_dataset, ValidationError
 
+# Spatial chunk edge (pixels) used while computing wind metrics. Capacity-factor
+# graphs build (wind_speed, y, x) float64 intermediates per block, so a 1024x1024
+# store chunk needs about 3 GB per task. Splitting into smaller compute blocks
+# bounds that per task without touching storage chunking or store identity.
+WIND_COMPUTE_CHUNK = 256
+
+
+def _split_spatial_chunks(ds: xr.Dataset) -> xr.Dataset:
+    """Rechunk dask-backed ``y``/``x`` so no block exceeds ``WIND_COMPUTE_CHUNK`` pixels per dimension.
+
+    The target per dimension is ``min(WIND_COMPUTE_CHUNK, largest existing chunk)``, so it never
+    exceeds the largest existing chunk. Variables may be chunked differently (e.g. store variables
+    plus staged overlays); all are rechunked to the same target.
+    """
+    largest: dict[str, int] = {}
+    for var in ds.variables.values():
+        for dim, dim_chunks in zip(var.dims, var.chunks or ()):
+            if dim in ("y", "x"):
+                largest[dim] = max(largest.get(dim, 0), max(dim_chunks))
+    target = {dim: min(WIND_COMPUTE_CHUNK, edge) for dim, edge in largest.items()}
+    return ds.chunk(target) if target else ds
+
 
 def _validate_turbine_index_list(
     indices: list[object],
@@ -964,8 +986,8 @@ class WindDomain:
         # Inject economics params and check CF reuse
         _inject_economics_params_and_cf_reuse(kwargs, metric, spec, resolved_cf, self)
 
-        # Prepare canonical inputs and compute
-        wind = self._atlas.wind_data
+        # Prepare canonical inputs and compute (land's valid_mask aligns to these chunks)
+        wind = _split_spatial_chunks(self._atlas.wind_data)
         try:
             land = self._atlas.landscape_data
         except (FileNotFoundError, RuntimeError):

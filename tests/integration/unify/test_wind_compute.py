@@ -11,6 +11,7 @@ Tests verify:
 
 from __future__ import annotations
 
+import logging
 import shutil
 import warnings
 from pathlib import Path
@@ -406,6 +407,56 @@ class TestCapacityFactorsEnforcement:
         assert bool(da.notnull().any().compute()) is True, (
             "capacity_factors with air_density should have at least one valid value"
         )
+
+    def test_rebuild_warns_about_dropped_variables(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Replacing a wind store names materialized variables it drops; an unchanged build stays quiet."""
+        turbine_names = ["Enercon.E40.500"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+        Unifier(chunk_policy={"y": 64, "x": 64}).materialize_wind(atlas)
+        Unifier(chunk_policy={"y": 64, "x": 64}).materialize_landscape(atlas)
+        atlas.wind.compute("capacity_factors", turbines=atlas.wind.turbines[:1]).materialize()
+
+        logger_name = "cleo.unification.materializers._helpers"
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            Unifier(chunk_policy={"y": 64, "x": 64}).materialize_wind(atlas)
+        assert "will be lost" not in caplog.text
+
+        atlas.chunk_policy = {"y": 32, "x": 32}  # changes the store identity
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            Unifier(chunk_policy={"y": 32, "x": 32}).materialize_wind(atlas)
+        assert "will be lost" in caplog.text
+        assert "capacity_factors" in caplog.text
+
+    def test_compute_splits_spatial_chunks_without_changing_results(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Wind metrics compute on blocks of at most WIND_COMPUTE_CHUNK; smaller chunks are kept; mixed overlays work."""
+        turbine_names = ["Enercon.E40.500"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+        tids = atlas.wind.turbines[:1]
+
+        # Default edge (256) exceeds the 20-pixel store chunk: chunks are left as they are.
+        reference = atlas.wind.compute("capacity_factors", turbines=tids, air_density=True).data
+        assert reference.chunksizes["y"] == (20,) and reference.chunksizes["x"] == (20,)
+        reference = reference.compute()
+
+        monkeypatch.setattr("cleo.domains.WIND_COMPUTE_CHUNK", 8)
+        split = atlas.wind.compute("capacity_factors", turbines=tids, air_density=True).data
+        assert split.chunksizes["y"] == (8, 8, 4) and split.chunksizes["x"] == (8, 8, 4)
+        np.testing.assert_array_equal(split.compute().values, reference.values)
+
+        # The staged CF overlay (8-pixel chunks) now sits next to 20-pixel store chunks.
+        mean_ws = atlas.wind.compute("wind_speed", method="height_weibull_mean", height=100).data
+        assert mean_ws.chunksizes["y"] == (8, 8, 4)
 
     def test_capacity_factors_uses_selected_turbines(self, tmp_path: Path) -> None:
         """capacity_factors uses selected_turbines when turbines kwarg not provided."""

@@ -573,6 +573,7 @@ Area ID rules:
   - country, CRS, resolution, upstream data fingerprints,
   - for wind base store: the configured turbine list (or `"default"`),
   - for area derived stores: area selection id + area-shape fingerprint.
+- `chunk_policy` is part of a store's identity. A `build()` whose identity no longer matches an existing store replaces it, and area stores are rebuilt when their base store changes. Variables materialized into the old store (base or area) are not carried over, and CLEO logs a warning naming them.
 - Identity computation must be stable across runs:
   - no timestamps,
   - stable ordering (e.g. turbine list order preserved),
@@ -635,6 +636,7 @@ Landscape materialization must source elevation deterministically using:
 - Wind-domain `compute(...).data` is lazy if Dask is configured (unless explicitly configured otherwise by the caller flow).
 - Landscape `compute(metric="distance", ...)` is an explicit eager exception for correctness (global Euclidean distance transform).
 - `.materialize()` is the canonical user-triggered materialization step that may compute.
+- Wind metrics may compute on smaller spatial chunks than the store's: `WindDomain.compute(...)` rechunks `y`/`x` so that no block exceeds a fixed compute edge; the target never exceeds the dataset's largest existing chunk. Compute chunking is not part of store identity and does not change storage chunking.
 
 ---
 

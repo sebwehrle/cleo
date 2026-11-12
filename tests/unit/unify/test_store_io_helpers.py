@@ -152,6 +152,10 @@ def test_open_zarr_dataset_uses_stored_chunks_when_mismatch(tmp_path: Path) -> N
         assert "Stored chunk policy" in str(w[0].message)
         assert "{'y': 512, 'x': 512}" in str(w[0].message)
         assert "{'y': 1024, 'x': 1024}" in str(w[0].message)
+        # Guidance: rebuild through a new Atlas (no manual deletion), and its cost.
+        assert "new Atlas" in str(w[0].message)
+        assert "drops variables materialized" in str(w[0].message)
+        assert "delete" not in str(w[0].message)
 
     ds.close()
 

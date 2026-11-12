@@ -11,6 +11,8 @@ Offline-only: uses local synthetic fixtures with no network calls.
 
 from __future__ import annotations
 
+import logging
+
 from pathlib import Path
 
 import numpy as np
@@ -421,6 +423,28 @@ class TestRegionStores:
         # Ensure this test meaningfully exercised a changed base-set path.
         assert n_before >= len(subset)
         region_after.close()
+
+    def test_area_rebuild_warns_about_dropped_area_variables(
+        self, region_atlas: Atlas, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An area-only materialized variable lost in an area rebuild is named in a warning."""
+        atlas = region_atlas
+        atlas.select(area="Niederösterreich", inplace=True)
+        atlas.build()
+        atlas.wind.select(turbines=[atlas.wind.turbines[0]])
+        atlas.wind.compute(metric="capacity_factors").materialize()
+
+        # Change the base identity, then rebuild the area store from it.
+        atlas.select(area=None, inplace=True)
+        atlas.configure_turbines(list(atlas.wind.turbines[:2]))
+        atlas.build_canonical()
+        with caplog.at_level(logging.WARNING, logger="cleo.unification.materializers._helpers"):
+            atlas.select(area="Niederösterreich", inplace=True)
+            atlas.build()
+
+        assert "will be lost" in caplog.text
+        assert "capacity_factors" in caplog.text
+        assert "areas" in caplog.text
 
     def test_region_stores_rebuild_when_area_valid_mask_is_not_boolean(self, region_atlas: Atlas) -> None:
         """Area stores rebuild when an existing landscape valid_mask has the wrong dtype."""

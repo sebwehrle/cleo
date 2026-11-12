@@ -231,6 +231,32 @@ def check_store_idempotent(
         return False
 
 
+def warn_if_rebuild_drops_variables(store_path: Path, new_ds: xr.Dataset) -> None:
+    """Log a warning naming variables that replacing an existing store will drop.
+
+    Called when a store exists but its identity no longer matches (e.g. a changed
+    ``chunk_policy``, turbine set or CRS), right before it is rebuilt from ``new_ds``.
+    Variables materialized into the store after its last build are not recreated.
+
+    :param store_path: Path of the store about to be replaced.
+    :param new_ds: Dataset the rebuilt store will contain.
+    """
+    if not store_path.exists():
+        return
+    try:
+        with xr.open_zarr(store_path, consolidated=False) as existing:
+            lost = sorted(str(name) for name in existing.data_vars if name not in new_ds.variables)
+    except (OSError, ValueError, KeyError):
+        return
+    if lost:
+        logger.warning(
+            "Rebuilding %s because its inputs changed (e.g. chunk_policy, turbines or CRS). "
+            "These variables will be lost and must be materialized again: %s",
+            store_path,
+            ", ".join(lost),
+        )
+
+
 # =============================================================================
 # if_exists Semantics
 # =============================================================================

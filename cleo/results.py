@@ -715,6 +715,8 @@ def _write_height_slice_to_store(
     :param store_sizes: Store dimension sizes.
     """
     ds_to_write = xr.Dataset({metric: da.sel(height=[height_ctx.target_height_value])})
+    # Region writes accept only variables on region dims; scalar coords such as spatial_ref already live in the store.
+    ds_to_write = ds_to_write.drop_vars([name for name, coord in ds_to_write.coords.items() if coord.ndim == 0])
     ds_to_write.to_zarr(
         store_path,
         mode="r+",

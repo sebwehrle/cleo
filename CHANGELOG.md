@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `atlas.landscape.add_dataarray(name, data, *, categorical=False, if_exists="error")` for in-memory raster ingestion without user-managed temp files; aligned rasters stage directly, metadata-rich rasters align onto the active atlas grid, CLEO records a canonical cached raster source with canonical CRS-based identity so manifest-backed materialization and `noop` matching remain consistent, and prepared staged rasters are realized once and reused cleanly without leaking merge-conflicting raster metadata into `atlas.landscape.data`
 
 ### Changed
+- Analysis exports (`export_analysis_dataset_zarr`) now carry `spatial_ref` as a single coordinate instead of the prefixed data variables `wind__spatial_ref`/`landscape__spatial_ref`; `ANALYSIS_EXPORT_SCHEMA_VERSION` is now 2
 - Wind metrics compute on spatial blocks of at most 256×256 pixels, split from the store's chunks, so country-scale capacity factors no longer exhaust memory when evaluated with many threads. Storage chunking and store identity are unchanged
 - The stored-chunk-policy warning now explains that a new `Atlas(..., chunk_policy=...)` plus `build()` rebuilds the store (dropping materialized variables) instead of advising manual deletion
 - Rebuilding a wind or landscape store (base or area) because its inputs changed now logs a warning naming the materialized variables that are dropped
@@ -64,6 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Developer benchmark helpers are no longer shipped in the runtime package as `cleo.bench`; maintainer benchmarking now lives under `tools/bench.py`
 
 ### Fixed
+- Domain data (`atlas.wind.data`, `atlas.landscape.data`) and computed wind results now carry their CRS and transform, so `.rio.crs` works and `.rio.to_raster(...)` writes georeferenced GeoTIFFs (README recipe). Previously the grid mapping was a plain data variable and computed results lost it
+- `flatten(domain="landscape")` no longer fails on the `spatial_ref` variable
 - Minimum NumPy version raised to 2.0: CLEO uses `np.trapezoid`, which earlier NumPy versions lack
 - Hardened atlas dataset interoperability and stale-area diagnostics: datasets opened through the Atlas/store I/O path now normalize boolean root attrs to NetCDF-safe integer scalars for direct `to_netcdf(...)` export, and wind metrics now raise a targeted error instructing users to rebuild the current area when `landscape.valid_mask` is not boolean
 - Landscape vector rasterization now caches canonical vector intermediates as GPKG instead of GeoJSON, avoids internal GeoJSON cache failures on very large dissolved geometries, and refreshes older vector manifest entries onto the new cache path without treating the source as changed

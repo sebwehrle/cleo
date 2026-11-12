@@ -994,6 +994,8 @@ class WindDomain:
             land = None
 
         da = spec["fn"](wind, land, **kwargs)
+        if "spatial_ref" in wind.coords:  # computations drop the grid-mapping attrs (CRS, transform)
+            da = da.assign_coords(spatial_ref=wind["spatial_ref"])
         variable_name = resolved_wind_output_name(metric=metric, params=kwargs, data=da)
         staged = normalize_metric_for_active_wind_store(
             metric=metric,

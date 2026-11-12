@@ -128,6 +128,9 @@ def open_zarr_dataset(
         effective_chunks = configured_policy
 
     ds = xr.open_zarr(path, consolidated=False, chunks=effective_chunks)
+    # Default decoding leaves the CF grid-mapping variable as data; as a coordinate it carries the CRS.
+    if "spatial_ref" in ds.data_vars:
+        ds = ds.set_coords("spatial_ref")
     return _normalize_dataset_attrs_for_netcdf(ds)
 
 

@@ -546,6 +546,13 @@ For LCOE unit changes, export and post-process manually.
 
 ### Results and Cleanup
 
+Domain data (`atlas.wind.data`, `atlas.landscape.data`) and computed wind results carry their CRS and transform (a `spatial_ref` coordinate), so a materialized result can be written to GeoTIFF directly with rioxarray:
+
+```python
+atlas.wind.compute("capacity_factors", turbines=["Vestas.V162.7200"]).materialize()
+atlas.wind.data["capacity_factors"].sel(turbine="Vestas.V162.7200").rio.to_raster("cf.tif")
+```
+
 - `atlas.new_run_id(prefix=None)`
   - creates sortable run ID with optional safe prefix.
 - `atlas.persist(metric_name, obj, run_id=None, params=None)`

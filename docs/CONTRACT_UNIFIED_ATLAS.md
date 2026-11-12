@@ -561,6 +561,8 @@ Results stores:
 - `<ROOT>/results/<run_id>/<name>.zarr`
 - metadata/provenance fields are stored in Zarr attrs (no required `meta.json` file).
 
+Georeferencing: `atlas.<domain>.data` variables and computed wind results carry the CRS and transform as a scalar `spatial_ref` coordinate (CF grid mapping), so `.rio.crs`, `.rio.transform()` and `.rio.to_raster(...)` work on them directly.
+
 Area ID rules:
 - If `atlas.area` is `None`, materialized wind metrics are written to the base wind store (`<ROOT>/wind.zarr`).
 - Otherwise `area_id` is the provided NUTS id (e.g. `"AT13"`).
@@ -873,7 +875,7 @@ Schema versioning does NOT apply to internal canonical stores:
 Schema version constants are defined in `cleo/contracts.py`:
 
 ```python
-ANALYSIS_EXPORT_SCHEMA_VERSION = 1  # xarray exports (zarr/netcdf)
+ANALYSIS_EXPORT_SCHEMA_VERSION = 2  # xarray exports (zarr/netcdf)
 FLATTEN_EXPORT_SCHEMA_VERSION = 1   # tabular exports (parquet/csv)
 ```
 

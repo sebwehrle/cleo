@@ -391,11 +391,12 @@ class TestMaterializeWindCrsHandling:
         unifier = Unifier()
         unifier.materialize_wind(atlas)
 
-        # Resulting dataset should have CRS in spatial_ref or on template
-        ds = xr.open_zarr(tmp_path / "wind.zarr", consolidated=False)
+        # The opened store exposes the CRS through the spatial_ref coordinate (rioxarray convention)
+        from cleo.unification.store_io import open_zarr_dataset
 
-        # CRS is stored in spatial_ref variable (rioxarray convention)
-        assert "spatial_ref" in ds.data_vars or ds["template"].rio.crs is not None
+        ds = open_zarr_dataset(tmp_path / "wind.zarr")
+        assert "spatial_ref" in ds.coords
+        assert ds["template"].rio.crs == CRS.from_user_input(atlas.crs)
 
 
 class TestZarrV3Compatibility:

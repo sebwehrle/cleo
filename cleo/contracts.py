@@ -27,7 +27,7 @@ The version should NOT be bumped for:
 
 # Schema version for consolidated analysis xarray exports (zarr/netcdf).
 # Used by future `Atlas.export_analysis_dataset_zarr()` or equivalent API.
-ANALYSIS_EXPORT_SCHEMA_VERSION: int = 1
+ANALYSIS_EXPORT_SCHEMA_VERSION: int = 2  # 2: spatial_ref is a coordinate, not prefixed data vars
 
 # Schema version for flatten() tabular exports and sidecar manifests.
 # Used when writing parquet/csv exports with schema metadata.

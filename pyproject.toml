@@ -15,41 +15,43 @@ authors = [
 urls = {Homepage = "https://github.com/sebwehrle/cleo"}
 
 # Dependency version policy (see docs/CONTRACT_UNIFIED_ATLAS.md Section C3):
-# - Lower bounds: minimum versions known to work based on CI/testing
+# - Lower bounds are tested: CI job `test-min-deps` installs every direct dependency at exactly
+#   its floor (uv --resolution lowest-direct, wheels only, Python 3.11) and runs the test suite.
+#   A floor is raised only when that job shows it is needed; the comment says why.
 # - Upper bounds: protective caps for ecosystem components with known breaking changes
 dependencies = [
   # Core scientific stack
-  "numpy>=2.0,<3",         # 2.0 for np.trapezoid (cleo/assess.py); <3 for future major protection
-  "scipy>=1.10",           # 1.10 for consistent interpolation APIs
-  "pandas>=3.0.3",           # 2.0 for pyarrow-backed strings, CoW semantics
+  "numpy>=2.0,<3",         # np.trapezoid (cleo/assess.py); <3 for future major protection
+  "scipy>=1.13.0",         # NumPy 2 compatible wheels
+  "pandas>=2.2.2",         # NumPy 2 compatible wheels
 
   # xarray ecosystem (fragile - version sensitive)
-  "xarray>=2023.1",        # 2023.1 for attrs/keep_attrs semantics used in compute
-  "dask[array]>=2023.1",   # 2023.1 for consistent array protocol
-  "zarr>=3.0,<4",          # v3 required per CONTRACT B3; cap at v4 for dtype stability
+  "xarray>=2025.6.0",      # Zarr v3 stores and to_zarr(align_chunks=...) (materializers/region.py)
+  "dask[array]>=2024.12.1",  # tested with the xarray floor
+  "zarr>=3.1.0,<4",        # v3 required per CONTRACT B3 (3.1: Group.create_array(data=) used in tests); <4 for dtype stability
 
   # Geospatial stack
-  "rasterio>=1.4.4",         # 1.3 for CRS/transform stability
-  "rioxarray>=0.19.0",       # 0.14 for clip/reproject reliability
-  "geopandas>=0.14",       # 0.14 for shapely 2.0 integration
-  "pyproj>=3.7.2",           # 3.4 for PROJ 9.x compatibility
-  "shapely>=2.0",          # 2.0 for vectorized operations (geopandas dep)
-  "xarray-spatial>=0.3",   # 0.3 for focal operations
+  "rasterio>=1.3.10",      # NumPy 2 compatible wheels (1.3.3 fails with a NumPy ABI error)
+  "rioxarray>=0.14",       # clip/reproject API used by CLEO
+  "geopandas>=0.14.4",     # NumPy 2 support (copy semantics)
+  "pyproj>=3.4",           # PROJ 9.x compatibility
+  "shapely>=2.0.4",        # NumPy 2 compatible wheels
+  "xarray-spatial>=0.3.2", # focal operations; lowest release that resolves with wheels
 
   # I/O and serialization
-  "netcdf4>=1.6",          # 1.6 for HDF5 1.12+ compatibility
-  "pyyaml>=6.0",           # 6.0 for safe_load defaults
-  "openpyxl>=3.1",         # 3.1 for xlsx read/write
+  "netcdf4>=1.7.1.post1",  # NumPy 2 compatible wheels
+  "pyyaml>=6.0",           # safe_load defaults
+  "openpyxl>=3.1",         # xlsx read/write
 
   # Network and utilities
-  "requests>=2.34.2",        # 2.28 for urllib3 2.x compatibility
-  "urllib3>=2.0",          # 2.0 for modern TLS defaults
-  "certifi>=2026.10.18",       # 2023.1 for current CA bundle
-  "tqdm>=4.64",            # 4.64 for notebook/console detection
+  "requests>=2.30.0",      # first release that allows urllib3 2.x
+  "urllib3>=2.0.2",        # modern TLS defaults; lowest 2.x release that resolves
+  "certifi>=2023.5.7",     # first 2023 CA bundle release
+  "tqdm>=4.64",            # notebook/console detection
 
   # Domain-specific
-  "pycountry>=26.2.16",       # 22.1 for ISO-3166 updates
-  "pint>=0.25.3",            # 0.20 for unit registry stability
+  "pycountry>=23.12.7",    # ISO-3166 data; lowest release that resolves with wheels
+  "pint>=0.24.4",          # NumPy 2 support (0.24.0 breaks with current flexparser)
 ]
 
 [project.optional-dependencies]

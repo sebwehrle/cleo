@@ -1,7 +1,7 @@
 name: CI
 
 env:
-  RUFF_VERSION: "0.15.2"
+  RUFF_VERSION: "0.15.8"  # keep in sync with the ruff pin in pyproject.toml [dev]
 
 on:
   push:
@@ -129,7 +129,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v7
@@ -157,6 +157,43 @@ jobs:
 
       - name: Run smoke tests
         run: python -m pytest -q tests/smoke
+
+  test-min-deps:
+    name: Test (minimum dependency versions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install direct dependencies at their declared floors
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system --resolution lowest-direct --only-binary :all: -e ".[dev]"
+
+      - name: Check every direct dependency resolved to its declared floor
+        run: |
+          python - <<'EOF'
+          import sys, tomllib
+          from importlib.metadata import version
+          from packaging.requirements import Requirement
+          from packaging.version import Version
+
+          bad = []
+          for dep in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]:
+              req = Requirement(dep)
+              floor = next((Version(s.version) for s in req.specifier if s.operator == ">="), None)
+              if floor is not None and Version(version(req.name)) != floor:
+                  bad.append(f"{req.name}: declared >={floor}, resolved {version(req.name)}")
+          print("\n".join(bad) or "All direct dependencies resolved to their declared floors.")
+          sys.exit(1 if bad else 0)
+          EOF
+
+      - name: Run unit and integration tests
+        run: python -m pytest -q tests/unit tests/integration
 
   coverage:
     name: Coverage

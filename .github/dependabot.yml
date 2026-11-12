@@ -2,7 +2,7 @@
 # Conservative settings: weekly updates, limited PRs, no major version bumps.
 #
 # Note: After merging Dependabot PRs, regenerate requirements-lock.txt:
-#   pip-compile pyproject.toml -o requirements-lock.txt
+#   pip-compile --upgrade --output-file=requirements-lock.txt --strip-extras pyproject.toml
 
 version: 2
 updates:
@@ -13,6 +13,9 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
+    # Floors in pyproject.toml are tested minimums (CI job test-min-deps): only raise one when a
+    # new release falls outside the allowed range, never just because a newer version exists.
+    versioning-strategy: increase-if-necessary
     labels:
       - "dependencies"
     ignore:

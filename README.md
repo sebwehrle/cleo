@@ -13,7 +13,7 @@ It is currently focused on European workflows, with NUTS region support, CORINE 
 
 ## Supported Environment
 
-- **Python**: 3.11+
+- **Python**: 3.11+ (CI tests 3.11–3.14, and the declared minimum dependency versions on 3.11)
 - **OS**: Linux (primary), macOS (secondary)
 - **System deps**: GDAL/PROJ (via rasterio/pyproj), HDF5/NetCDF
 

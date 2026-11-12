@@ -408,8 +408,12 @@ class TestCapacityFactorsEnforcement:
             "capacity_factors with air_density should have at least one valid value"
         )
 
-    def test_rebuild_warns_about_dropped_variables(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_rebuild_warns_about_dropped_variables(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Replacing a wind store names materialized variables it drops; an unchanged build stays quiet."""
+        # A real Atlas created earlier in the session disables propagation on the "cleo" logger.
+        monkeypatch.setattr(logging.getLogger("cleo"), "propagate", True)
         turbine_names = ["Enercon.E40.500"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)

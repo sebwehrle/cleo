@@ -425,10 +425,12 @@ class TestRegionStores:
         region_after.close()
 
     def test_area_rebuild_warns_about_dropped_area_variables(
-        self, region_atlas: Atlas, caplog: pytest.LogCaptureFixture
+        self, region_atlas: Atlas, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An area-only materialized variable lost in an area rebuild is named in a warning."""
         atlas = region_atlas
+        # Atlas disables propagation on the "cleo" logger; caplog listens on the root logger.
+        monkeypatch.setattr(logging.getLogger("cleo"), "propagate", True)
         atlas.select(area="Niederösterreich", inplace=True)
         atlas.build()
         atlas.wind.select(turbines=[atlas.wind.turbines[0]])

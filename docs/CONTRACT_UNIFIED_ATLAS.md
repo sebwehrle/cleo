@@ -737,7 +737,7 @@ The package outputs (capacity factors, LCOE, flattened rasters) are designed as 
 ### C2.1 Python Version
 
 - **Minimum**: Python 3.11
-- **Tested**: Python 3.11, 3.12 (CI matrix when available)
+- **Tested**: Python 3.11, 3.12, 3.13, 3.14 (CI matrix)
 
 ### C2.2 Operating System
 
@@ -762,7 +762,7 @@ These are typically installed via system package managers or a user-managed cond
 
 Dependencies in `pyproject.toml` must specify:
 
-- **Lower bounds**: Minimum versions known to work (based on CI/testing)
+- **Lower bounds**: Minimum versions known to work. CI job `test-min-deps` installs every direct dependency at exactly its declared floor (`uv pip install --resolution lowest-direct --only-binary :all:` on Python 3.11), fails if any resolves to a different version, and runs the unit and integration tests
 - **Upper bounds**: Protective caps for ecosystem components with known breaking changes (xarray, dask, zarr, geopandas)
 
 ### C3.2 Rationale Documentation
@@ -771,7 +771,7 @@ Significant version constraints should include inline comments explaining the ra
 
 ### C3.3 Lock Files
 
-- `constraints-ci.txt` (optional): Fully pinned versions for CI reproducibility
+- `requirements-lock.txt`: fully pinned versions for reproducible maintainer installs, generated with `pip-compile --upgrade --output-file=requirements-lock.txt --strip-extras pyproject.toml`
 - Production installs should use version ranges from `pyproject.toml`
 
 ---
@@ -784,8 +784,9 @@ Continuous integration must enforce:
 2. **Unit tests**: `pytest tests/unit`
 3. **Integration tests**: `pytest tests/integration`
 4. **Smoke tests**: `pytest tests/smoke`
-5. **Build verification**: Package builds and imports successfully
-6. **Documentation build**: `mkdocs build --strict`
+5. **Minimum dependency versions**: unit and integration tests with every direct dependency at its declared floor (see C3.1)
+6. **Build verification**: Package builds and imports successfully
+7. **Documentation build**: `mkdocs build --strict`
 
 CI failures block merge.
 

@@ -42,7 +42,9 @@ def flatten(
         Continuous/non-binary columns are left unchanged.
     :param include_only: optional list of output column names to keep. Raises if any
         requested column is not present in the flattened output.
-    :return: a pandas.Dataframe with one column per data variable and non-spatial coordinate
+    :return: a pandas.Dataframe with one column per data variable and non-spatial coordinate.
+        Variables with neither an 'x' nor a 'y' dimension (e.g. turbine metadata such as
+        ``turbine_capacity`` or ``power_curve``) have no per-cell value and are skipped.
     """
 
     collect_df = []
@@ -53,6 +55,8 @@ def flatten(
 
     for var_name in data_variables:
         data_var = data[var_name]
+        if not {"x", "y"} & set(data_var.dims):
+            continue  # non-spatial metadata (e.g. turbine_*, power_curve) has no per-cell value
         # drop non-dimensional coordinates
         non_dim_coords = set(data_var.coords) - set(data_var.dims)
         data_var = data_var.drop_vars(non_dim_coords)

@@ -1190,8 +1190,9 @@ class Atlas:
     def configure_turbines(self, turbines: Sequence[str]) -> None:
         """Configure turbines for wind materialization.
 
-        Affects wind materialization into wind.zarr; does not change compute
-        defaults. Call before Atlas.build() or build_canonical().
+        Affects wind materialization into wind.zarr, and is the default turbine set
+        for turbine-dependent metrics when neither ``turbines=`` nor a persistent
+        ``atlas.wind.select(...)`` is given. Call before Atlas.build() or build_canonical().
 
         Changing configured turbines changes the wind inputs_id, triggering
         rebuild on next build().

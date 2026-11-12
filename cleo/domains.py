@@ -526,13 +526,20 @@ def _resolve_turbines_for_metric(
     kwargs: dict,
     domain: "WindDomain",
 ) -> None:
-    """Resolve turbines for metrics that require them."""
+    """Resolve turbines: explicit ``turbines=`` > persistent selection > configured turbines."""
     turbines = kwargs.get("turbines", None)
     if turbines is None:
+        configured = getattr(domain._atlas, "turbines_configured", None)
         if domain.selected_turbines is not None:
             turbines = domain.selected_turbines
+        elif configured:
+            turbines = _normalize_turbine_ids(
+                list(configured), available=domain.turbines, unknown_hint="atlas.wind.turbines (rebuild the store?)"
+            )
         else:
-            raise ValueError("turbines required; use atlas.wind.select(...) or pass turbines=.")
+            raise ValueError(
+                "turbines required; use atlas.wind.select(...), pass turbines=, or atlas.configure_turbines(...)."
+            )
     else:
         if len(turbines) == 0:
             raise ValueError("turbines must be non-empty; see atlas.wind.turbines")
@@ -734,11 +741,12 @@ class WindDomain:
     @property
     def selected_turbines(self) -> tuple[str, ...] | None:
         """
-        Currently selected turbine IDs, or None if no selection (all turbines).
+        Currently selected turbine IDs, or None if there is no persistent selection.
 
-        Selection is persistent on the Atlas instance.
+        Selection is persistent on the Atlas instance. Without a selection, metrics that need
+        turbines use ``turbines=`` if given, else the turbines from ``atlas.configure_turbines(...)``.
 
-        :returns: Tuple of selected turbine IDs, or ``None`` for all turbines.
+        :returns: Tuple of selected turbine IDs, or ``None`` without a persistent selection.
         """
         return self._atlas._wind_selected_turbines
 
@@ -914,14 +922,14 @@ class WindDomain:
 
         :param metric: Metric name (see supported metrics below).
         :param kwargs: Metric-specific parameters. For metrics requiring
-            turbines, omitted ``turbines`` uses persistent selection from
-            :meth:`select`.
+            turbines, omitted ``turbines`` uses the persistent selection from
+            :meth:`select`, else the turbines from ``atlas.configure_turbines(...)``.
 
         Supported metrics:
             - "wind_speed": public wind-speed surface.
               - ``method="height_weibull_mean"`` requires ``height``.
-              - ``method="rotor_equivalent"`` requires turbines (from select() or kwarg).
-            - "capacity_factors": requires turbines (from select() or kwarg).
+              - ``method="rotor_equivalent"`` requires turbines (kwarg, else select(), else configure_turbines()).
+            - "capacity_factors": requires turbines (kwarg, else select(), else configure_turbines()).
               Optional: method (``"rotor_node_average"`` [default],
               ``"rotor_moment_matched_weibull"``, ``"hub_height_weibull"``,
               ``"hub_height_weibull_rews_scaled"``), interpolation, rews_n,

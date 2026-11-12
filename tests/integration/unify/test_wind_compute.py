@@ -275,26 +275,55 @@ class TestCapacityFactorsEnforcement:
     """Tests for capacity_factors turbine enforcement and computation."""
 
     def test_capacity_factors_requires_turbines(self, tmp_path: Path) -> None:
-        """capacity_factors without turbines raises ValueError with hint."""
+        """Without turbines=, selection or configured turbines, capacity_factors raises with a hint."""
+        atlas = MockAtlas(tmp_path)  # no configured turbines; store holds the default turbine
+        _create_all_required_gwa_files(atlas)
+        _create_elevation_raster(atlas)
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        with pytest.raises(ValueError) as exc_info:
+            atlas.wind.compute("capacity_factors")
+
+        error_msg = str(exc_info.value)
+        assert "atlas.wind.select" in error_msg and "configure_turbines" in error_msg
+
+    def test_turbine_resolution_precedence(self, tmp_path: Path) -> None:
+        """explicit turbines= > persistent selection > configured turbines; clear_selection falls back."""
+        turbine_names = ["Enercon.E40.500", "Vestas.V100.2000"]
+        atlas = MockAtlas(tmp_path, turbines=turbine_names)
+        _create_all_required_gwa_files(atlas)
+        _copy_turbine_yamls(atlas, turbine_names)
+        _create_elevation_raster(atlas)
+        unifier = Unifier(chunk_policy={"y": 64, "x": 64})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+
+        def computed_turbines(**kwargs) -> list[str]:
+            return [str(t) for t in atlas.wind.compute("capacity_factors", **kwargs).data["turbine"].values]
+
+        assert computed_turbines() == turbine_names  # configured fallback
+        atlas.wind.select(turbines=["Vestas.V100.2000"])
+        assert computed_turbines() == ["Vestas.V100.2000"]  # selection beats configured
+        assert computed_turbines(turbines=["Enercon.E40.500"]) == ["Enercon.E40.500"]  # explicit beats selection
+        atlas.wind.clear_selection()
+        assert computed_turbines() == turbine_names  # back to configured
+
+    def test_configured_turbine_missing_from_store_raises(self, tmp_path: Path) -> None:
+        """A configured turbine the store does not contain (configuration changed without a rebuild) raises."""
         turbine_names = ["Enercon.E40.500"]
         atlas = MockAtlas(tmp_path, turbines=turbine_names)
         _create_all_required_gwa_files(atlas)
         _copy_turbine_yamls(atlas, turbine_names)
         _create_elevation_raster(atlas)
-
-        # Materialize stores
         unifier = Unifier(chunk_policy={"y": 64, "x": 64})
         unifier.materialize_wind(atlas)
         unifier.materialize_landscape(atlas)
 
-        # Try without turbines - should fail
-        with pytest.raises(ValueError) as exc_info:
+        atlas._turbines_configured = ("Vestas.V100.2000",)
+        with pytest.raises(ValueError, match="Unknown turbine ID: 'Vestas.V100.2000'"):
             atlas.wind.compute("capacity_factors")
-
-        error_msg = str(exc_info.value)
-        assert "turbines" in error_msg.lower()
-        # Should hint at atlas.wind.turbines or atlas.wind.select
-        assert "atlas.wind.turbines" in error_msg or "atlas.wind.select" in error_msg
 
     def test_compute_rejects_materialize_only_kwargs(self, tmp_path: Path) -> None:
         """compute(...) rejects materialize-only kwargs and points callers to .materialize(...)."""

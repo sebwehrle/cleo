@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,8 +111,11 @@ def test_assert_all_required_gwa_present_lists_missing_files(tmp_path: Path) -> 
 def test_ensure_required_gwa_files_downloads_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Auto-download path creates all missing required GWA files."""
+    """Auto-download path creates all missing required GWA files and logs which ones."""
+    monkeypatch.setattr(logging.getLogger("cleo"), "propagate", True)  # Atlas may have disabled it
+    caplog.set_level(logging.INFO, logger="cleo.unification.gwa_io")
     atlas = SimpleNamespace(path=tmp_path, country="AUT")
     calls: list[tuple[str, Path]] = []
 
@@ -129,13 +134,20 @@ def test_ensure_required_gwa_files_downloads_missing(
     assert len(calls) == 15
     assert all(path.exists() for _sid, path in req)
     assert all(url.startswith("https://globalwindatlas.info/api/gis/country/AUT/") for url, _path in calls)
+    first_name = req[0][1].name
+    assert f"15 required GWA file(s) missing for AUT; downloading: {first_name}" in caplog.text
+    assert f"Downloaded {first_name} (" in caplog.text
+    assert "15 of 15 file(s) downloaded" in caplog.text
 
 
 def test_ensure_required_gwa_files_raises_when_download_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Auto-download path still fails fast with complete missing-file list."""
+    """Auto-download path logs each failure and still fails fast with complete missing-file list."""
+    monkeypatch.setattr(logging.getLogger("cleo"), "propagate", True)  # Atlas may have disabled it
+    caplog.set_level(logging.INFO, logger="cleo.unification.gwa_io")
     atlas = SimpleNamespace(path=tmp_path, country="AUT")
     calls: list[tuple[str, Path]] = []
 
@@ -149,6 +161,8 @@ def test_ensure_required_gwa_files_raises_when_download_fails(
         ensure_required_gwa_files(atlas, auto_download=True)
 
     assert len(calls) == 15
+    assert "Failed to download" in caplog.text and "network unavailable" in caplog.text
+    assert "0 of 15 file(s) downloaded" in caplog.text
 
 
 def test_open_gwa_raster_converts_nodata_to_nan(tmp_path: Path) -> None:

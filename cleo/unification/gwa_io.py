@@ -324,7 +324,10 @@ def ensure_required_gwa_files(atlas, *, auto_download: bool = True) -> list[tupl
 
     if missing and auto_download:
         logger.info(
-            "Required GWA files are missing; attempting automatic download.",
+            "%d required GWA file(s) missing for %s; downloading: %s",
+            len(missing),
+            atlas.country,
+            ", ".join(path.name for _sid, path in missing),
             extra={"country": atlas.country, "missing_count": len(missing)},
         )
         downloaded = 0
@@ -333,14 +336,21 @@ def ensure_required_gwa_files(atlas, *, auto_download: bool = True) -> list[tupl
             try:
                 cleo.net.download_to_path(url, path, overwrite=False)
                 downloaded += 1
-            except Exception:
+                logger.info("Downloaded %s (%d bytes).", path.name, path.stat().st_size)
+            except Exception as exc:
                 logger.warning(
-                    "Failed to auto-download required GWA file.",
+                    "Failed to download %s from %s: %s",
+                    path.name,
+                    url,
+                    exc,
                     extra={"source_id": source_id, "path": str(path), "url": url},
                     exc_info=True,
                 )
         logger.info(
-            "Finished GWA auto-download attempt.",
+            "GWA download finished for %s: %d of %d file(s) downloaded.",
+            atlas.country,
+            downloaded,
+            len(missing),
             extra={"country": atlas.country, "downloaded_count": downloaded, "attempted_count": len(missing)},
         )
 

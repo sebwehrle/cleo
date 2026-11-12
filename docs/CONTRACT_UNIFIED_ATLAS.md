@@ -182,6 +182,7 @@ Normative:
 - `select(...)` and `clear_selection()` mutate selection state in place and return `None`.
 - `clear_computed()` clears transient computed overlays from `atlas.wind.data` and returns `None`.
 - Any compute call may also accept an explicit `turbines=[...]` override; explicit arguments override the persistent selection for that call only.
+- Without an explicit override or a persistent selection, turbine-dependent metrics use `atlas.turbines_configured`, validated against the store inventory. If nothing is configured either, `compute(...)` raises with a hint.
 
 ---
 

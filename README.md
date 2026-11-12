@@ -84,7 +84,7 @@ atlas.configure_turbines(["Enercon.E40.500", "Vestas.V100.2000"])
 # Build/update canonical stores (wind.zarr + landscape.zarr)
 atlas.build()
 
-# Select turbines for turbine-dependent metrics
+# Optional: select turbines for turbine-dependent metrics (default: the configured turbines)
 atlas.wind.select(turbines=["Enercon.E40.500"])
 
 # Compute + materialize into active wind store
@@ -126,6 +126,45 @@ After materialization, CLEO uses:
 - `<workdir>/data/raw/<ISO3>/*.tif`
 - `<workdir>/data/nuts/*`
 - `<workdir>/data/clc/*` (only if you use optional CLC preparation)
+
+## Grid and Data Sources
+
+**Analysis grid.** CLEO reprojects the GWA 100 m Weibull-A layer to the target CRS and uses it as the reference grid for every other layer. The reprojection uses bilinear resampling and passes no resolution, so GDAL chooses the pixel size: Austria in EPSG:3035 comes out at about 199 m, not the GWA's nominal 250 m.
+
+| Layer | How it is aligned to the grid |
+|---|---|
+| GWA Weibull A/k and air density (all heights) | bilinear (`reproject_match` to the reference) |
+| Elevation (local GeoTIFF or Copernicus DEM tiles) | bilinear |
+| CORINE Land Cover (optional) | nearest neighbour (categorical) |
+
+Query the grid after `build()`:
+
+```python
+ds = atlas.wind.data
+ds.rio.crs, ds.rio.resolution(), ds.rio.bounds(), ds.rio.transform(), (ds.sizes["y"], ds.sizes["x"])
+```
+
+**Data sources.** Downloaded automatically when missing (CLC only on request):
+
+| Data | Source | Licence / terms |
+|---|---|---|
+| Wind climate: Weibull A/k, air density | [Global Wind Atlas](https://globalwindatlas.info) GIS API | CC BY 4.0 (per the [World Bank data catalog entry](https://datacatalog.worldbank.org/search/dataset/0038643)) |
+| Elevation | [Copernicus DEM GLO-30](https://registry.opendata.aws/copernicus-dem/) tiles, AWS bucket `copernicus-dem-30m` | Free for the public under the [Copernicus DEM licence](https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM) |
+| NUTS boundaries | [Eurostat GISCO](https://ec.europa.eu/eurostat/web/gisco/geodata/statistical-units/territorial-units-statistics) | Eurostat copyright notice plus dataset-specific GISCO rules, stated on the GISCO download pages |
+| CORINE Land Cover (optional) | [Copernicus Land Monitoring Service](https://land.copernicus.eu) | Full, open and free access; credit "European Union's Copernicus Land Monitoring Service information" ([data policy](https://land.copernicus.eu/en/data-policy)) |
+
+Check each provider's terms before redistributing data or derived products.
+
+**Local CORINE vector data.** `build_clc()` downloads CLC rasters; it does not take local files. A CORINE polygon file (e.g. a national clip) can be rasterized onto the grid instead. Its class code is usually a string, so map it to integers first, then build masks with xarray:
+
+```python
+import geopandas as gpd
+
+clc = gpd.read_file("clc_clip.shp")
+clc["code"] = clc["CODE_18"].astype(int)  # CLC2018 code field; adjust to your file's field name
+atlas.landscape.rasterize(clc, name="clc_code", column="code").materialize()
+forest = atlas.landscape.data["clc_code"].isin([311, 312, 313])
+```
 
 ## Public API
 
@@ -288,14 +327,14 @@ The most common starting points are `wind_speed`, `capacity_factors`, and `lcoe`
     - Repeated `.materialize()` calls at different heights aggregate into one
       `mean_wind_speed(height,y,x)` variable in active wind store.
   - `method="rotor_equivalent"`
-    - Requires turbines via selection or `turbines=[...]`
+    - Requires turbines: `turbines=[...]`, else the persistent selection, else the turbines from `configure_turbines(...)`
     - Output variable: `rotor_equivalent_wind_speed`
     - Output dims: `("turbine","y","x")`
     - Options: `rews_n`, `air_density`, `interpolation="auto"|"ak_logz"|"mu_cv_loglog"`
     - `auto` resolves to `mu_cv_loglog`; explicit `ak_logz` is allowed and
       preserves no-extrapolation semantics across the rotor heights.
 - `capacity_factors`
-  - Requires turbines via selection or `turbines=[...]`
+  - Requires turbines: `turbines=[...]`, else the persistent selection, else the turbines from `configure_turbines(...)`
   - Options:
     - `method="rotor_node_average"|"rotor_moment_matched_weibull"|"hub_height_weibull"|"hub_height_weibull_rews_scaled"`
     - `interpolation="auto"|"ak_logz"|"mu_cv_loglog"`
@@ -315,7 +354,7 @@ The most common starting points are `wind_speed`, `capacity_factors`, and `lcoe`
     ).data
     ```
 - `lcoe`
-  - Requires turbines via selection or `turbines=[...]`
+  - Requires turbines: `turbines=[...]`, else the persistent selection, else the turbines from `configure_turbines(...)`
   - Uses grouped spec API:
     - `cf={...}`: CF parameters. Keys: `method`, `interpolation`, `air_density`, `rews_n`, `loss_factor`.
       Defaults: `method="rotor_node_average"`, `interpolation="auto"`, `air_density=False`, `rews_n=12`, `loss_factor=1.0`.

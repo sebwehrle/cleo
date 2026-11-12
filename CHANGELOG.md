@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `atlas.landscape.add_dataarray(name, data, *, categorical=False, if_exists="error")` for in-memory raster ingestion without user-managed temp files; aligned rasters stage directly, metadata-rich rasters align onto the active atlas grid, CLEO records a canonical cached raster source with canonical CRS-based identity so manifest-backed materialization and `noop` matching remain consistent, and prepared staged rasters are realized once and reused cleanly without leaking merge-conflicting raster metadata into `atlas.landscape.data`
 
 ### Changed
+- Turbine-dependent metrics without `turbines=` or a persistent selection now use the turbines from `atlas.configure_turbines(...)` instead of raising; the `selected_turbines` docstring no longer claims `None` means all turbines
+- GWA auto-download log messages now name the missing files, each downloaded file with its size or failure reason, and the count downloaded
+- README: grid derivation and resampling, how to query the grid, data sources with licences, and rasterizing a local CORINE vector file
 - Dependency floors are now tested minimums: a new CI job installs every direct dependency at exactly its declared floor and runs the tests. Floors raised by Dependabot are lowered again (e.g. pandas 2.2.2, rasterio 1.3.10, pyproj 3.4, requests 2.30, certifi 2023.5.7, pint 0.24.4), and floors that could not work with NumPy 2 or Zarr v3 are raised (scipy 1.13, xarray 2025.6, dask 2024.12.1, zarr 3.1, geopandas 0.14.4, shapely 2.0.4, netCDF4 1.7.1.post1). Every comment states the actual reason
 - CI tests Python 3.11 to 3.14; CI's ruff version now matches the `[dev]` pin (0.15.8); Dependabot no longer raises dependency floors unless a release falls outside the allowed range
 - `requirements-lock.txt` regenerated

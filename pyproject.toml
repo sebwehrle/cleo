@@ -148,7 +148,7 @@ exclude = [
     "dist/",
 ]
 
-# Local development environment (pixi). CI keeps using pip; see CLAUDE.md.
+# Local development environment (pixi). CI keeps using pip; see .github/workflows/ci.yml.
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64"]

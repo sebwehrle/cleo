@@ -44,10 +44,28 @@ def test_flatten_can_include_template():
     assert len(df) == 4
 
 
-def test_flatten_raises_for_non_spatial_variable_dims():
+def test_flatten_skips_variables_without_spatial_dims():
+    """Turbine metadata in a built wind store has no x/y and must not break flatten."""
     ds = xr.Dataset(
-        {"bad": (("t",), np.array([1.0, 2.0]))},
-        coords={"t": [0, 1]},
+        {
+            "v2": (("y", "x"), np.array([[1.0, 2.0], [3.0, 4.0]])),
+            "turbine_capacity": (("turbine",), np.array([7200.0])),
+            "power_curve": (("turbine", "wind_speed"), np.zeros((1, 3))),
+            "scalar": ((), 1.0),
+        },
+        coords={"x": [0.0, 1.0], "y": [1.0, 0.0], "turbine": ["T1"], "wind_speed": [0.0, 1.0, 2.0]},
+    )
+    df = flatten(ds)
+
+    assert list(df.columns) == ["v2"]
+    assert len(df) == 4
+
+
+@pytest.mark.parametrize("dims", [("x",), ("t", "h", "y", "x")])
+def test_flatten_raises_for_unsupported_spatial_variable_dims(dims):
+    ds = xr.Dataset(
+        {"bad": (dims, np.zeros((2,) * len(dims)))},
+        coords={"t": [0, 1], "h": [0, 1], "x": [0.0, 1.0], "y": [1.0, 0.0]},
     )
     with pytest.raises(
         ValueError,

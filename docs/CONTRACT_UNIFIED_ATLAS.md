@@ -801,6 +801,7 @@ CI failures block merge.
 
 **Contract:**
 - Returns a `pandas.DataFrame` with one row per valid grid cell
+- Variables without an `x` or `y` dimension (turbine metadata such as `turbine_capacity`, `power_curve`) are not included
 - Column naming follows `{domain}__{variable}` convention when `include_domain_prefix=True`
 - Schema is deterministic given the same inputs and parameters
 - `Atlas.validate_flatten_schema(df, required_columns)` validates presence of required columns

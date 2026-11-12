@@ -266,6 +266,7 @@ The two main datasets are `atlas.wind.data` and `atlas.landscape.data`.
   - configured economics dict or `None`.
 - `atlas.flatten(domain="wind"|"landscape"|"both", digits=5, exclude_template=True, include_domain_prefix=True, cast_binary_to_int=False, include_only=None)`
   - turns domain data into a tabular `pandas.DataFrame`.
+  - variables without spatial dimensions (turbine metadata such as `turbine_capacity`, `power_curve`) are left out.
 - `Atlas.validate_flatten_schema(df, required_columns)`
   - raises if required flattened columns are missing.
 

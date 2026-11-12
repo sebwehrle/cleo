@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Domain data (`atlas.wind.data`, `atlas.landscape.data`) and computed wind results now carry their CRS and transform, so `.rio.crs` works and `.rio.to_raster(...)` writes georeferenced GeoTIFFs (README recipe). Previously the grid mapping was a plain data variable and computed results lost it
 - `flatten(domain="landscape")` no longer fails on the `spatial_ref` variable
+- `flatten(domain="wind")` and `flatten(domain="both")` no longer fail on built wind stores: variables without spatial dimensions (`turbine_*`, `power_curve`) are skipped instead of raising
 - Minimum NumPy version raised to 2.0: CLEO uses `np.trapezoid`, which earlier NumPy versions lack
 - Hardened atlas dataset interoperability and stale-area diagnostics: datasets opened through the Atlas/store I/O path now normalize boolean root attrs to NetCDF-safe integer scalars for direct `to_netcdf(...)` export, and wind metrics now raise a targeted error instructing users to rebuild the current area when `landscape.valid_mask` is not boolean
 - Landscape vector rasterization now caches canonical vector intermediates as GPKG instead of GeoJSON, avoids internal GeoJSON cache failures on very large dissolved geometries, and refreshes older vector manifest entries onto the new cache path without treating the source as changed

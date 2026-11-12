@@ -52,3 +52,6 @@ clms_service_key.json
 
 # Secret scanning artifacts
 .secrets-scan-results.json
+
+# pixi environments
+.pixi/

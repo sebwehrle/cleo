@@ -145,3 +145,35 @@ exclude = [
     "build/",
     "dist/",
 ]
+
+# Local development environment (pixi). CI keeps using pip; see CLAUDE.md.
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.dependencies]
+python = "3.11.*"
+# Native-library packages from conda-forge so both platforms get GDAL/PROJ/HDF5 binaries.
+netcdf4 = "*"
+pyogrio = "*"
+pyproj = "*"
+rasterio = "*"
+# Gate tools not in the [dev] extra.
+radon = "*"
+ripgrep = "*"
+
+[tool.pixi.pypi-dependencies]
+cleo = { path = ".", editable = true }
+
+[tool.pixi.environments]
+default = ["dev", "docs"]
+
+[tool.pixi.tasks]
+lint = "ruff format --check . && ruff check ."
+test = "pytest -q tests/unit tests/integration tests/smoke"
+contract = "tools/check_contract.sh"
+complexity = "tools/check_complexity.sh"
+docs = "mkdocs build --strict"
+secret-scan = "tools/secret_scan.sh --all"
+build = "python -m build"
+gate = { depends-on = ["lint", "test", "contract", "complexity", "docs", "secret-scan", "build"] }

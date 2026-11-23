@@ -74,7 +74,7 @@ from cleo import Atlas
 
 atlas = Atlas(
     "/path/to/workdir",  # directory CLEO will use for data, stores, and results
-    country="AUT",      # ISO-3166 alpha-3
+    country="AUT",  # ISO-3166 alpha-3
     crs="EPSG:3035",
 )
 
@@ -185,6 +185,7 @@ Public API boundary:
 
 ```python
 from cleo import __version__
+
 print(__version__)  # e.g., "0.0.1"
 ```
 
@@ -634,6 +635,7 @@ Chunking and execution behavior are controlled through `chunk_policy`, dataset c
 - `compute(...).data` is lazy. If you evaluate it yourself, for example with `.values` or `.rio.to_raster(...)`, Dask's global scheduler runs it rather than `compute_backend`/`compute_workers`. By default that is one thread per CPU core, which can need far more memory than CLEO's own evaluation. Prefer `.materialize()` and then read `atlas.wind.data[...]`, or limit the threads explicitly:
   ```python
   import dask
+
   with dask.config.set(scheduler="threads", num_workers=4):
       cf = atlas.wind.compute("capacity_factors").data.compute()
   ```

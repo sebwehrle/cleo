@@ -1,7 +1,7 @@
 name: CI
 
 env:
-  RUFF_VERSION: "0.15.8"  # keep in sync with the ruff pin in pyproject.toml [dev]
+  RUFF_VERSION: "0.17.5"  # keep in sync with the ruff pin in pyproject.toml [dev]
 
 on:
   push:

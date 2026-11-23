@@ -35,14 +35,14 @@ Normative:
 ```python
 atlas = Atlas(
     path,
-    country="AUT",          # ISO3
-    crs="epsg:3035",        # canonical projected CRS for stores
+    country="AUT",  # ISO3
+    crs="epsg:3035",  # canonical projected CRS for stores
     chunk_policy={"y": 1024, "x": 1024},  # optional
-    compute_backend="serial",             # optional: serial|threads|processes|distributed
-    compute_workers=None,                 # optional local worker cap
-    area=None,            # optional initial area selection (see A4)
-    results_root=None,      # optional custom results directory
-    fingerprint_method="path_mtime_size", # optional unification fingerprint policy
+    compute_backend="serial",  # optional: serial|threads|processes|distributed
+    compute_workers=None,  # optional local worker cap
+    area=None,  # optional initial area selection (see A4)
+    results_root=None,  # optional custom results directory
+    fingerprint_method="path_mtime_size",  # optional unification fingerprint policy
 )
 ```
 
@@ -111,8 +111,8 @@ Normative:
 Typical usage:
 
 ```python
-atlas.select(area="Niederösterreich", inplace=True)   # sets active area selection (persistent)
-atlas.select(area=None, inplace=True)       # clears area selection (full-country view)
+atlas.select(area="Niederösterreich", inplace=True)  # sets active area selection (persistent)
+atlas.select(area=None, inplace=True)  # clears area selection (full-country view)
 ```
 
 Normative:
@@ -154,8 +154,8 @@ Normative:
 Supported domains:
 
 ```python
-atlas.wind.data         # xr.Dataset
-atlas.landscape.data    # xr.Dataset
+atlas.wind.data  # xr.Dataset
+atlas.landscape.data  # xr.Dataset
 ```
 
 Normative:
@@ -167,12 +167,12 @@ Normative:
 ## A7. Wind: turbine selection for computations
 
 ```python
-atlas.wind.turbines                 # tuple[str, ...]  (inventory from base store)
-atlas.wind.select(turbines=[...])   # sets persistent selection by turbine IDs
+atlas.wind.turbines  # tuple[str, ...]  (inventory from base store)
+atlas.wind.select(turbines=[...])  # sets persistent selection by turbine IDs
 atlas.wind.select(turbine_indices=[...])  # sets persistent selection by indices into atlas.wind.turbines
 atlas.wind.clear_selection()
 atlas.wind.clear_computed()
-atlas.wind.selected_turbines        # tuple[str, ...] | None
+atlas.wind.selected_turbines  # tuple[str, ...] | None
 ```
 
 Normative:
@@ -205,7 +205,7 @@ run = atlas.wind.compute(
     rews_n=12,
     loss_factor=1.0,
 )
-da = run.data    # xr.DataArray (dask-backed if dask is configured)
+da = run.data  # xr.DataArray (dask-backed if dask is configured)
 ```
 
 Composed metric example (grouped dependency specs):
@@ -501,11 +501,11 @@ Normative:
 ```python
 atlas.export_analysis_dataset_zarr(
     path,
-    domain="both",           # "wind" | "landscape" | "both"
-    include_only=None,       # optional: list of variables to export
-    prefix=True,             # prefix vars with "wind__" / "landscape__" for domain="both"
-    exclude_template=True,   # exclude template variables
-    compute=True,            # compute dask arrays before writing
+    domain="both",  # "wind" | "landscape" | "both"
+    include_only=None,  # optional: list of variables to export
+    prefix=True,  # prefix vars with "wind__" / "landscape__" for domain="both"
+    exclude_template=True,  # exclude template variables
+    compute=True,  # compute dask arrays before writing
 )
 ```
 
@@ -883,7 +883,7 @@ Schema version constants are defined in `cleo/contracts.py`:
 
 ```python
 ANALYSIS_EXPORT_SCHEMA_VERSION = 2  # xarray exports (zarr/netcdf)
-FLATTEN_EXPORT_SCHEMA_VERSION = 1   # tabular exports (parquet/csv)
+FLATTEN_EXPORT_SCHEMA_VERSION = 1  # tabular exports (parquet/csv)
 ```
 
 ### C7.3 Semantic Definition

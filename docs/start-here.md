@@ -45,7 +45,9 @@ Result location:
 ## 4. Compute and materialize landscape output
 
 ```python
-atlas.landscape.compute(metric="distance", source="settlements", name="distance_settlements", if_exists="replace").materialize()
+atlas.landscape.compute(
+    metric="distance", source="settlements", name="distance_settlements", if_exists="replace"
+).materialize()
 ```
 
 Result location:

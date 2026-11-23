@@ -7,7 +7,9 @@ Compute/add/rasterize landscape variables through the atlas and materialize into
 ## Canonical pattern
 
 ```python
-atlas.landscape.compute(metric="distance", source="settlements", name="distance_settlements", if_exists="replace").materialize()
+atlas.landscape.compute(
+    metric="distance", source="settlements", name="distance_settlements", if_exists="replace"
+).materialize()
 
 atlas.landscape.add(name="custom_layer", source_path="/path/to/layer.tif").materialize()
 

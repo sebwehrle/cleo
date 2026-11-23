@@ -21,7 +21,7 @@ CLEO is designed around a single mutable `Atlas` workspace object.
 | `chunk_policy` | `dict[str, int] \| None` | `{"y": 1024, "x": 1024}` | Open/chunk policy for xarray/zarr reads. |
 | `compute_backend` | `"serial"\|"threads"\|"processes"\|"distributed"` | `"serial"` | Backend used when eager compute is needed for I/O. |
 | `compute_workers` | `int \| None` | `None` | Local worker cap (backend-dependent). |
-| `area` | `str \| None` | `None` | Optional initial area selection applied after build. |
+| `area` | `str \| None` | `None` | Optional initial area selection applied by `build()` (or replaced by an earlier `select(..., inplace=True)`); reading or writing `atlas.wind` / `atlas.landscape` data before `build()` raises. |
 | `results_root` | `Path \| None` | `<path>/results` | Persisted run artifact root. |
 | `fingerprint_method` | `str` | `"path_mtime_size"` | Unification fingerprint strategy. |
 
@@ -254,6 +254,8 @@ Output:
 | `source` | yes | - | Source variable name or list/tuple of names in active landscape store. |
 | `name` | no | `distance_<source>` | Output variable name(s). |
 | `if_exists` | no | `"error"` | Conflict handling: `error`, `replace`, or `noop`. |
+
+Landscape output names (`add`, `add_dataarray`, `rasterize`, `add_clc_category`, `compute`) cannot be `valid_mask` or `elevation`: both are built with the landscape store. Only the variable itself is written; extra coordinates of an input DataArray are dropped.
 
 ### `add(...)` raster staging
 

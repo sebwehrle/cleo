@@ -124,6 +124,7 @@ Normative:
   - *what computations operate on* (they apply a mask/subset), and
   - *where derived outputs are written on disk* (area-scoped stores).
 - Area selection **must not rewrite** the base stores.
+- An area passed to the constructor (`Atlas(..., area=...)`) is applied by `build()`, unless `select(..., inplace=True)` replaces or clears it first. Until then, any access to the active wind or landscape store (reading or writing `atlas.wind` / `atlas.landscape` data) must raise and ask for `build()`, so that nothing is routed to the base stores while `atlas.area` already reports the area. Work that does not touch the active store (e.g. preparing the country-wide CLC cache) may run, and fail, before that.
 
 ---
 
@@ -442,6 +443,7 @@ Normative:
 - `rasterize(...)` accepts path-like vector sources or `geopandas.GeoDataFrame`.
 - `rasterize(column=None)` burns coverage (`1.0`); `column="<numeric_column>"` burns numeric column values.
 - Staged variables must surface in `atlas.landscape.data[name]` before materialization.
+- `valid_mask` and `elevation` are built with the landscape store. `add(...)`, `add_dataarray(...)`, `rasterize(...)`, `add_clc_category(...)` and `compute(...)` must reject them as output names, whatever `if_exists` is. Only the variable, its dimension coordinates and its grid mapping are written; other coordinates of the input are dropped.
 - If a area selection is active, added rasters must be written to the **derived area store** for that area.
 - `clear_staged()` must remove staged landscape overlays from `atlas.landscape.data`.
 - Staged landscape overlays are transient: `select(...)`, `build()`, `build_canonical()`, and `build_clc()` clear them.
@@ -575,7 +577,7 @@ Area ID rules:
 - Each store must have an **inputs identity** (`inputs_id`) computed from deterministic inputs:
   - country, CRS, resolution, upstream data fingerprints,
   - for wind base store: the configured turbine list (or `"default"`),
-  - for area derived stores: area selection id + area-shape fingerprint.
+  - for area derived stores: area selection id, the area's projected bounds and x/y slices of the base grid, the base stores' `inputs_id`s and the base `grid_id`. An existing area store is reused while both area stores are complete, its recorded base `inputs_id`s match and its `valid_mask` is boolean; the polygon is not checked. After changing the NUTS source, remove area stores with `atlas.clean_areas(...)` (this also deletes variables materialized into them) so they are rebuilt.
 - `chunk_policy` is part of a store's identity. A `build()` whose identity no longer matches an existing store replaces it, and area stores are rebuilt when the `inputs_id` of their base stores no longer matches the one recorded at their creation. Variables materialized into the old store (base or area) are not carried over, and CLEO logs a warning naming them.
 - `inputs_id` identifies the inputs of a store's build only. Materializing variables into a store (registered landscape layers, computed landscape variables, wind metrics) does not change it, so it neither triggers a rebuild of that store nor of area stores derived from it. Registered landscape layers are recorded in the store manifest. An area store therefore does not pick up variables added to its base store after the area store was created.
 - Base stores are country-wide. The current area selection is not an input of the base stores: it neither clips them nor changes their `inputs_id`.

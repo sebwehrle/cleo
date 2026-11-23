@@ -186,21 +186,18 @@ def _open_local_elevation(
     return da
 
 
-def _build_copdem_elevation(
+def _resolve_copdem_tiles(
     atlas,
     wind_ref: xr.DataArray,
-) -> tuple[xr.DataArray, dict[str, Any]]:
-    """Build CopDEM elevation data aligned to wind grid.
-
-    Downloads CopDEM tiles, mosaics them, and reprojects to match the wind
-    reference grid.
+) -> tuple[list[Path], dict[str, Any]]:
+    """Resolve the CopDEM tiles covering the wind grid (downloading missing ones) without reading them.
 
     Args:
         atlas: Atlas instance.
         wind_ref: Reference DataArray from wind for grid alignment.
 
     Returns:
-        Tuple of (elevation DataArray, metadata dict).
+        Tuple of (available tile paths, metadata dict for ``inputs_id``).
 
     Raises:
         FileNotFoundError: If CopDEM tiles cannot be downloaded.
@@ -227,8 +224,6 @@ def _build_copdem_elevation(
         max_lat=max_lat,
     )
 
-    # Build mosaic aligned to wind_ref
-    elevation = build_copdem_elevation_like(wind_ref, tile_paths)
     downloaded_tile_ids = [path.stem for path in tile_paths]
 
     # Build metadata for deterministic inputs_id
@@ -240,7 +235,7 @@ def _build_copdem_elevation(
         "clip": "none",  # kept for inputs_id stability; the base store is never clipped
     }
 
-    return elevation, meta
+    return tile_paths, meta
 
 
 def _open_raster(

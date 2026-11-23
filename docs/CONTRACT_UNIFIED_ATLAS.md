@@ -582,7 +582,8 @@ Area ID rules:
 - `inputs_id` identifies the inputs of a store's build only. Materializing variables into a store (registered landscape layers, computed landscape variables, wind metrics) does not change it, so it neither triggers a rebuild of that store nor of area stores derived from it. Registered landscape layers are recorded in the store manifest. An area store therefore does not pick up variables added to its base store after the area store was created.
 - Base stores are country-wide. The current area selection is not an input of the base stores: it neither clips them nor changes their `inputs_id`.
 - Identity computation must be stable across runs:
-  - no timestamps,
+  - store identities (`inputs_id`, `grid_id`) are independent of how the workdir path is spelled (relative, absolute, symlink),
+  - no build timestamps (input files may be fingerprinted by modification time),
   - stable ordering (e.g. turbine list order preserved),
   - JSON serialization must be stable.
 

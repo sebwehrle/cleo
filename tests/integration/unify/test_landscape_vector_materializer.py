@@ -181,7 +181,6 @@ def test_vector_register_prepare_materialize_flow(tmp_path: Path) -> None:
         atlas,
         "overnight_stays",
         chunk_policy=atlas.chunk_policy,
-        fingerprint_method=atlas.fingerprint_method,
         if_exists="error",
     )
     assert written is True
@@ -220,7 +219,6 @@ def test_vector_noop_requires_exact_match(tmp_path: Path) -> None:
         atlas,
         "overnight_stays",
         chunk_policy=atlas.chunk_policy,
-        fingerprint_method=atlas.fingerprint_method,
         if_exists="error",
     )
 
@@ -238,7 +236,6 @@ def test_vector_noop_requires_exact_match(tmp_path: Path) -> None:
         atlas,
         "overnight_stays",
         chunk_policy=atlas.chunk_policy,
-        fingerprint_method=atlas.fingerprint_method,
         if_exists="noop",
     )
     assert written is False

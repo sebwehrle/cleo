@@ -127,6 +127,12 @@ After materialization, CLEO uses:
 - `<workdir>/data/nuts/*`
 - `<workdir>/data/clc/*` (only if you use optional CLC preparation)
 
+The base stores `<workdir>/{wind,landscape}.zarr` always cover the whole country, whichever area is selected.
+An area store is a copy of the base stores, cropped and masked to the area, made by `build()` once the area is selected.
+It keeps the variables you materialize into it until the base stores are rebuilt because their inputs changed
+(e.g. GWA or elevation files, CRS, turbines, `chunk_policy`); then it is recreated and those variables are lost, with a
+warning. Variables added to a base store later do not appear in existing area stores; add them to the area store too.
+
 ## Grid and Data Sources
 
 **Analysis grid.** CLEO reprojects the GWA 100 m Weibull-A layer to the target CRS and uses it as the reference grid for every other layer. The reprojection uses bilinear resampling and passes no resolution, so GDAL chooses the pixel size: Austria in EPSG:3035 comes out at about 199 m, not the GWA's nominal 250 m.

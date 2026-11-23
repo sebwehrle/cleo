@@ -37,7 +37,7 @@ CLEO is designed around a single mutable `Atlas` workspace object.
 
 | Method | Knobs | Meaning |
 |---|---|---|
-| `select(...)` | `area`, `nuts_level`, `inplace` | Area routing selection (`nuts_level=0|1|2|3`); `inplace=True` is intended atlas-first workflow. |
+| `select(...)` | `area`, `nuts_level`, `inplace` | Area routing selection (`nuts_level=0|1|2|3`); `inplace=True` is intended atlas-first workflow. `select()` sets routing; `build()` then creates the area store, a cropped and masked copy of the country-wide base stores that does not pick up variables added to the base store later. |
 | `build_clc(...)` | `source`, `url`, `force_download`, `force_prepare` | CLC source preparation and cache behavior. |
 | `clean_results(...)` | `run_id`, `older_than`, `metric_name` | Cleanup filters for persisted result stores. |
 | `clean_areas(...)` | `area`, `older_than`, `include_incomplete` | Cleanup filters for area stores. |

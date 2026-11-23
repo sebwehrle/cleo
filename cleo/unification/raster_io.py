@@ -148,18 +148,16 @@ def _open_local_elevation(
     atlas,
     elev_path: Path,
     wind_ref: xr.DataArray,
-    aoi_gdf,
 ) -> xr.DataArray:
     """Open local elevation GeoTIFF and align to wind grid.
 
-    This function loads an existing elevation raster and reprojects/clips
-    it to match the wind reference grid. Does NOT fetch GWA CRS.
+    This function loads an existing elevation raster and reprojects it
+    to match the wind reference grid. Does NOT fetch GWA CRS.
 
     Args:
         atlas: Atlas instance.
         elev_path: Path to the elevation GeoTIFF.
         wind_ref: Reference DataArray from wind for grid alignment.
-        aoi_gdf: GeoDataFrame for AOI clipping (or None).
 
     Returns:
         DataArray with elevation values aligned to wind grid.
@@ -177,13 +175,6 @@ def _open_local_elevation(
         )
         da = da.rio.write_crs(wind_ref.rio.crs)
 
-    # Clip/mask to AOI BEFORE matching grid
-    if aoi_gdf is not None:
-        from cleo.spatial import to_crs_if_needed
-
-        aoi_in_da_crs = to_crs_if_needed(aoi_gdf, da.rio.crs)
-        da = da.rio.clip(aoi_in_da_crs.geometry, drop=False)
-
     # Match to wind grid
     da = da.rio.reproject_match(wind_ref, resampling=Resampling.bilinear, nodata=np.nan)
 
@@ -198,7 +189,6 @@ def _open_local_elevation(
 def _build_copdem_elevation(
     atlas,
     wind_ref: xr.DataArray,
-    aoi_gdf,
 ) -> tuple[xr.DataArray, dict[str, Any]]:
     """Build CopDEM elevation data aligned to wind grid.
 
@@ -208,7 +198,6 @@ def _build_copdem_elevation(
     Args:
         atlas: Atlas instance.
         wind_ref: Reference DataArray from wind for grid alignment.
-        aoi_gdf: GeoDataFrame for AOI clipping (or None).
 
     Returns:
         Tuple of (elevation DataArray, metadata dict).
@@ -248,7 +237,7 @@ def _build_copdem_elevation(
         "version": "GLO-30",
         "bbox_4326": list(bbox_4326),
         "tile_ids": downloaded_tile_ids,
-        "clip": "aoi" if aoi_gdf is not None else "none",
+        "clip": "none",  # kept for inputs_id stability; the base store is never clipped
     }
 
     return elevation, meta

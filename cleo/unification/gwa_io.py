@@ -367,7 +367,6 @@ def _open_gwa_raster(
     iso3: str,
     target_crs,
     ref_da: xr.DataArray | None = None,
-    clip_geom=None,
     resampling: str = "bilinear",
 ) -> xr.DataArray:
     """Open and normalize a GWA raster to requested CRS/grid.
@@ -382,11 +381,9 @@ def _open_gwa_raster(
     :type target_crs: str | rasterio.crs.CRS
     :param ref_da: Optional reference raster for ``reproject_match``.
     :type ref_da: xarray.DataArray | None
-    :param clip_geom: Optional clip geometry (GeoDataFrame or geometry iterable).
-    :type clip_geom: object
     :param resampling: Rasterio resampling name.
     :type resampling: str
-    :returns: Opened raster with CRS set and optional reprojection/clip/match.
+    :returns: Opened raster with CRS set and optional reprojection/match.
     :rtype: xarray.DataArray
     :raises RuntimeError: If CRS is missing and cannot be fetched/parsed.
     """
@@ -408,18 +405,6 @@ def _open_gwa_raster(
 
     if not crs_equal(da.rio.crs, target_crs):
         da = da.rio.reproject(target_crs, nodata=np.nan, resampling=resampling_enum)
-
-    # Clip to geometry if provided
-    if clip_geom is not None:
-        from cleo.spatial import to_crs_if_needed
-
-        if hasattr(clip_geom, "geometry"):
-            # GeoDataFrame
-            clip_geom = to_crs_if_needed(clip_geom, target_crs)
-            da = da.rio.clip(clip_geom.geometry, drop=True)
-        else:
-            # Assume iterable of geometries
-            da = da.rio.clip(clip_geom, drop=True)
 
     # Match to reference grid if provided
     if ref_da is not None:

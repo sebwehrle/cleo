@@ -1377,7 +1377,6 @@ class LandscapeDomain:
             atlas,
             name,
             chunk_policy=atlas.chunk_policy,
-            fingerprint_method=getattr(atlas, "fingerprint_method", "path_mtime_size"),
             if_exists=if_exists,
             prepared_da=self._staged_prepared_overlays.get(name),
         )

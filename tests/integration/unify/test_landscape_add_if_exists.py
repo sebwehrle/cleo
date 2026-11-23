@@ -626,17 +626,15 @@ class TestNoopExactMatchSemantics:
 
         # Add with pathA
         atlas.landscape.add("foo", path_a).materialize()
-        old_inputs = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False).attrs["inputs_id"]
+        build_inputs = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False).attrs["inputs_id"]
 
         # Replace with pathB
         atlas.landscape.add("foo", path_b, if_exists="replace").materialize()
-        mid_inputs = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False).attrs["inputs_id"]
-        assert mid_inputs != old_inputs, "inputs_id should change after replace"
 
         # noop with pathB should succeed (exact match)
         atlas.landscape.add("foo", path_b, if_exists="noop").materialize()
         after_inputs = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False).attrs["inputs_id"]
-        assert after_inputs == mid_inputs, "inputs_id should not change after noop"
+        assert after_inputs == build_inputs, "layer writes must not change the build inputs_id"
 
         # noop with pathA should raise (config mismatch)
         with pytest.raises(ValueError, match="if_exists='replace'"):

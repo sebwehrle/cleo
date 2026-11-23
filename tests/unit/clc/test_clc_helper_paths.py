@@ -536,7 +536,12 @@ def test_submit_clms_download_task_uses_request_token_fallback(monkeypatch: pyte
         clc,
         "_http_get_json",
         lambda *args, **kwargs: {
-            "items": [{"UID": "dataset-1", "downloadable_files": {"items": [{"UID": "file-1", "file": "CLC"}]}}]
+            "items": [
+                {
+                    "UID": clc._CLMS_SOURCE_DATASET_UID["clc2018"],
+                    "downloadable_files": {"items": [{"UID": "file-1", "file": "CLC"}]},
+                }
+            ]
         },
     )
     monkeypatch.setattr(clc, "_select_clms_dataset_file", lambda **kwargs: ("dataset-1", "file-1"))
@@ -552,8 +557,73 @@ def test_submit_clms_download_task_uses_request_token_fallback(monkeypatch: pyte
     )
 
 
+def test_submit_clms_download_task_reads_files_from_clc2018_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Files come from the CLC 2018 record; other search hits (e.g. change products) are ignored."""
+    record_url = "https://land.copernicus.eu/api/en/products/corine-land-cover/clc2018"
+    change_item = {
+        "@id": "https://land.copernicus.eu/api/en/products/corine-land-cover/lcc-2012-2018",
+        "UID": "change-2012-2018",
+        "downloadable_files": {
+            "items": [{"@id": "file-change", "file": "lcc_2012_2018_raster100m", "type": "Raster", "format": "Geotiff"}]
+        },
+    }
+    inventory_item = {"@id": record_url, "UID": clc._CLMS_SOURCE_DATASET_UID["clc2018"], "downloadable_files": None}
+    record = {
+        "downloadable_files": {
+            "items": [
+                {"@id": "file-vector", "file": "u2018_clc2018_v2020_20u1_fgdb", "type": "Vector", "format": "FGDB"},
+                {
+                    "@id": "file-raster",
+                    "file": "u2018_clc2018_v2020_20u1_raster100m",
+                    "type": "Raster",
+                    "format": "Geotiff",
+                },
+            ]
+        }
+    }
+    requested: list[str] = []
+
+    def _get(url: str, **kwargs):  # noqa: ANN202
+        requested.append(url)
+        return {"items": [change_item, inventory_item]} if "@search" in url else record
+
+    posted: list[dict] = []
+    monkeypatch.setattr(clc, "_http_get_json", _get)
+    monkeypatch.setattr(
+        clc, "_http_post_json", lambda url, *, payload, **kwargs: posted.append(payload) or {"requestToken": "t"}
+    )
+
+    clc._submit_clms_download_task(
+        source="clc2018", access_token="token", expected_filename="U2018_CLC2018_V2020_20u1.tif"
+    )
+
+    assert posted == [{"Datasets": [{"DatasetID": inventory_item["UID"], "FileID": "file-raster"}]}]
+    assert requested[1:] == [record_url]
+
+
+def test_submit_clms_download_task_ignores_other_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A search listing only other CORINE products fails clearly without further requests."""
+    change_item = {
+        "@id": "https://land.copernicus.eu/api/en/products/corine-land-cover/lcc-2012-2018",
+        "UID": "change-2012-2018",
+        "downloadable_files": {
+            "items": [{"@id": "file-change", "file": "lcc_2012_2018_raster100m", "type": "Raster", "format": "Geotiff"}]
+        },
+    }
+    requested: list[str] = []
+    monkeypatch.setattr(clc, "_http_get_json", lambda url, **kwargs: requested.append(url) or {"items": [change_item]})
+    monkeypatch.setattr(clc, "_http_post_json", lambda *args, **kwargs: pytest.fail("no data request expected"))
+
+    with pytest.raises(RuntimeError, match="did not list the clc2018 dataset"):
+        clc._submit_clms_download_task(
+            source="clc2018", access_token="token", expected_filename="U2018_CLC2018_V2020_20u1.tif"
+        )
+    assert len(requested) == 1
+
+
 def test_submit_clms_download_task_raises_when_file_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(clc, "_http_get_json", lambda *args, **kwargs: {"items": []})
+    item = {"UID": clc._CLMS_SOURCE_DATASET_UID["clc2018"], "downloadable_files": None}
+    monkeypatch.setattr(clc, "_http_get_json", lambda *args, **kwargs: {"items": [item]})
 
     with pytest.raises(RuntimeError, match="did not return downloadable file"):
         clc._submit_clms_download_task(
@@ -567,7 +637,11 @@ def test_submit_clms_download_task_raises_without_task_identifier(monkeypatch: p
     monkeypatch.setattr(
         clc,
         "_http_get_json",
-        lambda *args, **kwargs: {"items": [{"UID": "dataset-1", "downloadable_files": {"items": [{"UID": "file-1"}]}}]},
+        lambda *args, **kwargs: {
+            "items": [
+                {"UID": clc._CLMS_SOURCE_DATASET_UID["clc2018"], "downloadable_files": {"items": [{"UID": "file-1"}]}}
+            ]
+        },
     )
     monkeypatch.setattr(clc, "_select_clms_dataset_file", lambda **kwargs: ("dataset-1", "file-1"))
     monkeypatch.setattr(clc, "_http_post_json", lambda *args, **kwargs: {"TaskIds": ["invalid", {}]})

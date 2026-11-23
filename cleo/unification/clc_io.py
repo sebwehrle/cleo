@@ -12,6 +12,7 @@ import xarray as xr
 import yaml
 from rasterio.enums import Resampling
 from rasterio.errors import NotGeoreferencedWarning
+from rioxarray.exceptions import NoDataInBounds
 
 from cleo.unification.store_io import open_zarr_dataset
 
@@ -156,6 +157,28 @@ def _expand_compact_clc_classes(clc: xr.DataArray, *, atlas_path: Path) -> xr.Da
     return xr.DataArray(out, coords=clc.coords, dims=clc.dims, attrs=clc.attrs, name=clc.name)
 
 
+def _reproject_source_window(clc: xr.DataArray, ref: xr.DataArray, source_path: Path) -> xr.DataArray:
+    """Reproject the part of a CLC source around ``ref`` onto the ``ref`` grid (nearest).
+
+    Only the window around the reference grid is read, so a Europe-wide source need not fit in memory.
+
+    :param clc: Lazily opened CLC source with CRS.
+    :param ref: Wind-grid reference template.
+    :param source_path: Source path, for the error message.
+    :returns: CLC values on the reference grid as float32 with NaN nodata.
+    :raises RuntimeError: If the source does not overlap the reference grid.
+    """
+    # The margin absorbs bound rounding and the envelope of a cross-CRS transform.
+    pad = 2 * max(abs(r) for r in ref.rio.resolution())
+    minx, miny, maxx, maxy = ref.rio.bounds()
+    try:
+        clc = clc.rio.clip_box(minx - pad, miny - pad, maxx + pad, maxy + pad, crs=ref.rio.crs)
+    except NoDataInBounds as exc:
+        raise RuntimeError(f"CLC source {source_path} does not overlap the wind grid.") from exc
+    # Integer source rasters need float destination to represent NaN nodata.
+    return clc.astype(np.float32).rio.reproject_match(ref, resampling=Resampling.nearest, nodata=np.nan)
+
+
 def prepare_clc_to_wind_grid(
     *,
     source_path: Path,
@@ -210,7 +233,6 @@ def prepare_clc_to_wind_grid(
             )
         clc = clc.squeeze("band", drop=True)
     clc = clc.squeeze(drop=True)
-    clc = clc.astype(np.float32)
 
     inferred_ref_grid = (
         (not source_on_ref_grid)
@@ -227,12 +249,11 @@ def prepare_clc_to_wind_grid(
                 f"({clc.sizes.get('y')}x{clc.sizes.get('x')} vs {ref.sizes.get('y')}x{ref.sizes.get('x')})."
             )
         clc = clc.assign_coords(y=ref.coords["y"].data, x=ref.coords["x"].data)
-        clc = clc.rio.write_crs(source_crs)
+        clc = clc.rio.write_crs(source_crs).astype(np.float32)
     else:
         if clc.rio.crs is None:
             clc = clc.rio.write_crs(source_crs)
-        # Integer source rasters need float destination to represent NaN nodata.
-        clc = clc.rio.reproject_match(ref, resampling=Resampling.nearest, nodata=np.nan)
+        clc = _reproject_source_window(clc, ref, source_path)
 
     clc = clc.where(valid, np.nan)
 

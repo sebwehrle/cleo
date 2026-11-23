@@ -23,9 +23,7 @@ class TestElevationResult:
 
     def test_local_elevation(self, tmp_path: Path) -> None:
         """Represents local elevation file."""
-        data = xr.DataArray(np.ones((3, 3)), dims=("y", "x"))
         result = _ElevationResult(
-            data=data,
             kind="local",
             meta=None,
             local_path=tmp_path / "elevation.tif",
@@ -37,10 +35,8 @@ class TestElevationResult:
 
     def test_copdem_elevation(self) -> None:
         """Represents CopDEM elevation."""
-        data = xr.DataArray(np.ones((3, 3)), dims=("y", "x"))
         meta = {"provider": "copdem", "version": "30m", "tile_ids": ["N45E010"]}
         result = _ElevationResult(
-            data=data,
             kind="copdem",
             meta=meta,
             local_path=None,
@@ -78,16 +74,15 @@ class TestBuildLandscapeDataset:
         return mock
 
     @pytest.fixture
-    def mock_elev_result(self) -> _ElevationResult:
-        """Create mock elevation result."""
-        data = xr.DataArray(
+    def mock_elev_result(self) -> xr.DataArray:
+        """Create mock elevation values."""
+        return xr.DataArray(
             np.array([[100.0, 150.0], [200.0, 250.0]]),
             dims=("y", "x"),
             name="elevation",
         )
-        return _ElevationResult(data=data, kind="local", meta=None, local_path=Path("/test/elev.tif"))
 
-    def test_creates_valid_mask_from_wind(self, mock_wind_ref: MagicMock, mock_elev_result: _ElevationResult) -> None:
+    def test_creates_valid_mask_from_wind(self, mock_wind_ref: MagicMock, mock_elev_result: xr.DataArray) -> None:
         """Creates valid_mask from wind ref_da notnull."""
         chunk_policy = {"y": 1, "x": 1}
         ds = _build_landscape_dataset(mock_wind_ref, mock_elev_result, chunk_policy)
@@ -97,7 +92,7 @@ class TestBuildLandscapeDataset:
         expected_mask = np.array([[True, False], [True, True]])
         np.testing.assert_array_equal(ds["valid_mask"].values, expected_mask)
 
-    def test_applies_chunk_policy(self, mock_wind_ref: MagicMock, mock_elev_result: _ElevationResult) -> None:
+    def test_applies_chunk_policy(self, mock_wind_ref: MagicMock, mock_elev_result: xr.DataArray) -> None:
         """Applies chunking from chunk policy."""
         chunk_policy = {"y": 1, "x": 2}
         ds = _build_landscape_dataset(mock_wind_ref, mock_elev_result, chunk_policy)
@@ -105,9 +100,7 @@ class TestBuildLandscapeDataset:
         # Check that chunking is applied
         assert ds.chunks is not None
 
-    def test_masks_elevation_with_valid_mask(
-        self, mock_wind_ref: MagicMock, mock_elev_result: _ElevationResult
-    ) -> None:
+    def test_masks_elevation_with_valid_mask(self, mock_wind_ref: MagicMock, mock_elev_result: xr.DataArray) -> None:
         """Elevation is NaN where valid_mask is False."""
         chunk_policy = {"y": 2, "x": 2}
         ds = _build_landscape_dataset(mock_wind_ref, mock_elev_result, chunk_policy)

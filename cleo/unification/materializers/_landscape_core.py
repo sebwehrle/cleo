@@ -30,8 +30,9 @@ from cleo.unification.manifest import (
 )
 from cleo.unification.nuts_io import _read_nuts_area_catalog
 from cleo.unification.raster_io import (
-    _build_copdem_elevation,
     _open_local_elevation,
+    _resolve_copdem_tiles,
+    build_copdem_elevation_like,
 )
 from cleo.unification.materializers.shared import _now_iso, _stable_json
 from cleo.unification.materializers._helpers import (
@@ -47,12 +48,12 @@ _AREA_CATALOG_COUNTRY_ATTR = "cleo_area_catalog_country_iso3"
 
 @dataclass
 class _ElevationResult:
-    """Result of elevation data loading."""
+    """Resolved elevation source: enough for ``inputs_id`` without reading any values."""
 
-    data: xr.DataArray
     kind: str  # "local" or "copdem"
     meta: dict[str, Any] | None
     local_path: Path | None
+    tile_paths: tuple[Path, ...] = ()
 
 
 def materialize_landscape(unifier, atlas) -> None:
@@ -63,18 +64,14 @@ def materialize_landscape(unifier, atlas) -> None:
     # Get wind reference for grid alignment
     wind_ref = get_wind_reference(wind_path, atlas.crs, chunk_policy=unifier.chunk_policy)
 
-    # Load elevation data
-    elev_result = _load_elevation_data(atlas, wind_ref.ref_da)
-
-    # Build dataset
-    ds_land = _build_landscape_dataset(wind_ref, elev_result, unifier.chunk_policy)
-
-    # Compute inputs_id for idempotency
+    # Identity first: resolving the elevation source is cheap, its values are not.
+    elev_result = _resolve_elevation_source(atlas, wind_ref.ref_da)
     inputs_id, fingerprint_method = _compute_landscape_inputs_id(wind_ref, elev_result, unifier)
-
-    # Idempotency check
     if check_store_idempotent(store_path, inputs_id=inputs_id, grid_id=wind_ref.grid_id):
         return
+
+    elevation = _load_elevation_values(atlas, elev_result, wind_ref.ref_da)
+    ds_land = _build_landscape_dataset(wind_ref, elevation, unifier.chunk_policy)
     warn_if_rebuild_drops_variables(store_path, ds_land)
 
     # Atomic write
@@ -91,23 +88,30 @@ def materialize_landscape(unifier, atlas) -> None:
     )
 
 
-def _load_elevation_data(atlas, wind_ref_da: xr.DataArray) -> _ElevationResult:
-    """Load elevation data from local file or CopDEM."""
+def _resolve_elevation_source(atlas, wind_ref_da: xr.DataArray) -> _ElevationResult:
+    """Resolve the elevation source (local file or CopDEM tiles) without reading its values."""
     raw_country = Path(atlas.path) / "data" / "raw" / atlas.country
     local_elev = raw_country / f"{atlas.country}_elevation_w_bathymetry.tif"
 
     if local_elev.exists():
-        elevation = _open_local_elevation(atlas, local_elev, wind_ref_da).rename("elevation")
-        return _ElevationResult(data=elevation, kind="local", meta=None, local_path=local_elev)
+        return _ElevationResult(kind="local", meta=None, local_path=local_elev)
 
-    elevation, elev_meta = _build_copdem_elevation(atlas, wind_ref_da)
-    elevation = elevation.rename("elevation")
-    return _ElevationResult(data=elevation, kind="copdem", meta=elev_meta, local_path=None)
+    tile_paths, elev_meta = _resolve_copdem_tiles(atlas, wind_ref_da)
+    return _ElevationResult(kind="copdem", meta=elev_meta, local_path=None, tile_paths=tuple(tile_paths))
+
+
+def _load_elevation_values(atlas, elev_result: _ElevationResult, wind_ref_da: xr.DataArray) -> xr.DataArray:
+    """Read the resolved elevation source onto the wind grid."""
+    if elev_result.kind == "local":
+        elevation = _open_local_elevation(atlas, elev_result.local_path, wind_ref_da)
+    else:
+        elevation = build_copdem_elevation_like(wind_ref_da, list(elev_result.tile_paths))
+    return elevation.rename("elevation")
 
 
 def _build_landscape_dataset(
     wind_ref,
-    elev_result: _ElevationResult,
+    elevation: xr.DataArray,
     chunk_policy: dict[str, int],
 ) -> xr.Dataset:
     """Build landscape dataset with valid_mask and elevation."""
@@ -115,7 +119,7 @@ def _build_landscape_dataset(
 
     ds_land = xr.Dataset(
         coords={"y": wind_ref.dataset["y"], "x": wind_ref.dataset["x"]},
-        data_vars={"valid_mask": valid_mask, "elevation": elev_result.data},
+        data_vars={"valid_mask": valid_mask, "elevation": elevation},
     )
     ds_land = ds_land.rio.write_crs(wind_ref.crs)
     ds_land = ds_land.rio.write_transform(wind_ref.transform)
@@ -157,7 +161,7 @@ def _compute_landscape_inputs_id(
         items.extend(
             [
                 ("elevation:kind", "legacy_tif"),
-                ("elevation:path", str(elev_result.local_path)),
+                # No path: its location is fixed by the contract, and the workdir spelling must not matter.
                 ("elevation:fingerprint", fingerprint_path_mtime_size(elev_result.local_path)),
                 ("elevation:clip", "none"),
             ]

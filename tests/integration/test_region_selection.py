@@ -468,6 +468,23 @@ class TestRegionStores:
         assert "base_layer" in base.data_vars
         base.close()
 
+    def test_layers_survive_new_session_through_symlinked_workdir(self, region_atlas: Atlas, tmp_path_factory) -> None:
+        """Store identity does not depend on the workdir spelling: base and area layers survive."""
+        atlas = region_atlas
+        atlas.landscape.add_dataarray("base_layer", xr.zeros_like(atlas.landscape.data["elevation"])).materialize()
+        atlas.select(area="Niederösterreich", inplace=True)
+        atlas.build()
+        atlas.landscape.add_dataarray("area_layer", xr.zeros_like(atlas.landscape.data["elevation"])).materialize()
+
+        link = tmp_path_factory.mktemp("alias") / "workdir"
+        link.symlink_to(atlas.path, target_is_directory=True)
+        session2 = Atlas(link, "AUT", "epsg:3035")
+        session2.build()
+        assert "base_layer" in session2.landscape.data
+        session2.select(area="Niederösterreich", inplace=True)
+        session2.build()
+        assert "area_layer" in session2.landscape.data
+
     def test_constructor_area_requires_build_before_writes(self, region_atlas: Atlas) -> None:
         """A write before build() must not land in the base store while the constructor area is pending."""
         country_grid = xr.zeros_like(region_atlas.landscape.data["elevation"])

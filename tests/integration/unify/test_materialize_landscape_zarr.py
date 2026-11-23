@@ -437,6 +437,66 @@ class TestMaterializeLandscapeZarr:
         assert landscape_root.attrs["grid_id"] == wind_root.attrs["grid_id"]
 
 
+class TestLandscapeWarmBuild:
+    """A complete, up-to-date landscape store is reused without reading elevation values again."""
+
+    @staticmethod
+    def _inputs_id(path: Path) -> str:
+        return zarr.open_group(path / "landscape.zarr", mode="r").attrs["inputs_id"]
+
+    def test_local_elevation_warm_build_and_workdir_spelling(self, tmp_path: Path, monkeypatch) -> None:
+        from cleo.unification.materializers import _landscape_core
+
+        workdir = tmp_path / "ws"
+        atlas = MockAtlas(workdir)
+        _create_all_gwa_rasters(workdir)
+        _create_elevation_raster(workdir / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif")
+        unifier = Unifier(chunk_policy={"y": 1024, "x": 1024})
+        unifier.materialize_wind(atlas)
+        unifier.materialize_landscape(atlas)
+        built_id = self._inputs_id(workdir)
+
+        def _no_read(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+            raise AssertionError("elevation values read although the store is up to date")
+
+        monkeypatch.setattr(_landscape_core, "_open_local_elevation", _no_read)
+        unifier.materialize_landscape(atlas)
+        # The same workdir under another spelling (symlink) has the same identity.
+        (tmp_path / "link").symlink_to(workdir, target_is_directory=True)
+        unifier.materialize_landscape(MockAtlas(tmp_path / "link"))
+        assert self._inputs_id(workdir) == built_id
+
+    def test_copdem_warm_build_skips_mosaic(self, tmp_path: Path, monkeypatch) -> None:
+        from cleo.unification.materializers import _landscape_core
+
+        atlas = MockAtlas(tmp_path)
+        _create_all_gwa_rasters(tmp_path)
+        unifier = Unifier(chunk_policy={"y": 1024, "x": 1024})
+        unifier.materialize_wind(atlas)
+
+        meta = {"provider": "copernicus", "version": "GLO-30", "bbox_4326": [9.0, 46.0, 10.0, 47.0], "clip": "none"}
+        tiles = [tmp_path / "N46_00_E009_00.tif"]
+        monkeypatch.setattr(
+            _landscape_core, "_resolve_copdem_tiles", lambda *a: (tiles, {**meta, "tile_ids": [t.stem for t in tiles]})
+        )
+        mosaics: list[int] = []
+
+        def _mosaic(reference, tile_paths):  # noqa: ANN001, ANN202
+            mosaics.append(len(tile_paths))
+            return xr.full_like(reference, 500.0)
+
+        monkeypatch.setattr(_landscape_core, "build_copdem_elevation_like", _mosaic)
+        unifier.materialize_landscape(atlas)
+        built_id = self._inputs_id(tmp_path)
+        unifier.materialize_landscape(atlas)
+        assert mosaics == [1] and self._inputs_id(tmp_path) == built_id
+
+        # A change in the available tiles is a real input change: rebuild.
+        tiles.append(tmp_path / "N46_00_E010_00.tif")
+        unifier.materialize_landscape(atlas)
+        assert mosaics == [1, 2] and self._inputs_id(tmp_path) != built_id
+
+
 class TestBuildCanonical:
     """Tests for Atlas.build_canonical method via integration."""
 

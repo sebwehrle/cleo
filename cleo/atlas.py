@@ -288,8 +288,7 @@ class Atlas:
 
         # Apply pending area from constructor (now that stores exist)
         if self._pending_area is not None:
-            self.select(area=self._pending_area, inplace=True)
-            self._pending_area = None  # Clear after applying
+            self.select(area=self._pending_area, inplace=True)  # also clears the pending area
 
         # If area selected, ensure area stores exist
         if self._area_name is not None:
@@ -622,6 +621,8 @@ class Atlas:
         )
         self._area_name = decision.area_name
         self._area_id = decision.area_id
+        # An explicit selection replaces an area passed to the constructor and not yet applied by build().
+        self._pending_area = None
 
         # Area routing changed: invalidate caches and staged overlays.
         self._invalidate_domain_views(clear_wind=True, clear_landscape=True)
@@ -647,6 +648,19 @@ class Atlas:
         """
         return self.path / "areas" / self._effective_area_id
 
+    def _require_constructor_area_applied(self) -> None:
+        """Refuse store routing while an area passed to the constructor is not applied yet.
+
+        Without this, reads and writes before ``build()`` would silently use the base stores although
+        ``atlas.area`` already reports the constructor area.
+
+        :raises RuntimeError: If the constructor area is still pending.
+        """
+        if self._pending_area is not None:
+            raise RuntimeError(
+                f"Area {self._pending_area!r} passed to Atlas() is applied by build(); call atlas.build() first."
+            )
+
     def _active_wind_store_path(self) -> Path:
         """
         Path to the active wind store (base or area).
@@ -654,6 +668,7 @@ class Atlas:
         When area selected: <ROOT>/areas/<area_id>/wind.zarr
         When no area: <ROOT>/wind.zarr (base store)
         """
+        self._require_constructor_area_applied()
         if self._area_name is not None:
             return self._area_store_root() / "wind.zarr"
         return self.wind_store_path
@@ -665,6 +680,7 @@ class Atlas:
         When area selected: <ROOT>/areas/<area_id>/landscape.zarr
         When no area: <ROOT>/landscape.zarr (base store)
         """
+        self._require_constructor_area_applied()
         if self._area_name is not None:
             return self._area_store_root() / "landscape.zarr"
         return self.landscape_store_path

@@ -468,6 +468,55 @@ class TestRegionStores:
         assert "base_layer" in base.data_vars
         base.close()
 
+    def test_constructor_area_requires_build_before_writes(self, region_atlas: Atlas) -> None:
+        """A write before build() must not land in the base store while the constructor area is pending."""
+        country_grid = xr.zeros_like(region_atlas.landscape.data["elevation"])
+        atlas = Atlas(region_atlas.path, "AUT", "epsg:3035", area="Niederösterreich")
+
+        with pytest.raises(RuntimeError, match=r"call atlas\.build\(\) first"):
+            atlas.landscape.add_dataarray("layer", country_grid).materialize()
+        with pytest.raises(RuntimeError, match=r"call atlas\.build\(\) first"):
+            atlas.wind.data  # noqa: B018
+
+        atlas.build()
+        atlas.landscape.add_dataarray("layer", xr.zeros_like(atlas.landscape.data["elevation"])).materialize()
+        area = xr.open_zarr(atlas.path / "areas" / atlas._area_id / "landscape.zarr", consolidated=False)
+        base = xr.open_zarr(atlas.landscape_store_path, consolidated=False)
+        assert "layer" in area.data_vars and "layer" not in base.data_vars
+        area.close()
+        base.close()
+
+    def test_select_before_build_replaces_constructor_area(self, region_atlas: Atlas) -> None:
+        """An explicit selection cancels the constructor area; build() must not bring it back."""
+        atlas = Atlas(region_atlas.path, "AUT", "epsg:3035", area="Niederösterreich")
+        atlas.select(area=None, inplace=True)
+        atlas.build()
+        assert atlas.area is None
+        assert "valid_mask" in atlas.landscape.data
+
+    def test_canonical_landscape_variables_cannot_be_overwritten(self, region_atlas: Atlas) -> None:
+        """valid_mask and elevation are built with the store; layers and computed variables cannot replace them."""
+        atlas = region_atlas
+        before = atlas.landscape.data[["valid_mask", "elevation"]].load()
+        ones = xr.ones_like(before["elevation"])
+
+        with pytest.raises(ValueError, match="cannot be written"):
+            atlas.landscape.add_dataarray("valid_mask", ones, if_exists="replace")
+        # Coordinates are not written: a 2-D coordinate named like a canonical variable must not replace it.
+        stray = ones.assign_coords(elevation=ones * 0, valid_mask=ones * 0, note=ones * 0)
+        atlas.landscape.add_dataarray("roads", stray).materialize()
+        stored = xr.open_zarr(atlas.landscape_store_path, consolidated=False)
+        assert "note" not in stored.variables
+        assert stored["roads"].rio.crs == atlas.landscape.data["valid_mask"].rio.crs
+        np.testing.assert_array_equal(stored["roads"].values, ones.where(before["valid_mask"]).values)
+        with pytest.raises(ValueError, match="cannot be written"):
+            atlas.landscape.compute("distance", source="roads", name="elevation", if_exists="replace")
+
+        after = xr.open_zarr(atlas.landscape_store_path, consolidated=False)[["valid_mask", "elevation"]].load()
+        for name in ("valid_mask", "elevation"):
+            assert after[name].dtype == before[name].dtype
+            np.testing.assert_array_equal(after[name].values, before[name].values)
+
     def test_region_stores_rebuild_when_area_valid_mask_is_not_boolean(self, region_atlas: Atlas) -> None:
         """Area stores rebuild when an existing landscape valid_mask has the wrong dtype."""
         atlas = region_atlas

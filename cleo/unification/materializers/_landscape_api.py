@@ -494,12 +494,17 @@ def _mask_and_chunk_raster_variable(
 def _dataset_for_landscape_write(name: str, da: xr.DataArray) -> xr.Dataset:
     """Build the canonical single-variable dataset used for landscape writes.
 
+    Only dimension coordinates and the grid mapping are kept: any other coordinate would be written
+    into the store as an array of its own, possibly over an existing variable.
+
     :param name: Output variable name.
     :param da: Prepared DataArray to serialize.
     :returns: Dataset ready for Zarr write.
     :rtype: xarray.Dataset
     """
-    return da.rename(name).to_dataset()
+    grid_mapping = {"spatial_ref", da.attrs.get("grid_mapping"), da.encoding.get("grid_mapping")}
+    extra = [c for c in da.coords if c not in da.dims and c not in grid_mapping]
+    return da.drop_vars(extra).rename(name).to_dataset()
 
 
 def prepare_landscape_variable_data(

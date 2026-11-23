@@ -218,7 +218,7 @@ Less common arguments:
   `processes` requires running from a normal Python script entrypoint; interactive consoles and `python -` should use `threads` or `serial`.
 - `compute_workers`: optional worker cap for local backends (`threads`/`processes`).
   Must be `None` or `1` for `serial`; must be `None` for `distributed`.
-- `area`: optional initial area selection, applied on `build()`.
+- `area`: optional initial area selection, applied on `build()` (or replaced by an earlier `select(..., inplace=True)`). Call `build()` before reading or writing `atlas.wind` / `atlas.landscape` data; until then CLEO raises instead of using the country-wide stores.
 - `results_root`: optional custom results directory.
 - `fingerprint_method`: internal change-detection policy. Leave the default unless you have a specific reason to change it.
 
@@ -408,6 +408,7 @@ Skip this section if you only need wind metrics.
   - returns a result object with:
     - `.data`: staged `xr.Dataset` containing computed distance variables.
     - `.materialize(if_exists=None)`: writes staged distance variables into the active landscape store and returns materialized `xr.Dataset`.
+- `valid_mask` and `elevation` are built with the landscape store; `add`, `add_dataarray`, `rasterize`, `add_clc_category` and `compute` reject them as output names. Only the variable itself is written; extra coordinates of an input DataArray are dropped.
 - `atlas.landscape.add(name, source_path, *, kind="raster", params=None, if_exists="error")`
   - stages a raster variable and returns `LandscapeAddResult`.
   - `add(...)` is raster-only (`kind` must be `"raster"`); use `rasterize(...)` for vector sources.

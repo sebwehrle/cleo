@@ -78,6 +78,21 @@ from cleo.validation import validate_dataset, ValidationError
 WIND_COMPUTE_CHUNK = 256
 
 
+# Built with the landscape store; layers and computed variables must not replace them.
+_CANONICAL_LANDSCAPE_VARS = ("valid_mask", "elevation")
+
+
+def _reject_canonical_landscape_names(names) -> None:
+    """Raise if any output name is a canonical landscape variable.
+
+    :param names: Output variable names.
+    :raises ValueError: If a name is ``valid_mask`` or ``elevation``.
+    """
+    reserved = [n for n in names if n in _CANONICAL_LANDSCAPE_VARS]
+    if reserved:
+        raise ValueError(f"{reserved!r} are built with the landscape store and cannot be written; choose another name.")
+
+
 def _split_spatial_chunks(ds: xr.Dataset) -> xr.Dataset:
     """Rechunk dask-backed ``y``/``x`` so no block exceeds ``WIND_COMPUTE_CHUNK`` pixels per dimension.
 
@@ -1448,6 +1463,7 @@ class LandscapeDomain:
         self._validate_if_exists(if_exists)
 
         sources, names = self._normalize_distance_sources_and_names(source=source, name=name)
+        _reject_canonical_landscape_names(names)
         store_ds = self._store_data()
 
         _validate_distance_sources(sources, store_ds)
@@ -1548,6 +1564,7 @@ class LandscapeDomain:
         :raises ValueError: If ``if_exists="error"`` and the variable already
             exists in staged overlays or the active store.
         """
+        _reject_canonical_landscape_names([name])
         atlas = self._atlas
         if not getattr(atlas, "_canonical_ready", False):
             atlas.build_canonical()
@@ -1732,6 +1749,8 @@ class LandscapeDomain:
         from cleo.clc import default_category_name
 
         atlas = self._atlas
+        if name is not None:
+            _reject_canonical_landscape_names([name])
         prepared_path = atlas.build_clc(source=source)
 
         if categories == "all":

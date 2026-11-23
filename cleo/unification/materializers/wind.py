@@ -20,7 +20,7 @@ from cleo.unification.fingerprint import (
 )
 from cleo.unification.gwa_io import ensure_required_gwa_files, _open_gwa_raster
 from cleo.unification.manifest import init_manifest, write_manifest_sources, write_manifest_variables
-from cleo.unification.materializers.shared import _get_clip_geometry, _stable_json
+from cleo.unification.materializers.shared import _stable_json
 from cleo.unification.materializers._helpers import check_store_idempotent, warn_if_rebuild_drops_variables
 from cleo.unification.turbines import _default_turbines_from_resources, _ingest_turbines_and_costs
 from cleo.policies.vertical_policy import (
@@ -87,7 +87,6 @@ def materialize_wind(unifier, atlas) -> None:
 def _load_gwa_data(atlas, unifier) -> _GWALoadResult:
     """Load and process GWA raster files."""
     req_files = ensure_required_gwa_files(atlas, auto_download=True)
-    clip_geom = _get_clip_geometry(atlas)
 
     # Find reference raster
     ref_height = 100
@@ -103,7 +102,6 @@ def _load_gwa_data(atlas, unifier) -> _GWALoadResult:
         iso3=atlas.country,
         target_crs=atlas.crs,
         ref_da=None,
-        clip_geom=clip_geom,
         resampling="bilinear",
     )
 
@@ -130,7 +128,6 @@ def _load_gwa_data(atlas, unifier) -> _GWALoadResult:
             iso3=atlas.country,
             target_crs=atlas.crs,
             ref_da=ref_da,
-            clip_geom=clip_geom,
             resampling="bilinear",
         )
 
@@ -255,7 +252,7 @@ def _compute_wind_inputs_id(
         {
             "country": atlas.country,
             "target_crs": str(atlas.crs),
-            "area": atlas.area,
+            "area": None,  # base store is country-wide; key kept for inputs_id stability
             "chunk_policy": chunk_policy,
             "mask_policy": mask_policy,
             "fingerprint_method": unifier.fingerprint_method,

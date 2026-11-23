@@ -378,31 +378,38 @@ class TestMaterializeLandscapeZarr:
         with pytest.raises(RuntimeError, match="wind.zarr is not complete"):
             unifier.materialize_landscape(atlas)
 
-    def test_with_aoi_region(self, tmp_path: Path) -> None:
-        """Landscape is correctly clipped when atlas.area is set."""
-        # Create smaller AOI covering only part of the wind grid
-        aoi_bounds = (4020000, 2620000, 4080000, 2680000)
-
-        atlas = MockAtlas(tmp_path, area="TestRegion")
-
-        # Create NUTS shapefile
+    def test_area_selection_does_not_change_base_stores(self, tmp_path: Path) -> None:
+        """Base stores are country-wide: a selected area neither clips them nor changes their identity."""
+        # Area first, on a clean workdir, so a clipped first build cannot hide behind an earlier country build.
+        atlases = (MockAtlas(tmp_path, area="TestRegion"), MockAtlas(tmp_path))
         _create_nuts_shapefile(
             tmp_path / "data" / "nuts",
             region_name="TestRegion",
-            bounds=aoi_bounds,
+            bounds=(4020000, 2620000, 4080000, 2680000),
         )
-
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
 
         unifier = Unifier(chunk_policy={"y": 1024, "x": 1024})
-        unifier.materialize_wind(atlas)
-        unifier.materialize_landscape(atlas)
+        ids = []
+        for atlas in atlases:
+            unifier.materialize_wind(atlas)
+            unifier.materialize_landscape(atlas)
+            if atlas.area is not None:
+                land = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
+                x, y = land["x"], land["y"]
+                in_area_box = (x >= 4020000) & (x <= 4080000) & (y >= 2620000) & (y <= 2680000)
+                outside = land["valid_mask"] & ~in_area_box
+                assert bool(outside.any())
+                assert bool(land["elevation"].where(outside).notnull().sum() == outside.sum())
+            ids.append(
+                tuple(
+                    zarr.open_group(tmp_path / f"{n}.zarr", mode="r").attrs["inputs_id"] for n in ("wind", "landscape")
+                )
+            )
 
-        # Should complete successfully
-        root = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
-        assert root.attrs["store_state"] == "complete"
+        assert ids[0] == ids[1]
 
     def test_crs_and_transform_from_wind(self, tmp_path: Path) -> None:
         """landscape.zarr has y/x coords matching wind reference."""

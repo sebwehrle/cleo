@@ -33,7 +33,7 @@ from cleo.unification.raster_io import (
     _build_copdem_elevation,
     _open_local_elevation,
 )
-from cleo.unification.materializers.shared import _aoi_geom_or_none, _now_iso, _stable_json
+from cleo.unification.materializers.shared import _now_iso, _stable_json
 from cleo.unification.materializers._helpers import (
     check_store_idempotent,
     warn_if_rebuild_drops_variables,
@@ -62,16 +62,15 @@ def materialize_landscape(unifier, atlas) -> None:
 
     # Get wind reference for grid alignment
     wind_ref = get_wind_reference(wind_path, atlas.crs, chunk_policy=unifier.chunk_policy)
-    aoi_gdf = _aoi_geom_or_none(atlas)
 
     # Load elevation data
-    elev_result = _load_elevation_data(atlas, wind_ref.ref_da, aoi_gdf)
+    elev_result = _load_elevation_data(atlas, wind_ref.ref_da)
 
     # Build dataset
     ds_land = _build_landscape_dataset(wind_ref, elev_result, unifier.chunk_policy)
 
     # Compute inputs_id for idempotency
-    inputs_id, fingerprint_method = _compute_landscape_inputs_id(wind_ref, elev_result, aoi_gdf, unifier, atlas)
+    inputs_id, fingerprint_method = _compute_landscape_inputs_id(wind_ref, elev_result, unifier)
 
     # Idempotency check
     if check_store_idempotent(store_path, inputs_id=inputs_id, grid_id=wind_ref.grid_id):
@@ -85,7 +84,6 @@ def materialize_landscape(unifier, atlas) -> None:
         ds_land=ds_land,
         wind_ref=wind_ref,
         elev_result=elev_result,
-        aoi_gdf=aoi_gdf,
         inputs_id=inputs_id,
         fingerprint_method=fingerprint_method,
         unifier=unifier,
@@ -93,16 +91,16 @@ def materialize_landscape(unifier, atlas) -> None:
     )
 
 
-def _load_elevation_data(atlas, wind_ref_da: xr.DataArray, aoi_gdf) -> _ElevationResult:
+def _load_elevation_data(atlas, wind_ref_da: xr.DataArray) -> _ElevationResult:
     """Load elevation data from local file or CopDEM."""
     raw_country = Path(atlas.path) / "data" / "raw" / atlas.country
     local_elev = raw_country / f"{atlas.country}_elevation_w_bathymetry.tif"
 
     if local_elev.exists():
-        elevation = _open_local_elevation(atlas, local_elev, wind_ref_da, aoi_gdf).rename("elevation")
+        elevation = _open_local_elevation(atlas, local_elev, wind_ref_da).rename("elevation")
         return _ElevationResult(data=elevation, kind="local", meta=None, local_path=local_elev)
 
-    elevation, elev_meta = _build_copdem_elevation(atlas, wind_ref_da, aoi_gdf)
+    elevation, elev_meta = _build_copdem_elevation(atlas, wind_ref_da)
     elevation = elevation.rename("elevation")
     return _ElevationResult(data=elevation, kind="copdem", meta=elev_meta, local_path=None)
 
@@ -136,16 +134,18 @@ def _build_landscape_dataset(
 def _compute_landscape_inputs_id(
     wind_ref,
     elev_result: _ElevationResult,
-    aoi_gdf,
     unifier,
-    atlas,
 ) -> tuple[str, str]:
-    """Compute deterministic inputs_id for landscape store."""
+    """Compute deterministic inputs_id for landscape store.
+
+    The base store is always country-wide, so the area selection is not an input. The constant
+    ``area`` and ``elevation:clip`` items keep the ids of existing stores valid.
+    """
     items: list[tuple[str, str]] = [
         ("wind:grid_id", wind_ref.grid_id),
         ("wind:inputs_id", wind_ref.inputs_id),
         ("mask_policy", "nan+valid_mask_in_landscape"),
-        ("area", _stable_json(getattr(atlas, "area", None))),
+        ("area", _stable_json(None)),
         ("chunk_policy", _stable_json(unifier.chunk_policy)),
     ]
 
@@ -159,7 +159,7 @@ def _compute_landscape_inputs_id(
                 ("elevation:kind", "legacy_tif"),
                 ("elevation:path", str(elev_result.local_path)),
                 ("elevation:fingerprint", fingerprint_path_mtime_size(elev_result.local_path)),
-                ("elevation:clip", "aoi" if aoi_gdf is not None else "none"),
+                ("elevation:clip", "none"),
             ]
         )
         fingerprint_method = unifier.fingerprint_method
@@ -191,7 +191,6 @@ def _write_landscape_store(
     ds_land: xr.Dataset,
     wind_ref,
     elev_result: _ElevationResult,
-    aoi_gdf,
     inputs_id: str,
     fingerprint_method: str,
     unifier,
@@ -215,7 +214,7 @@ def _write_landscape_store(
 
         # Write manifest
         init_manifest(tmp)
-        _write_landscape_manifest(tmp, wind_path, wind_ref, elev_result, aoi_gdf, ds_land)
+        _write_landscape_manifest(tmp, wind_path, wind_ref, elev_result, ds_land)
 
 
 def _write_landscape_core_attrs(
@@ -291,7 +290,6 @@ def _write_landscape_manifest(
     wind_path: Path,
     wind_ref,
     elev_result: _ElevationResult,
-    aoi_gdf,
     ds_land: xr.Dataset,
 ) -> None:
     """Write manifest sources and variables."""
@@ -320,7 +318,7 @@ def _write_landscape_manifest(
                 name="local elevation GeoTIFF",
                 kind="raster",
                 path=str(elev_result.local_path),
-                params_json=_stable_json({"clip": "aoi" if aoi_gdf is not None else "none"}),
+                params_json=_stable_json({"clip": "none"}),
                 fingerprint=fingerprint_path_mtime_size(elev_result.local_path),
                 created_at=_now_iso(),
             )

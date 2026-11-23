@@ -31,6 +31,8 @@ _CLMS_API_BASE_URL = "https://land.copernicus.eu/api"
 _CLMS_POLL_SLEEP_SECONDS = 2.0
 _CLMS_POLL_MAX_ATTEMPTS = 180
 _CLMS_SOURCE_QUERY_KEY: dict[str, str] = {"clc2018": "CLC2018"}
+# CLMS dataset UID per source; the search also returns other CORINE inventories and change products.
+_CLMS_SOURCE_DATASET_UID: dict[str, str] = {"clc2018": "0407d497d3c44bcd93ce8fd5bf78596a"}
 _CLMS_LEGACY_SERVICE_KEY_FIELDS = ("service_name", "secret", "username")
 _CLMS_OAUTH_SERVICE_KEY_FIELDS = ("client_id", "private_key", "user_id", "key_id", "token_uri")
 _CLMS_JWT_EXP_SECONDS = 300
@@ -762,8 +764,24 @@ def _submit_clms_download_task(*, source: str, access_token: str, expected_filen
         f"portal_type=DataSet&SearchableText={encoded_key}"
         "&metadata_fields=UID&metadata_fields=downloadable_files&b_size=300"
     )
-    datasets_payload = _http_get_json(search_url, headers=headers)
-    selected = _select_clms_dataset_file(search_payload=datasets_payload, expected_filename=expected_filename)
+    datasets = _candidate_search_items(_http_get_json(search_url, headers=headers))
+    dataset_uid = _CLMS_SOURCE_DATASET_UID.get(source)
+    if dataset_uid is not None:
+        datasets = [d for d in datasets if _dataset_identifier(d) == dataset_uid]
+        if not datasets:
+            raise RuntimeError(
+                f"CLMS search did not list the {source} dataset (UID {dataset_uid}). Provide url=... explicitly."
+            )
+    for dataset in datasets:
+        # The search endpoint may omit downloadable_files; the dataset's full record still lists them.
+        record_url = dataset.get("@id")
+        if (
+            not _downloadable_file_items(dataset.get("downloadable_files"))
+            and isinstance(record_url, str)
+            and record_url.startswith(f"{_CLMS_API_BASE_URL}/")
+        ):
+            dataset["downloadable_files"] = _http_get_json(record_url, headers=headers).get("downloadable_files")
+    selected = _select_clms_dataset_file(search_payload=datasets, expected_filename=expected_filename)
     if selected is None:
         raise RuntimeError(
             f"CLMS API did not return downloadable file {expected_filename!r}. Provide url=... explicitly."

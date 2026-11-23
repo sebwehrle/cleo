@@ -146,7 +146,6 @@ def test_registered_landscape_materialization_targets_active_region_store(tmp_pa
         atlas,
         "broad_leaved_forest",
         chunk_policy=atlas.chunk_policy,
-        fingerprint_method=atlas.fingerprint_method,
         if_exists="error",
     )
     assert written is True

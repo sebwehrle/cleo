@@ -21,7 +21,6 @@ from cleo.spatial import canonical_crs_str, to_crs_if_needed
 from cleo.store import single_writer_lock, zarr_store_lock_dir
 from cleo.unification.fingerprint import (
     fingerprint_path_mtime_size,
-    hash_inputs_id,
     semantic_raster_fingerprint,
 )
 from cleo.unification.manifest import _read_manifest, _write_manifest_atomic
@@ -31,7 +30,7 @@ from cleo.unification.store_io import (
     resolve_active_landscape_store_path,
     resolve_active_wind_store_path,
 )
-from cleo.unification.materializers.shared import _aoi_geom_or_none, _stable_json
+from cleo.unification.materializers.shared import _aoi_geom_or_none
 from cleo.unification.materializers._landscape_vector import _canonical_vector_source_artifact
 from cleo.unification.materializers._landscape_sources import (
     _current_landscape_source_fingerprint,
@@ -762,7 +761,6 @@ def materialize_landscape_variable(
     variable_name: str,
     *,
     chunk_policy: dict[str, int] | None = None,
-    fingerprint_method: str = "path_mtime_size",
     if_exists: str = "error",
     prepared_da: xr.DataArray | None = None,
 ) -> bool:
@@ -773,7 +771,6 @@ def materialize_landscape_variable(
     :param atlas: Atlas instance with store routing context.
     :param variable_name: Target landscape variable name.
     :param chunk_policy: Chunking policy used for store opens and writes.
-    :param fingerprint_method: Fingerprint method used for inputs identity updates.
     :param if_exists: Conflict policy (``error``, ``replace``, ``noop``).
     :param prepared_da: Optional already-prepared exact-grid raster to reuse for
         materialization.
@@ -821,10 +818,6 @@ def materialize_landscape_variable(
         variable_name=variable_name,
         da=da,
         source_ctx=source_ctx,
-        wind_ref=wind_ref,
-        atlas=atlas,
-        chunk_policy=chunk_policy,
-        fingerprint_method=fingerprint_method,
         do_replace=do_replace,
         categorical=categorical,
         preserve_attrs=dict(land_root.attrs),
@@ -954,10 +947,6 @@ def _write_landscape_variable(
     variable_name: str,
     da: xr.DataArray,
     source_ctx: dict[str, Any],
-    wind_ref,
-    atlas,
-    chunk_policy: dict[str, int],
-    fingerprint_method: str,
     do_replace: bool,
     categorical: bool,
     preserve_attrs: dict[str, Any],
@@ -968,10 +957,6 @@ def _write_landscape_variable(
     :param variable_name: Target variable name.
     :param da: Prepared exact-grid DataArray to write.
     :param source_ctx: Resolved manifest/source fingerprint context.
-    :param wind_ref: Active wind reference wrapper.
-    :param atlas: Atlas instance with active store routing context.
-    :param chunk_policy: Chunking policy recorded in ``inputs_id``.
-    :param fingerprint_method: Inputs-id fingerprint method label.
     :param do_replace: Whether the existing variable directory should be replaced.
     :param categorical: Whether categorical resampling semantics apply.
     :param preserve_attrs: Root attrs that must survive the write.
@@ -990,17 +975,6 @@ def _write_landscape_variable(
 
         # Update manifest
         _update_manifest_for_variable(store_path, variable_name, source_ctx["source_id"], categorical, da.dtype)
-
-        # Update inputs_id
-        _update_inputs_id(
-            store_path,
-            variable_name,
-            source_ctx,
-            wind_ref,
-            atlas,
-            chunk_policy=chunk_policy,
-            fingerprint_method=fingerprint_method,
-        )
 
 
 def _update_manifest_for_variable(
@@ -1040,44 +1014,6 @@ def _update_manifest_for_variable(
 
     manifest["variables"] = existing_vars
     _write_manifest_atomic(store_path, manifest)
-
-
-def _update_inputs_id(
-    store_path: Path,
-    variable_name: str,
-    source_ctx: dict[str, Any],
-    wind_ref,
-    atlas,
-    *,
-    chunk_policy: dict[str, int],
-    fingerprint_method: str,
-) -> None:
-    """Update active-store ``inputs_id`` after one landscape write.
-
-    :param store_path: Active landscape store path.
-    :param variable_name: Target variable name.
-    :param source_ctx: Resolved manifest/source fingerprint context.
-    :param wind_ref: Active wind reference wrapper.
-    :param atlas: Atlas instance with active store routing context.
-    :param chunk_policy: Chunking policy recorded in inputs provenance.
-    :param fingerprint_method: Inputs-id fingerprint method label.
-    """
-    items: list[tuple[str, str]] = [
-        ("wind:grid_id", wind_ref.grid_id),
-        ("wind:inputs_id", wind_ref.inputs_id),
-        ("mask_policy", "nan+valid_mask_in_landscape"),
-        ("area", _stable_json(getattr(atlas, "area", None))),
-        ("chunk_policy", _stable_json(chunk_policy)),
-        ("incremental_add", "landscape_add"),
-        (f"layer:{variable_name}:source_id", source_ctx["source_id"]),
-        (f"layer:{variable_name}:fingerprint", source_ctx["stored_fingerprint"]),
-        (f"layer:{variable_name}:params_json", source_ctx["params_json"]),
-    ]
-
-    new_inputs_id = hash_inputs_id(items, method=fingerprint_method)
-
-    root = zarr.open_group(store_path, mode="a")
-    root.attrs["inputs_id"] = new_inputs_id
 
 
 def compute_air_density_correction(

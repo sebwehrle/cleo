@@ -7,7 +7,7 @@ These tests verify that atlas.landscape.add() correctly:
 - Materializes aligned raster variables
 - Enforces valid_mask semantics
 - Does NOT recompute existing variables
-- Updates inputs_id deterministically
+- Leaves the store's inputs_id unchanged, so a later session does not rebuild it
 """
 
 from __future__ import annotations
@@ -34,15 +34,16 @@ from cleo.unification.unifier import Unifier
 
 
 def _copy_default_turbine(atlas_path: Path) -> None:
-    """Copy a default turbine YAML to resources for testing."""
+    """Copy a default turbine YAML to resources for testing (skips existing files, like Atlas)."""
     resources_src = Path(cleo.__file__).resolve().parent / "resources"
     resources_dest = atlas_path / "resources"
     resources_dest.mkdir(parents=True, exist_ok=True)
 
     turbine_name = "Enercon.E40.500"
     src = resources_src / f"{turbine_name}.yml"
-    if src.exists():
-        shutil.copy(src, resources_dest / f"{turbine_name}.yml")
+    dest = resources_dest / f"{turbine_name}.yml"
+    if src.exists() and not dest.exists():
+        shutil.copy(src, dest)
 
 
 class MockAtlas:
@@ -110,7 +111,6 @@ class MockAtlas:
                 self,
                 name,
                 chunk_policy=self.chunk_policy,
-                fingerprint_method=self.fingerprint_method,
             )
 
 
@@ -380,36 +380,30 @@ class TestLandscapeAddIncremental:
         var_entry = next(v for v in variables if v["variable_name"] == "extra_layer")
         assert var_entry["source_id"] == "land:raster:extra_layer"
 
-    def test_inputs_id_changes_after_materialize(self, tmp_path: Path) -> None:
-        """inputs_id changes deterministically after materialization."""
+    def test_layers_survive_new_session(self, tmp_path: Path) -> None:
+        """A layer added in one session survives the canonical check of the next session."""
         atlas = MockAtlas(tmp_path)
 
         _create_all_gwa_rasters(tmp_path)
         elev_path = tmp_path / "data" / "raw" / "AUT" / "AUT_elevation_w_bathymetry.tif"
         _create_elevation_raster(elev_path)
         atlas.build_canonical()
+        inputs_id_base = zarr.open_group(tmp_path / "landscape.zarr", mode="r").attrs["inputs_id"]
 
-        # Get inputs_id before
-        root_before = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
-        inputs_id_before = root_before.attrs["inputs_id"]
+        path_a = tmp_path / "data" / "raw" / "AUT" / "AUT_layer_a.tif"
+        _create_extra_layer_raster(path_a, fill_value=1.0)
+        atlas.landscape_add("layer_a", path_a)
 
-        # Add extra layer
-        extra_path = tmp_path / "data" / "raw" / "AUT" / "AUT_extra_layer.tif"
-        _create_extra_layer_raster(extra_path, fill_value=42.0)
+        # New session: _canonical_ready is False, so build_canonical() runs first.
+        session2 = MockAtlas(tmp_path)
+        path_b = tmp_path / "data" / "raw" / "AUT" / "AUT_layer_b.tif"
+        _create_extra_layer_raster(path_b, fill_value=2.0)
+        session2.landscape_add("layer_b", path_b)
 
-        atlas.landscape_add(
-            "extra_layer",
-            extra_path,
-            kind="raster",
-            params={"categorical": False},
-            materialize=True,
-        )
-
-        # Get inputs_id after
-        root_after = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
-        inputs_id_after = root_after.attrs["inputs_id"]
-
-        assert inputs_id_before != inputs_id_after, "inputs_id should change after materialization"
+        root = zarr.open_group(tmp_path / "landscape.zarr", mode="r")
+        assert root.attrs["inputs_id"] == inputs_id_base
+        ds = xr.open_zarr(tmp_path / "landscape.zarr", consolidated=False)
+        assert {"layer_a", "layer_b"} <= set(ds.data_vars)
 
     def test_grid_id_unchanged(self, tmp_path: Path) -> None:
         """grid_id remains unchanged after adding new layer."""

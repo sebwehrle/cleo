@@ -448,6 +448,26 @@ class TestRegionStores:
         assert "capacity_factors" in caplog.text
         assert "areas" in caplog.text
 
+    def test_area_layers_survive_base_layer_write_and_new_session(self, region_atlas: Atlas) -> None:
+        """A layer added to the base store neither rebuilds the area store nor appears in it."""
+        atlas = region_atlas
+        atlas.select(area="Niederösterreich", inplace=True)
+        atlas.build()
+        atlas.landscape.add_dataarray("area_layer", xr.zeros_like(atlas.landscape.data["elevation"])).materialize()
+
+        atlas.select(area=None, inplace=True)
+        atlas.landscape.add_dataarray("base_layer", xr.zeros_like(atlas.landscape.data["elevation"])).materialize()
+
+        session2 = Atlas(atlas.path, "AUT", "epsg:3035")
+        session2.select(area="Niederösterreich", inplace=True)
+        session2.build()
+        area_vars = set(session2.landscape.data.data_vars)
+        assert "area_layer" in area_vars
+        assert "base_layer" not in area_vars
+        base = xr.open_zarr(atlas.landscape_store_path, consolidated=False)
+        assert "base_layer" in base.data_vars
+        base.close()
+
     def test_region_stores_rebuild_when_area_valid_mask_is_not_boolean(self, region_atlas: Atlas) -> None:
         """Area stores rebuild when an existing landscape valid_mask has the wrong dtype."""
         atlas = region_atlas

@@ -21,6 +21,7 @@ from tests.helpers.clc_fixtures import (
 )
 from tests.helpers.optional import requires_rasterio, requires_rioxarray
 from cleo.clc import (
+    _CLMS_SOURCE_DATASET_UID,
     CLC_SOURCES,
     _resolve_default_clc_download,
     materialize_clc,
@@ -29,6 +30,8 @@ from cleo.clc import (
 
 rasterio = requires_rasterio()
 rxr = requires_rioxarray()
+
+CLC2018_UID = _CLMS_SOURCE_DATASET_UID["clc2018"]
 
 
 def _write_raster_integer(path: Path, data: np.ndarray) -> None:
@@ -282,7 +285,7 @@ def test_resolve_default_clc_download_uses_clms_api_flow(monkeypatch: pytest.Mon
             return JsonResponseStub(payload={"access_token": "token-123"})
         if url.endswith("/@datarequest_post"):
             assert kwargs["headers"]["Authorization"] == "Bearer token-123"
-            assert kwargs["json_body"]["Datasets"] == [{"DatasetID": "dataset-4368", "FileID": "file-31902"}]
+            assert kwargs["json_body"]["Datasets"] == [{"DatasetID": CLC2018_UID, "FileID": "file-31902"}]
             return JsonResponseStub(payload={"TaskIds": [{"TaskID": "request-token"}]})
         raise AssertionError(f"unexpected POST url: {url}")
 
@@ -292,7 +295,7 @@ def test_resolve_default_clc_download_uses_clms_api_flow(monkeypatch: pytest.Mon
                 payload={
                     "items": [
                         {
-                            "UID": "dataset-4368",
+                            "UID": CLC2018_UID,
                             "downloadable_files": {
                                 "items": [
                                     {
@@ -355,7 +358,7 @@ def test_resolve_default_clc_download_accepts_current_copernicus_service_key(
             return JsonResponseStub(payload={"access_token": "oauth-token-123"})
         if url.endswith("/@datarequest_post"):
             assert kwargs["headers"]["Authorization"] == "Bearer oauth-token-123"
-            assert kwargs["json_body"]["Datasets"] == [{"DatasetID": "dataset-4368", "FileID": "file-31902"}]
+            assert kwargs["json_body"]["Datasets"] == [{"DatasetID": CLC2018_UID, "FileID": "file-31902"}]
             return JsonResponseStub(payload={"TaskIds": [{"TaskID": "request-token"}]})
         raise AssertionError(f"unexpected POST url: {url}")
 
@@ -365,7 +368,7 @@ def test_resolve_default_clc_download_accepts_current_copernicus_service_key(
                 payload={
                     "items": [
                         {
-                            "UID": "dataset-4368",
+                            "UID": CLC2018_UID,
                             "downloadable_files": {
                                 "items": [
                                     {
@@ -426,7 +429,7 @@ def test_resolve_default_clc_download_falls_back_to_finished_request_search(
                 payload={
                     "items": [
                         {
-                            "UID": "dataset-4368",
+                            "UID": CLC2018_UID,
                             "downloadable_files": {
                                 "items": [
                                     {

@@ -44,19 +44,6 @@ def ensure_store_skeleton(
         init_manifest(tmp_path)
 
 
-def _get_clip_geometry(atlas):
-    """Get clipping geometry from NUTS area if specified."""
-    area_name = getattr(atlas, "area", None)
-    if area_name is None:
-        return None
-    area_id = getattr(atlas, "_area_id", area_name)
-    if area_id == "__all__":
-        return None
-    if not hasattr(atlas, "get_nuts_area"):
-        return None
-    return atlas.get_nuts_area(area_id)
-
-
 def _stable_json(obj: Any) -> str:
     """Convert object to stable JSON string for hashing."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))

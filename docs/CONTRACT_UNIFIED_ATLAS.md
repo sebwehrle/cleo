@@ -576,7 +576,9 @@ Area ID rules:
   - country, CRS, resolution, upstream data fingerprints,
   - for wind base store: the configured turbine list (or `"default"`),
   - for area derived stores: area selection id + area-shape fingerprint.
-- `chunk_policy` is part of a store's identity. A `build()` whose identity no longer matches an existing store replaces it, and area stores are rebuilt when their base store changes. Variables materialized into the old store (base or area) are not carried over, and CLEO logs a warning naming them.
+- `chunk_policy` is part of a store's identity. A `build()` whose identity no longer matches an existing store replaces it, and area stores are rebuilt when the `inputs_id` of their base stores no longer matches the one recorded at their creation. Variables materialized into the old store (base or area) are not carried over, and CLEO logs a warning naming them.
+- `inputs_id` identifies the inputs of a store's build only. Materializing variables into a store (registered landscape layers, computed landscape variables, wind metrics) does not change it, so it neither triggers a rebuild of that store nor of area stores derived from it. Registered landscape layers are recorded in the store manifest. An area store therefore does not pick up variables added to its base store after the area store was created.
+- Base stores are country-wide. The current area selection is not an input of the base stores: it neither clips them nor changes their `inputs_id`.
 - Identity computation must be stable across runs:
   - no timestamps,
   - stable ordering (e.g. turbine list order preserved),
@@ -843,7 +845,7 @@ See **A12** for full API documentation.
 
 The following are **bitwise deterministic** given identical inputs:
 - Store skeleton attrs and metadata
-- Content hashes (`inputs_id`, `grid_id`)
+- Identity hashes (`inputs_id`, `grid_id`)
 - Manifest JSON serialization
 
 ### C6.2 Tolerance-Deterministic Outputs
@@ -870,7 +872,7 @@ Schema versioning applies ONLY to external-facing exports with promised schema s
 - Flatten tabular exports with sidecar manifests (future `export_flatten` with parquet/csv)
 
 Schema versioning does NOT apply to internal canonical stores:
-- `wind.zarr` and `landscape.zarr` use `inputs_id` / `grid_id` / `unify_version` for content+code identity
+- `wind.zarr` and `landscape.zarr` use `inputs_id` / `grid_id` / `unify_version` for build-input and code identity
 - Internal stores do not promise read-compatibility across versions
 
 ### C7.2 Version Constants
